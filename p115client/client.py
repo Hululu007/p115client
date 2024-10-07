@@ -331,7 +331,6 @@ class P115Client:
     +-------+----------+------------+-------------------------+
     | 24    | S1       | harmony    | 115(Harmony端)          |
     +-------+----------+------------+-------------------------+
-
     """
     def __init__(
         self, 
@@ -1009,31 +1008,31 @@ class P115Client:
         .. note:: 
             `request` 可以由不同的请求库来提供，下面是封装了一些模块
 
-            1. `httpx_request <https://pypi.org/project/httpx_request/>`__，由 httpx 封装，支持同步和异步调用，本模块默认用的就是这个封装
+            1. `httpx_request <https://pypi.org/project/httpx_request/>`_，由 httpx 封装，支持同步和异步调用，本模块默认用的就是这个封装
 
                 .. code:: python
 
                     from httpx_request import request
 
-            2. `python-urlopen <https://pypi.org/project/python-urlopen/>`__，由 urllib.request.urlopen 封装，支持同步调用，性能相对最差
+            2. `python-urlopen <https://pypi.org/project/python-urlopen/>`_，由 urllib.request.urlopen 封装，支持同步调用，性能相对最差
 
                 .. code:: python
 
                     from urlopen import request
 
-            3. `urllib3_request <https://pypi.org/project/urllib3_request/>`__，由 urllib.request.urlopen 封装，支持同步调用
+            3. `urllib3_request <https://pypi.org/project/urllib3_request/>`_，由 urllib.request.urlopen 封装，支持同步调用
 
                 .. code:: python
 
                     from urllib3_request import request
 
-            4. `requests_request <https://pypi.org/project/requests_request/>`__，由 urllib.request.urlopen 封装，支持同步调用，性能相对最好，推荐使用
+            4. `requests_request <https://pypi.org/project/requests_request/>`_，由 urllib.request.urlopen 封装，支持同步调用，性能相对最好，推荐使用
 
                 .. code:: python
 
                     from requests_request import request
 
-            5. `aiohttp_client_request <https://pypi.org/project/aiohttp_client_request/>`__，由 urllib.request.urlopen 封装，支持异步调用，异步并发能力最强，推荐使用
+            5. `aiohttp_client_request <https://pypi.org/project/aiohttp_client_request/>`_，由 urllib.request.urlopen 封装，支持异步调用，异步并发能力最强，推荐使用
 
                 .. code:: python
 
@@ -3137,14 +3136,14 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """获取目录中的文件列表和基本信息
 
+        GET https://webapi.115.com/files
+
         .. hint::
             指定如下条件中任一，且 cur = 0 （默认），即可遍历搜索所在目录树
 
             1. cid=0 且 star=1
             2. suffix 为非空的字符串
             3. type 为正整数
-
-        GET https://webapi.115.com/files
 
         :payload:
             - cid: int | str = 0 💡 目录 id
@@ -6621,10 +6620,10 @@ class P115Client:
         POST https://webapi.115.com/rb/clean
 
         :payload:
-            - rid[0]: int | str 💡 NOTE: 如果没有 rid，就是清空回收站
+            - rid[0]: int | str 💡 NOTE: 如果没有指定任一 rid，就是清空回收站
             - rid[1]: int | str
             - ...
-            - password: int | str = <default>
+            - password: int | str = <default> 💡 密码，是 6 位数字
         """
         api = "https://webapi.115.com/rb/clean"
         if isinstance(payload, (int, str)):
@@ -8837,12 +8836,11 @@ class P115Client:
         async_: Literal[False, True] = False, 
     ) -> HTTPFileReader | AsyncHTTPFileReader:
         """打开下载链接，可以从网盘、网盘上的压缩包内、分享链接中获取：
-            - P115Client.download_url
-            - P115Client.share_download_url
-            - P115Client.extract_download_url
+
+        - P115Client.download_url
+        - P115Client.share_download_url
+        - P115Client.extract_download_url
         """
-        if async_:
-            raise NotImplementedError("asynchronous mode not implemented")
         if headers is None:
             headers = self.headers
         else:
@@ -8893,6 +8891,15 @@ class P115Client:
         *, 
         async_: Literal[False, True] = False, 
     ) -> str | Coroutine[Any, Any, str]:
+        """下载文件流并生成它的 ed2k 链接
+
+        :param url: 115 文件的下载链接（可以从网盘、网盘上的压缩包内、分享链接中获取）
+        :param headers: 请求头
+        :param name: 文件名
+        :param async_: 是否异步
+
+        :return: 文件的 ed2k 链接
+        """
         trantab = dict(zip(b"/|", ("%2F", "%7C")))
         if async_:
             async def request():
@@ -8940,6 +8947,20 @@ class P115Client:
         *, 
         async_: Literal[False, True] = False, 
     ) -> tuple[int, HashObj | T] | Coroutine[Any, Any, tuple[int, HashObj | T]]:
+        """下载文件流并用一种 hash 算法求值
+
+        :param url: 115 文件的下载链接（可以从网盘、网盘上的压缩包内、分享链接中获取）
+        :param digest: hash 算法
+            - 如果是 str，则可以是 `hashlib.algorithms_available` 中任一，也可以是 "ed2k" 或 "crc32"
+            - 如果是 HashObj (来自 python-hashtools)，就相当于是 `_hashlib.HASH` 类型，需要有 update 和 digest 等方法
+            - 如果是 Callable，则返回值必须是 HashObj，或者是一个可用于累计的函数，第 1 个参数是本次所传入的字节数据，第 2 个参数是上一次的计算结果，返回值是这一次的计算结果，第 2 个参数可省略
+        :param start: 开始索引，可以为负数（从文件尾部开始）
+        :param stop: 结束索引（不含），可以为负数（从文件尾部开始）
+        :param headers: 请求头
+        :param async_: 是否异步
+
+        :return: 元组，包含文件的 大小 和 hash 计算结果
+        """
         digest = convert_digest(digest)
         if async_:
             async def request():
@@ -8998,6 +9019,21 @@ class P115Client:
         headers: None | Mapping = None, 
         async_: Literal[False, True] = False, 
     ) -> tuple[int, list[HashObj | T]] | Coroutine[Any, Any, tuple[int, list[HashObj | T]]]:
+        """下载文件流并用一组 hash 算法求值
+
+        :param url: 115 文件的下载链接（可以从网盘、网盘上的压缩包内、分享链接中获取）
+        :param digest: hash 算法
+            - 如果是 str，则可以是 `hashlib.algorithms_available` 中任一，也可以是 "ed2k" 或 "crc32"
+            - 如果是 HashObj (来自 python-hashtools)，就相当于是 `_hashlib.HASH` 类型，需要有 update 和 digest 等方法
+            - 如果是 Callable，则返回值必须是 HashObj，或者是一个可用于累计的函数，第 1 个参数是本次所传入的字节数据，第 2 个参数是上一次的计算结果，返回值是这一次的计算结果，第 2 个参数可省略
+        :param digests: 同 `digest`，但可以接受多个
+        :param start: 开始索引，可以为负数（从文件尾部开始）
+        :param stop: 结束索引（不含），可以为负数（从文件尾部开始）
+        :param headers: 请求头
+        :param async_: 是否异步
+
+        :return: 元组，包含文件的 大小 和一组 hash 计算结果
+        """
         digests = (convert_digest(digest), *map(convert_digest, digests))
         if async_:
             async def request():
@@ -9061,6 +9097,7 @@ class P115Client:
         :param url: 115 文件的下载链接（可以从网盘、网盘上的压缩包内、分享链接中获取）
         :param start: 开始索引，可以为负数（从文件尾部开始）
         :param stop: 结束索引（不含），可以为负数（从文件尾部开始）
+        :param headers: 请求头
         :param async_: 是否异步
         :param request_kwargs: 其它请求参数
         """
@@ -9134,7 +9171,7 @@ class P115Client:
         """读取文件一定索引范围的数据
 
         :param url: 115 文件的下载链接（可以从网盘、网盘上的压缩包内、分享链接中获取）
-        :param bytes_range: 索引范围，语法符合 [HTTP Range Requests](https://developer.mozilla.org/en-US/docs/Web/HTTP/Range_requests)
+        :param bytes_range: 索引范围，语法符合 `HTTP Range Requests <https://developer.mozilla.org/en-US/docs/Web/HTTP/Range_requests>`_
         :param headers: 请求头
         :param async_: 是否异步
         :param request_kwargs: 其它请求参数
@@ -9190,6 +9227,7 @@ class P115Client:
         :param url: 115 文件的下载链接（可以从网盘、网盘上的压缩包内、分享链接中获取）
         :param size: 下载字节数（最多下载这么多字节，如果遇到 EOF，就可能较小）
         :param offset: 偏移索引，从 0 开始，可以为负数（从文件尾部开始）
+        :param headers: 请求头
         :param async_: 是否异步
         :param request_kwargs: 其它请求参数
         """
