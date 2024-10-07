@@ -261,17 +261,17 @@ class P115Client:
 
     :param cookies: 115 的 cookies，要包含 `UID`、`CID` 和 `SEID`
 
-        - 如果为 ``None``，则会要求人工扫二维码登录
-        - 如果是 :class:`str`，则要求是格式正确的 cookies 字符串，例如 ``"UID=...; CID=...; SEID=..."``
-        - 如果是 :class:`bytes` 或 :class:`os.PathLike`，则视为路径，当更新 cookies 时，也会往此路径写入文件
-        - 如果是 :class:`collections.abc.Mapping`，则是一堆 cookie 的名称到值的映射
-        - 如果是 :class:`collections.abc.Iterable`，则其中每一条都视为单个 cookie
+        - 如果为 None，则会要求人工扫二维码登录
+        - 如果是 str，则要求是格式正确的 cookies 字符串，例如 "UID=...; CID=...; SEID=..."
+        - 如果是 bytes 或 os.PathLike，则视为路径，当更新 cookies 时，也会往此路径写入文件
+        - 如果是 collections.abc.Mapping，则是一堆 cookie 的名称到值的映射
+        - 如果是 collections.abc.Iterable，则其中每一条都视为单个 cookie
 
     :param check_for_relogin: 网页请求抛出异常时，判断是否要重新登录并重试
 
-        - 如果为 ``False``，则不重试
-        - 如果为 ``True``，则自动通过判断 HTTP 响应码为 ``405`` 时重新登录并重试
-        - 如果为 :class:`collections.abc.Callable`，则调用以判断，当返回值为 :class:`bool` 类型且值为 ``True``，或者值为 ``405`` 时重新登录，然后循环此流程，直到成功或不可重试
+        - 如果为 False，则不重试
+        - 如果为 True，则自动通过判断 HTTP 响应码为 405 时重新登录并重试
+        - 如果为 collections.abc.Callable，则调用以判断，当返回值为 bool 类型且值为 True，或者值为 405 时重新登录，然后循环此流程，直到成功或不可重试
 
     :param app: 人工扫二维码后绑定的 `app` （或者叫 `device`）
     :param console_qrcode: 在命令行输出二维码，否则在浏览器中打开
@@ -1130,9 +1130,9 @@ class P115Client:
         POST https://act.115.com/api/1.0/web/1.0/act2024xys/adopt
 
         :payload:
-            - did: :class:`str` 许愿的 id
-            - aid: :class:`int` | :class:`str` 助愿的 id
-            - to_cid: :class:`int` = ``<default>`` 助愿中的分享链接转存到你的网盘中目录的 id
+            - did: str 💡 许愿的 id
+            - aid: int | str 💡 助愿的 id
+            - to_cid: int = <default> 💡 助愿中的分享链接转存到你的网盘中目录的 id
         """
         api = "https://act.115.com/api/1.0/web/1.0/act2024xys/adopt"
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
@@ -1167,10 +1167,10 @@ class P115Client:
         POST https://act.115.com/api/1.0/web/1.0/act2024xys/aid_desire
 
         :payload:
-            - id: :class:`str` 许愿 id
-            - content: :class:`str` 助愿文本，不少于 5 个字，不超过 500 个字
-            - images: :class:`int` | :class:`str` = ``<default>`` 图片文件在你的网盘的 id，多个用逗号 ``","`` 隔开
-            - file_ids: :class:`int` | :class:`str` = ``<default>`` 文件在你的网盘的 id，多个用逗号 ``","`` 隔开
+            - id: str 💡 许愿 id
+            - content: str 💡 助愿文本，不少于 5 个字，不超过 500 个字
+            - images: int | str = <default> 💡 图片文件在你的网盘的 id，多个用逗号 "," 隔开
+            - file_ids: int | str = <default> 💡 文件在你的网盘的 id，多个用逗号 "," 隔开
         """
         api = "https://act.115.com/api/1.0/web/1.0/act2024xys/aid_desire"
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
@@ -1205,7 +1205,7 @@ class P115Client:
         POST https://act.115.com/api/1.0/web/1.0/act2024xys/del_aid_desire
 
         :payload:
-            - ids: :class:`int` | :class:`str` 助愿的 id，多个用逗号 ``","`` 隔开
+            - ids: int | str 💡 助愿的 id，多个用逗号 "," 隔开
         """
         api = "https://act.115.com/api/1.0/web/1.0/act2024xys/del_aid_desire"
         if isinstance(payload, (int, str)):
@@ -1242,11 +1242,11 @@ class P115Client:
         GET https://act.115.com/api/1.0/web/1.0/act2024xys/desire_aid_list
 
         :payload:
-            - id: :class:`str`         许愿的 id
-            - start: :class:`int` = ``0``  开始索引
-            - page: :class:`int` = ``1``   第几页
-            - limit: :class:`int` = ``10`` 分页大小
-            - sort: :class:`int` | :class:`str` = ``<default>`` 排序
+            - id: str         💡 许愿的 id
+            - start: int = 0  💡 开始索引
+            - page: int = 1   💡 第几页
+            - limit: int = 10 💡 分页大小
+            - sort: int | str = <default> 💡 排序
         """
         api = "https://act.115.com/api/1.0/web/1.0/act2024xys/desire_aid_list"
         if isinstance(payload, str):
@@ -1314,7 +1314,7 @@ class P115Client:
         GET https://act.115.com/api/1.0/web/1.0/act2024xys/get_desire_info
 
         :payload:
-            - id: :class:`str` 许愿的 id
+            - id: str 💡 许愿的 id
         """
         api = "https://act.115.com/api/1.0/web/1.0/act2024xys/get_desire_info"
         if isinstance(payload, str):
@@ -1380,15 +1380,15 @@ class P115Client:
         GET https://act.115.com/api/1.0/web/1.0/act2024xys/my_aid_desire
 
         :payload:
-            - type: ``0`` | ``1`` | ``2`` = ``0`` 类型
+            - type: 0 | 1 | 2 = 0 💡 类型
 
-              - ``0``: 全部
-              - ``1``: 进行中
-              - ``2``: 已实现
+              - 0: 全部
+              - 1: 进行中
+              - 2: 已实现
 
-            - start: :class:`int` = ``0``  开始索引
-            - page: :class:`int` = ``1``   第几页
-            - limit: :class:`int` = ``10`` 分页大小
+            - start: int = 0  💡 开始索引
+            - page: int = 1   💡 第几页
+            - limit: int = 10 💡 分页大小
         """
         api = "https://act.115.com/api/1.0/web/1.0/act2024xys/my_aid_desire"
         if isinstance(payload, int):
@@ -1427,15 +1427,15 @@ class P115Client:
         GET https://act.115.com/api/1.0/web/1.0/act2024xys/my_desire
 
         :payload:
+            - type: 0 | 1 | 2 = 0 💡 类型
 
-            - type: ``0`` | ``1`` | 2 = 0
-                # 类型
-                # - 0: 全部
-                # - 1: 进行中
-                # - 2: 已实现
-            - start: int = 0  # 开始索引
-            - page: int = 1   # 第几页
-            - limit: int = 10 # 分页大小
+              - 0: 全部
+              - 1: 进行中
+              - 2: 已实现
+
+            - start: int = 0  💡 开始索引
+            - page: int = 1   💡 第几页
+            - limit: int = 10 💡 分页大小
         """
         api = "https://act.115.com/api/1.0/web/1.0/act2024xys/my_desire"
         if isinstance(payload, int):
@@ -1474,10 +1474,9 @@ class P115Client:
         POST https://act.115.com/api/1.0/web/1.0/act2024xys/wish
 
         :payload:
-
-            - content: str # 许愿文本，不少于 5 个字，不超过 500 个字
-            - rewardSpace: int = 5 # 奖励容量，单位是 GB
-            - images: :class:`int` | :class:`str` = ``<default>`` # 图片文件在你的网盘的 id，多个用逗号 ``","`` 隔开
+            - content: str 💡 许愿文本，不少于 5 个字，不超过 500 个字
+            - rewardSpace: int = 5 💡 奖励容量，单位是 GB
+            - images: int | str = <default> 💡 图片文件在你的网盘的 id，多个用逗号 "," 隔开
         """
         api = "https://act.115.com/api/1.0/web/1.0/act2024xys/wish"
         if isinstance(payload, str):
@@ -1516,8 +1515,7 @@ class P115Client:
         POST https://act.115.com/api/1.0/web/1.0/act2024xys/del_wish
 
         :payload:
-
-            - ids: str # 许愿的 id，多个用逗号 ``","`` 隔开
+            - ids: str 💡 许愿的 id，多个用逗号 "," 隔开
         """
         api = "https://act.115.com/api/1.0/web/1.0/act2024xys/del_wish"
         if isinstance(payload, str):
@@ -1715,13 +1713,12 @@ class P115Client:
         POST https://webapi.115.com/user/captcha
 
         :payload:
-
-            - code: :class:`int` | :class:`str` # 从 0 到 9 中选取 4 个数字的一种排列
-            - sign: :class:`str` = ``<default>``
-            - ac: str = "security_code" # 默认就行，不要自行决定
-            - type: str = "web"         # 默认就行，不要自行决定
-            - ctype: str = "web"        # 需要和 type 相同
-            - client: str = "web"       # 需要和 type 相同
+            - code: int | str 💡 从 0 到 9 中选取 4 个数字的一种排列
+            - sign: str = <default>
+            - ac: str = "security_code" 💡 默认就行，不要自行决定
+            - type: str = "web"         💡 默认就行，不要自行决定
+            - ctype: str = "web"        💡 需要和 type 相同
+            - client: str = "web"       💡 需要和 type 相同
         """
         if isinstance(payload, (int, str)):
             payload = {"code": payload, "ac": "security_code", "type": "web", "ctype": "web", "client": "web"}
@@ -1863,7 +1860,6 @@ class P115Client:
         POST https://proapi.115.com/app/chrome/downurl
 
         :payload:
-
             - pickcode: str
         """
         api = "https://proapi.115.com/app/chrome/downurl"
@@ -1918,7 +1914,6 @@ class P115Client:
         GET https://webapi.115.com/files/download
 
         :payload:
-
             - pickcode: str
         """
         api = "https://webapi.115.com/files/download"
@@ -1981,7 +1976,6 @@ class P115Client:
         POST https://webapi.115.com/files/add_extract_file
 
         :payload:
-
             - pick_code: str
             - extract_file[]: str
             - extract_file[]: str
@@ -2036,7 +2030,6 @@ class P115Client:
         GET https://webapi.115.com/files/extract_down_file
 
         :payload:
-
             - pick_code: str
             - full_name: str
         """
@@ -2093,7 +2086,6 @@ class P115Client:
         GET https://webapi.115.com/files/extract_down_file
 
         :payload:
-
             - pick_code: str
             - full_name: str
         """
@@ -2254,11 +2246,10 @@ class P115Client:
         GET https://webapi.115.com/files/extract_info
 
         :payload:
-
             - pick_code: str
             - file_name: str = ""
             - next_marker: str = ""
-            - page_count: int | str = 999 # NOTE: 介于 1-999
+            - page_count: int | str = 999 💡 NOTE: 介于 1-999
             - paths: str = "文件"
         """
         api = "https://webapi.115.com/files/extract_info"
@@ -2345,7 +2336,6 @@ class P115Client:
         GET https://webapi.115.com/files/add_extract_file
 
         :payload:
-
             - extract_id: str
         """
         api = "https://webapi.115.com/files/add_extract_file"
@@ -2383,9 +2373,8 @@ class P115Client:
         POST https://webapi.115.com/files/push_extract
 
         :payload:
-
             - pick_code: str
-            - secret: str = "" # 解压密码
+            - secret: str = "" 💡 解压密码
         """
         api = "https://webapi.115.com/files/push_extract"
         if isinstance(payload, str):
@@ -2422,7 +2411,6 @@ class P115Client:
         GET https://webapi.115.com/files/push_extract
 
         :payload:
-
             - pick_code: str
         """
         api = "https://webapi.115.com/files/push_extract"
@@ -2465,7 +2453,6 @@ class P115Client:
         GET https://webapi.115.com/photo/albumlist
 
         :payload:
-
             - offset: int = 0
             - limit: int = 1150
             - album_type: int = 1
@@ -2507,8 +2494,7 @@ class P115Client:
         POST https://webapi.115.com/files/batch_edit
 
         :payload:
-
-            - show_play_long[{fid}]: ``0`` | ``1`` = 1 # 设置或取消显示时长
+            - show_play_long[{fid}]: 0 | 1 = 1 💡 设置或取消显示时长
         """
         api = "https://webapi.115.com/files/batch_edit"
         if (headers := request_kwargs.get("headers")):
@@ -2637,12 +2623,12 @@ class P115Client:
         POST https://webapi.115.com/category/shortcut
 
         :payload:
-            - file_id: :class:`int` | :class:`str` 目录 id，如果有多个，则用逗号 ``","`` 隔开
-            - op: ``"add"`` | ``"delete"`` | ``"top"`` = ``"add"`` 操作代码
+            - file_id: int | str 目录 id，如果有多个，则用逗号 "," 隔开
+            - op: "add" | "delete" | "top" = "add" 操作代码
 
-              - ``"add"``:    添加
-              - ``"delete"``: 删除
-              - ``"top"``:    置顶
+              - "add":    添加
+              - "delete": 删除
+              - "top":    置顶
         """
         api = "https://webapi.115.com/category/shortcut"
         if isinstance(payload, (int, str)):
@@ -2685,16 +2671,15 @@ class P115Client:
         POST https://webapi.115.com/files/copy
 
         :payload:
-
-            - fid[0]: :class:`int` | :class:`str`
+            - fid[0]: int | str
 
               文件或目录的 id
 
-            - fid[1]: :class:`int` | :class:`str`
+            - fid[1]: int | str
             - ...
-            - pid: :class:`int` | :class:`str` = 0
+            - pid: int | str = 0
 
-              目录 id，把 ``fid[{no}]`` 全都移动到此目录中
+              目录 id，把 fid[{no}] 全都移动到此目录中
         """
         api = "https://webapi.115.com/files/copy"
         if isinstance(payload, (int, str)):
@@ -2780,7 +2765,6 @@ class P115Client:
         POST https://webapi.115.com/rb/delete
 
         :payload:
-
             - fid[0]: int | str
             - fid[1]: int | str
             - ...
@@ -2824,11 +2808,10 @@ class P115Client:
         GET https://webapi.115.com/files/desc
 
         :payload:
-
             - file_id: int | str
             - format: str = "json"
-            - compat: ``0`` | ``1`` = 1
-            - new_html: ``0`` | ``1`` = ``<default>``
+            - compat: 0 | 1 = 1
+            - new_html: 0 | 1 = <default>
         """
         api = "https://webapi.115.com/files/desc"
         if isinstance(payload, (int, str)):
@@ -2909,7 +2892,6 @@ class P115Client:
         GET https://webapi.115.com/files/getid
 
         :payload:
-
             - path: str
         """
         api = "https://webapi.115.com/files/getid"
@@ -2947,18 +2929,17 @@ class P115Client:
         POST https://webapi.115.com/files/edit
 
         :payload:
-
-            # 如果是单个文件或目录，也可以是多个但用逗号 "," 隔开
+            💡 如果是单个文件或目录，也可以是多个但用逗号 "," 隔开
             - fid: int | str
-            # 如果是多个文件或目录
+            💡 如果是多个文件或目录
             - fid[]: int | str
             - fid[]: int | str
             - ...
-            # 其它配置信息
-            - file_desc: :class:`str` = ``<default>`` # 可以用 html
-            - file_label: :class:`int` | :class:`str` = ``<default>`` # 标签 id，多个用逗号 ``","`` 隔开
-            - fid_cover: :class:`int` | :class:`str` = ``<default>`` # 封面图片的文件 id，多个用逗号 ``","`` 隔开，如果要删除，值设为 0 即可
-            - show_play_long: ``0`` | ``1`` = ``<default>`` # 文件名称显示时长
+            💡 其它配置信息
+            - file_desc: str = <default> 💡 可以用 html
+            - file_label: int | str = <default> 💡 标签 id，多个用逗号 "," 隔开
+            - fid_cover: int | str = <default> 💡 封面图片的文件 id，多个用逗号 "," 隔开，如果要删除，值设为 0 即可
+            - show_play_long: 0 | 1 = <default> 💡 文件名称显示时长
         """
         api = "https://webapi.115.com/files/edit"
         if (headers := request_kwargs.get("headers")):
@@ -3004,10 +2985,9 @@ class P115Client:
         POST https://webapi.115.com/files/export_dir
 
         :payload:
-
-            file_ids: int | str   # 有多个时，用逗号 "," 隔开
-            target: str = "U_1_0" # 导出目录树到这个目录
-            layer_limit: :class:`int` = ``<default>`` # 层级深度，自然数
+            file_ids: int | str   💡 有多个时，用逗号 "," 隔开
+            target: str = "U_1_0" 💡 导出目录树到这个目录
+            layer_limit: int = <default> 💡 层级深度，自然数
         """
         api = "https://webapi.115.com/files/export_dir"
         if isinstance(payload, (int, str)):
@@ -3044,7 +3024,6 @@ class P115Client:
         GET https://webapi.115.com/files/export_dir
 
         :payload:
-
             export_id: int | str
         """
         api = "https://webapi.115.com/files/export_dir"
@@ -3082,8 +3061,7 @@ class P115Client:
         GET https://webapi.115.com/files/get_info
 
         :payload:
-
-            - file_id: :class:`int` | :class:`str` # 文件或目录的 id，不能为 0，只能传 1 个 id，如果有多个只采用第一个
+            - file_id: int | str 💡 文件或目录的 id，不能为 0，只能传 1 个 id，如果有多个只采用第一个
         """
         api = "https://webapi.115.com/files/get_info"
         if isinstance(payload, (int, str)):
@@ -3120,8 +3098,7 @@ class P115Client:
         GET https://webapi.115.com/files/file
 
         :payload:
-
-            - file_id: :class:`int` | :class:`str` # 文件或目录的 id，不能为 0，如果有多个则用逗号 "," 隔开
+            - file_id: int | str 💡 文件或目录的 id，不能为 0，如果有多个则用逗号 "," 隔开
         """
         api = "https://webapi.115.com/files/file"
         if isinstance(payload, (int, str)):
@@ -3161,7 +3138,7 @@ class P115Client:
         """获取目录中的文件列表和基本信息
 
         .. hint::
-            指定如下条件中任一，且 ``cur = 0`` （默认），即可遍历搜索所在目录树
+            指定如下条件中任一，且 cur = 0 （默认），即可遍历搜索所在目录树
 
             1. cid=0 且 star=1
             2. suffix 为非空的字符串
@@ -3170,56 +3147,56 @@ class P115Client:
         GET https://webapi.115.com/files
 
         :payload:
-            - cid: :class:`int` | :class:`str` = ``0`` 目录 id
-            - limit: :class:`int` = ``32``         分页大小
-            - offset: :class:`int` = ``0``         分页开始的索引，索引从 ``0`` 开始计算
+            - cid: int | str = 0 💡 目录 id
+            - limit: int = 32 💡 分页大小
+            - offset: int = 0 💡 分页开始的索引，索引从 0 开始计算
 
-            - aid: :class:`int` | :class:`str` = ``1`` area_id，默认即可
-            - asc: ``0`` | ``1`` = ``<default>`` 是否升序排列。``0``: 降序 ``1``: 升序
-            - code: :class:`int` | :class:`str` = ``<default>``
-            - count_folders: ``0`` | ``1`` = ``1`` 统计文件数和目录数
-            - cur: ``0`` | ``1`` = ``<default>`` 是否只搜索当前目录
-            - custom_order: ``0`` | ``1`` = ``<default>`` 启用自定义排序，如果指定了 ``"asc"``、``"fc_mix"``、``"o"`` 中其一，则此参数会被自动设置为 ``1`` 
-            - date: :class:`str` = ``<default>`` 筛选日期
-            - fc_mix: ``0`` | ``1`` = ``<default>`` 是否目录和文件混合，如果为 ``0`` 则目录在前
-            - fields: :class:`str` = ``<default>``
-            - format: :class:`str` = ``"json"`` 返回格式，默认即可
-            - hide_data: :class:`str` = ``<default>``
-            - is_q: ``0`` | ``1`` = ``<default>``
-            - is_share: ``0`` | ``1`` = ``<default>``
-            - min_size: :class:`int` = ``0`` 最小的文件大小
-            - max_size: :class:`int` = ``0`` 最大的文件大小
-            - natsort: ``0`` | ``1`` = ``<default>``
-            - o: :class:`str` = ``<default>`` 用某字段排序
+            - aid: int | str = 1 💡 area_id，默认即可
+            - asc: 0 | 1 = <default> 💡 是否升序排列。0: 降序 1: 升序
+            - code: int | str = <default>
+            - count_folders: 0 | 1 = 1 💡 统计文件数和目录数
+            - cur: 0 | 1 = <default> 💡 是否只搜索当前目录
+            - custom_order: 0 | 1 = <default> 💡 启用自定义排序，如果指定了 "asc"、"fc_mix"、"o" 中其一，则此参数会被自动设置为 1 
+            - date: str = <default> 💡 筛选日期
+            - fc_mix: 0 | 1 = <default> 💡 是否目录和文件混合，如果为 0 则目录在前
+            - fields: str = <default>
+            - format: str = "json" 💡 返回格式，默认即可
+            - hide_data: str = <default>
+            - is_q: 0 | 1 = <default>
+            - is_share: 0 | 1 = <default>
+            - min_size: int = 0 💡 最小的文件大小
+            - max_size: int = 0 💡 最大的文件大小
+            - natsort: 0 | 1 = <default>
+            - o: str = <default> 💡 用某字段排序
 
-              - 文件名：``"file_name"``
-              - 文件大小：``"file_size"```
-              - 文件种类：``"file_type"``
-              - 修改时间：``"user_utime"``
-              - 创建时间：``"user_ptime"``
-              - 上一次打开时间：``"user_otime"``
+              - "file_name": 文件名
+              - "file_size": 文件大小
+              - "file_type": 文件种类
+              - "user_utime": 修改时间
+              - "user_ptime": 创建时间
+              - "user_otime": 上一次打开时间
 
-            - r_all: ``0`` | ``1`` = ``<default>``
-            - record_open_time: ``0`` | ``1`` = ``1`` 是否要记录目录的打开时间
-            - scid: :class:`int` | :class:`str` = ``<default>``
-            - show_dir: ``0`` | ``1`` = ``1``
-            - snap: ``0`` | ``1`` = ``<default>``
-            - source: :class:`str` = ``<default>``
-            - sys_dir: :class:`int` | :class:`str` = ``<default>``
-            - star: ``0`` | ``1`` = ``<default>`` 是否星标文件
-            - stdir: ``0`` | ``1`` = ``<default>``
-            - suffix: :class:`str` = ``<default>`` 后缀名（优先级高于 `type`）
-            - type: :class:`int` = ``<default>`` 文件类型
+            - r_all: 0 | 1 = <default>
+            - record_open_time: 0 | 1 = 1 💡 是否要记录目录的打开时间
+            - scid: int | str = <default>
+            - show_dir: 0 | 1 = 1
+            - snap: 0 | 1 = <default>
+            - source: str = <default>
+            - sys_dir: int | str = <default>
+            - star: 0 | 1 = <default> 💡 是否星标文件
+            - stdir: 0 | 1 = <default>
+            - suffix: str = <default> 💡 后缀名（优先级高于 `type`）
+            - type: int = <default> 💡 文件类型
 
-              - ``0``: 全部
-              - ``1``: 文档
-              - ``2``: 图片
-              - ``3``: 音频
-              - ``4``: 视频
-              - ``5``: 压缩包
-              - ``6``: 应用
-              - ``7``: 书籍
-              - ``99``: 仅文件
+              - 0: 全部
+              - 1: 文档
+              - 2: 图片
+              - 3: 音频
+              - 4: 视频
+              - 5: 压缩包
+              - 6: 应用
+              - 7: 书籍
+              - 99: 仅文件
         """
         api = "https://webapi.115.com/files"
         if isinstance(payload, int):
@@ -3272,56 +3249,56 @@ class P115Client:
         GET https://proapi.115.com/{app}/2.0/ufile/files
 
         :payload:
-            - cid: :class:`int` | :class:`str` = ``0`` 目录 id
-            - limit: :class:`int` = ``32``         分页大小
-            - offset: :class:`int` = ``0``         分页开始的索引，索引从 ``0`` 开始计算
+            - cid: int | str = 0 💡 目录 id
+            - limit: int = 32 💡 分页大小
+            - offset: int = 0 💡 分页开始的索引，索引从 0 开始计算
 
-            - aid: :class:`int` | :class:`str` = ``1`` area_id，默认即可
-            - asc: ``0`` | ``1`` = ``<default>`` 是否升序排列。``0``: 降序 ``1``: 升序
-            - code: :class:`int` | :class:`str` = ``<default>``
-            - count_folders: ``0`` | ``1`` = ``1`` 统计文件数和目录数
-            - cur: ``0`` | ``1`` = ``<default>`` 是否只搜索当前目录
-            - custom_order: ``0`` | ``1`` = ``<default>`` 启用自定义排序，如果指定了 ``"asc"``、``"fc_mix"``、``"o"`` 中其一，则此参数会被自动设置为 ``1`` 
-            - date: :class:`str` = ``<default>`` 筛选日期
-            - fc_mix: ``0`` | ``1`` = ``<default>`` 是否目录和文件混合，如果为 ``0`` 则目录在前
-            - fields: :class:`str` = ``<default>``
-            - format: :class:`str` = ``"json"`` 返回格式，默认即可
-            - hide_data: :class:`str` = ``<default>``
-            - is_q: ``0`` | ``1`` = ``<default>``
-            - is_share: ``0`` | ``1`` = ``<default>``
-            - min_size: :class:`int` = ``0`` 最小的文件大小
-            - max_size: :class:`int` = ``0`` 最大的文件大小
-            - natsort: ``0`` | ``1`` = ``<default>``
-            - o: :class:`str` = ``<default>`` 用某字段排序
+            - aid: int | str = 1 💡 area_id，默认即可
+            - asc: 0 | 1 = <default> 💡 是否升序排列。0: 降序 1: 升序
+            - code: int | str = <default>
+            - count_folders: 0 | 1 = 1 💡 统计文件数和目录数
+            - cur: 0 | 1 = <default> 💡 是否只搜索当前目录
+            - custom_order: 0 | 1 = <default> 💡 启用自定义排序，如果指定了 "asc"、"fc_mix"、"o" 中其一，则此参数会被自动设置为 1 
+            - date: str = <default> 💡 筛选日期
+            - fc_mix: 0 | 1 = <default> 💡 是否目录和文件混合，如果为 0 则目录在前
+            - fields: str = <default>
+            - format: str = "json" 💡 返回格式，默认即可
+            - hide_data: str = <default>
+            - is_q: 0 | 1 = <default>
+            - is_share: 0 | 1 = <default>
+            - min_size: int = 0 💡 最小的文件大小
+            - max_size: int = 0 💡 最大的文件大小
+            - natsort: 0 | 1 = <default>
+            - o: str = <default> 💡 用某字段排序
 
-              - 文件名：``"file_name"``
-              - 文件大小：``"file_size"```
-              - 文件种类：``"file_type"``
-              - 修改时间：``"user_utime"``
-              - 创建时间：``"user_ptime"``
-              - 上一次打开时间：``"user_otime"``
+              - "file_name": 文件名
+              - "file_size": 文件大小
+              - "file_type": 文件种类
+              - "user_utime": 修改时间
+              - "user_ptime": 创建时间
+              - "user_otime": 上一次打开时间
 
-            - r_all: ``0`` | ``1`` = ``<default>``
-            - record_open_time: ``0`` | ``1`` = ``1`` 是否要记录目录的打开时间
-            - scid: :class:`int` | :class:`str` = ``<default>``
-            - show_dir: ``0`` | ``1`` = ``1``
-            - snap: ``0`` | ``1`` = ``<default>``
-            - source: :class:`str` = ``<default>``
-            - sys_dir: :class:`int` | :class:`str` = ``<default>``
-            - star: ``0`` | ``1`` = ``<default>`` 是否星标文件
-            - stdir: ``0`` | ``1`` = ``<default>``
-            - suffix: :class:`str` = ``<default>`` 后缀名（优先级高于 `type`）
-            - type: :class:`int` = ``<default>`` 文件类型
+            - r_all: 0 | 1 = <default>
+            - record_open_time: 0 | 1 = 1 💡 是否要记录目录的打开时间
+            - scid: int | str = <default>
+            - show_dir: 0 | 1 = 1
+            - snap: 0 | 1 = <default>
+            - source: str = <default>
+            - sys_dir: int | str = <default>
+            - star: 0 | 1 = <default> 💡 是否星标文件
+            - stdir: 0 | 1 = <default>
+            - suffix: str = <default> 💡 后缀名（优先级高于 `type`）
+            - type: int = <default> 💡 文件类型
 
-              - ``0``: 全部
-              - ``1``: 文档
-              - ``2``: 图片
-              - ``3``: 音频
-              - ``4``: 视频
-              - ``5``: 压缩包
-              - ``6``: 应用
-              - ``7``: 书籍
-              - ``99``: 仅文件
+              - 0: 全部
+              - 1: 文档
+              - 2: 图片
+              - 3: 音频
+              - 4: 视频
+              - 5: 压缩包
+              - 6: 应用
+              - 7: 书籍
+              - 99: 仅文件
         """
         api = f"https://proapi.115.com/{app}/2.0/ufile/files"
         if isinstance(payload, int):
@@ -3371,56 +3348,56 @@ class P115Client:
         GET https://aps.115.com/natsort/files.php
 
         :payload:
-            - cid: :class:`int` | :class:`str` = ``0`` 目录 id
-            - limit: :class:`int` = ``32``         分页大小
-            - offset: :class:`int` = ``0``         分页开始的索引，索引从 ``0`` 开始计算
+            - cid: int | str = 0 💡 目录 id
+            - limit: int = 32 💡 分页大小
+            - offset: int = 0 💡 分页开始的索引，索引从 0 开始计算
 
-            - aid: :class:`int` | :class:`str` = ``1`` area_id，默认即可
-            - asc: ``0`` | ``1`` = ``<default>`` 是否升序排列。``0``: 降序 ``1``: 升序
-            - code: :class:`int` | :class:`str` = ``<default>``
-            - count_folders: ``0`` | ``1`` = ``1`` 统计文件数和目录数
-            - cur: ``0`` | ``1`` = ``<default>`` 是否只搜索当前目录
-            - custom_order: ``0`` | ``1`` = ``<default>`` 启用自定义排序，如果指定了 ``"asc"``、``"fc_mix"``、``"o"`` 中其一，则此参数会被自动设置为 ``1`` 
-            - date: :class:`str` = ``<default>`` 筛选日期
-            - fc_mix: ``0`` | ``1`` = ``<default>`` 是否目录和文件混合，如果为 ``0`` 则目录在前
-            - fields: :class:`str` = ``<default>``
-            - format: :class:`str` = ``"json"`` 返回格式，默认即可
-            - hide_data: :class:`str` = ``<default>``
-            - is_q: ``0`` | ``1`` = ``<default>``
-            - is_share: ``0`` | ``1`` = ``<default>``
-            - min_size: :class:`int` = ``0`` 最小的文件大小
-            - max_size: :class:`int` = ``0`` 最大的文件大小
-            - natsort: ``0`` | ``1`` = ``<default>``
-            - o: :class:`str` = ``<default>`` 用某字段排序
+            - aid: int | str = 1 💡 area_id，默认即可
+            - asc: 0 | 1 = <default> 💡 是否升序排列。0: 降序 1: 升序
+            - code: int | str = <default>
+            - count_folders: 0 | 1 = 1 💡 统计文件数和目录数
+            - cur: 0 | 1 = <default> 💡 是否只搜索当前目录
+            - custom_order: 0 | 1 = <default> 💡 启用自定义排序，如果指定了 "asc"、"fc_mix"、"o" 中其一，则此参数会被自动设置为 1 
+            - date: str = <default> 💡 筛选日期
+            - fc_mix: 0 | 1 = <default> 💡 是否目录和文件混合，如果为 0 则目录在前
+            - fields: str = <default>
+            - format: str = "json" 💡 返回格式，默认即可
+            - hide_data: str = <default>
+            - is_q: 0 | 1 = <default>
+            - is_share: 0 | 1 = <default>
+            - min_size: int = 0 💡 最小的文件大小
+            - max_size: int = 0 💡 最大的文件大小
+            - natsort: 0 | 1 = <default>
+            - o: str = <default> 💡 用某字段排序
 
-              - 文件名：``"file_name"``
-              - 文件大小：``"file_size"```
-              - 文件种类：``"file_type"``
-              - 修改时间：``"user_utime"``
-              - 创建时间：``"user_ptime"``
-              - 上一次打开时间：``"user_otime"``
+              - "file_name": 文件名
+              - "file_size": 文件大小
+              - "file_type": 文件种类
+              - "user_utime": 修改时间
+              - "user_ptime": 创建时间
+              - "user_otime": 上一次打开时间
 
-            - r_all: ``0`` | ``1`` = ``<default>``
-            - record_open_time: ``0`` | ``1`` = ``1`` 是否要记录目录的打开时间
-            - scid: :class:`int` | :class:`str` = ``<default>``
-            - show_dir: ``0`` | ``1`` = ``1``
-            - snap: ``0`` | ``1`` = ``<default>``
-            - source: :class:`str` = ``<default>``
-            - sys_dir: :class:`int` | :class:`str` = ``<default>``
-            - star: ``0`` | ``1`` = ``<default>`` 是否星标文件
-            - stdir: ``0`` | ``1`` = ``<default>``
-            - suffix: :class:`str` = ``<default>`` 后缀名（优先级高于 `type`）
-            - type: :class:`int` = ``<default>`` 文件类型
+            - r_all: 0 | 1 = <default>
+            - record_open_time: 0 | 1 = 1 💡 是否要记录目录的打开时间
+            - scid: int | str = <default>
+            - show_dir: 0 | 1 = 1
+            - snap: 0 | 1 = <default>
+            - source: str = <default>
+            - sys_dir: int | str = <default>
+            - star: 0 | 1 = <default> 💡 是否星标文件
+            - stdir: 0 | 1 = <default>
+            - suffix: str = <default> 💡 后缀名（优先级高于 `type`）
+            - type: int = <default> 💡 文件类型
 
-              - ``0``: 全部
-              - ``1``: 文档
-              - ``2``: 图片
-              - ``3``: 音频
-              - ``4``: 视频
-              - ``5``: 压缩包
-              - ``6``: 应用
-              - ``7``: 书籍
-              - ``99``: 仅文件
+              - 0: 全部
+              - 1: 文档
+              - 2: 图片
+              - 3: 音频
+              - 4: 视频
+              - 5: 压缩包
+              - 6: 应用
+              - 7: 书籍
+              - 99: 仅文件
         """
         api = "https://aps.115.com/natsort/files.php"
         if isinstance(payload, int):
@@ -3467,11 +3444,10 @@ class P115Client:
         GET https://webapi.115.com/files/history
 
         :payload:
-
             - pick_code: str
             - fetch: str = "one"
-            - category: :class:`int` = ``<default>``
-            - share_id: :class:`int` | :class:`str` = ``<default>``
+            - category: int = <default>
+            - share_id: int | str = <default>
         """
         api = "https://webapi.115.com/files/history"
         if isinstance(payload, str):
@@ -3510,18 +3486,18 @@ class P115Client:
         GET https://webapi.115.com/files/get_second_type
 
         :payload:
+            - cid: int | str = 0 💡 目录 id
+            - type: int = <default> 💡 文件类型
 
-            - cid: int | str = 0 # 目录 id
-            - type: :class:`int` = ``<default>``
-                # 文件类型：
-                # - 文档: 1
-                # - 图片: 2
-                # - 音频: 3
-                # - 视频: 4
-                # - 压缩包: 5
-                # - 应用: 6
-                # - 书籍: 7
-            - file_label: :class:`int` | :class:`str` = ``<default>`` # 标签 id，如果有多个则用逗号 "," 隔开
+              - 1: 文档
+              - 2: 图片
+              - 3: 音频
+              - 4: 视频
+              - 5: 压缩包
+              - 6: 应用
+              - 7: 书籍
+
+            - file_label: int | str = <default> 💡 标签 id，如果有多个则用逗号 "," 隔开
         """
         api = "https://webapi.115.com/files/get_second_type"
         if isinstance(payload, int):
@@ -3558,8 +3534,7 @@ class P115Client:
         POST https://aps.115.com/getFolderPlaylong
 
         :payload:
-
-            - folder_ids: :class:`int` | :class:`str` # 目录 id，多个用逗号 ``","`` 隔开
+            - folder_ids: int | str 💡 目录 id，多个用逗号 "," 隔开
         """
         api = "https://aps.115.com/getFolderPlaylong"
         if isinstance(payload, (int, str)):
@@ -3640,11 +3615,10 @@ class P115Client:
         POST https://webapi.115.com/files/hiddenfiles
 
         :payload:
-
             - fid[0]: int | str
             - fid[1]: int | str
             - ...
-            - hidden: ``0`` | ``1`` = 1
+            - hidden: 0 | 1 = 1
         """
         api = "https://webapi.115.com/files/hiddenfiles"
         if isinstance(payload, (int, str)):
@@ -3688,9 +3662,8 @@ class P115Client:
         POST https://115.com/?ct=hiddenfiles&ac=switching
 
         :payload:
-
-            safe_pwd: str = "" # 密码，如果需要进入隐藏模式，请传递此参数
-            show: ``0`` | ``1`` = 1
+            safe_pwd: str = "" 💡 密码，如果需要进入隐藏模式，请传递此参数
+            show: 0 | 1 = 1
             valid_type: int = 1
         """
         api = "https://115.com/?ct=hiddenfiles&ac=switching"
@@ -3730,7 +3703,6 @@ class P115Client:
         GET https://proapi.115.com/android/history
 
         :payload:
-
             - pick_code: str
             - action: str = "get_one"
         """
@@ -3771,19 +3743,19 @@ class P115Client:
         POST https://webapi.115.com/history/clean
 
         :payload:
+            - type: int | str 💡 类型（？？表示还未搞清楚），多个用逗号 "," 隔开
 
-            - type: :class:`int` | :class:`str` # 类型（？？表示还未搞清楚），多个用逗号 ``","`` 隔开
-                # 类型：
-                # - 全部: 0
-                # - 接收文件: 1
-                # - ？？: 2
-                # - 播放视频: 3
-                # - 上传: 4
-                # - ？？: 5
-                # - ？？: 6
-                # - 接收目录: 7
-                # - ？？: 8
-            - with_file: ``0`` | ``1`` = 0
+              - 全部: 0
+              - 接收文件: 1
+              - ？？: 2
+              - 播放视频: 3
+              - 上传: 4
+              - ？？: 5
+              - ？？: 6
+              - 接收目录: 7
+              - ？？: 8
+
+            - with_file: 0 | 1 = 0
         """
         api = "https://webapi.115.com/history/clean"
         if isinstance(payload, (int, str)):
@@ -3825,21 +3797,20 @@ class P115Client:
         GET https://webapi.115.com/history/list
 
         :payload:
-
             - offset: int = 0
             - limit: int = 1150
-            - played_end: ``0`` | ``1`` = ``<default>``
-            - type: :class:`int` = ``<default>`` # 类型（？？表示还未搞清楚），多个用逗号 ``","`` 隔开
-                # 类型：
-                # - 全部: 0
-                # - 接收文件: 1
-                # - ？？: 2
-                # - 播放视频: 3
-                # - 上传: 4
-                # - ？？: 5
-                # - ？？: 6
-                # - 接收目录: 7
-                # - ？？: 8
+            - played_end: 0 | 1 = <default>
+            - type: int = <default> 💡 类型（？？表示还未搞清楚），多个用逗号 "," 隔开
+
+              - 全部: 0
+              - 接收文件: 1
+              - ？？: 2
+              - 播放视频: 3
+              - 上传: 4
+              - ？？: 5
+              - ？？: 6
+              - 接收目录: 7
+              - ？？: 8
         """
         api = "https://webapi.115.com/history/list"
         if isinstance(payload, int):
@@ -3881,7 +3852,6 @@ class P115Client:
         GET https://webapi.115.com/history/move_target_list
 
         :payload:
-
             - offset: int = 0
             - limit: int = 1150
         """
@@ -3925,7 +3895,6 @@ class P115Client:
         GET https://webapi.115.com/history/receive_list
 
         :payload:
-
             - offset: int = 0
             - limit: int = 1150
         """
@@ -3966,13 +3935,12 @@ class P115Client:
         POST https://webapi.115.com/files/history
 
         :payload:
-
             - pick_code: str
             - op: str = "update"
-            - category: :class:`int` = ``<default>``
-            - definition: :class:`int` = ``<default>``
-            - share_id: :class:`int` | :class:`str` = ``<default>``
-            - time: :class:`int` = ``<default>``
+            - category: int = <default>
+            - definition: int = <default>
+            - share_id: int | str = <default>
+            - time: int = <default>
             - ...（其它未找全的参数）
         """
         api = "https://webapi.115.com/files/history"
@@ -4012,7 +3980,6 @@ class P115Client:
         GET https://webapi.115.com/files/image
 
         :payload:
-
             - pickcode: str
         """
         api = "https://webapi.115.com/files/image"
@@ -4050,8 +4017,7 @@ class P115Client:
         POST https://imgjump.115.com/getimgdata_url
 
         :payload:
-
-            - imgurl: str # 图片的访问链接，以 "http://thumb.115.com" 开头
+            - imgurl: str 💡 图片的访问链接，以 "http://thumb.115.com" 开头
         """
         api = "https://imgjump.115.com/getimgdata_url"
         if isinstance(payload, str):
@@ -4091,22 +4057,21 @@ class P115Client:
         GET https://proapi.115.com/android/files/imglist
 
         :payload:
+            - cid: int | str = 0 💡 目录 id
+            - limit: int = 32    💡 一页大小，建议控制在 <= 9000，不然会报错
+            - offset: int = 0    💡 索引偏移，索引从 0 开始计算
 
-            - cid: int | str = 0 # 目录 id
-            - limit: int = 32    # 一页大小，建议控制在 <= 9000，不然会报错
-            - offset: int = 0    # 索引偏移，索引从 0 开始计算
+            - aid: int | str = 1 💡 area_id，不知道的话，设置为 1
+            - asc: 0 | 1 = <default> 💡 是否升序排列
+            - cur: 0 | 1 = <default> 💡 只罗列当前目录
+            - o: str = <default> 💡 用某字段排序
 
-            - aid: int | str = 1 # area_id，不知道的话，设置为 1
-            - asc: ``0`` | ``1`` = ``<default>`` # 是否升序排列
-            - cur: ``0`` | ``1`` = ``<default>`` # 只罗列当前目录
-            - o: :class:`str` = ``<default>``
-                # 用某字段排序：
-                # - 文件名："file_name"
-                # - 文件大小："file_size"
-                # - 文件种类："file_type"
-                # - 修改时间："user_utime"
-                # - 创建时间："user_ptime"
-                # - 上一次打开时间："user_otime"
+              - 文件名："file_name"
+              - 文件大小："file_size"
+              - 文件种类："file_type"
+              - 修改时间："user_utime"
+              - 创建时间："user_ptime"
+              - 上一次打开时间："user_otime"
         """
         api = "https://proapi.115.com/android/files/imglist"
         if isinstance(payload, (int, str)):
@@ -4145,8 +4110,7 @@ class P115Client:
         GET https://webapi.115.com/files/index_info
 
         :payload:
-
-            count_space_nums: ``0`` | ``1`` = 0 # 如果为 0，包含各种类型文件的数量统计；如果为 1，包含登录设备列表
+            count_space_nums: 0 | 1 = 0 💡 如果为 0，包含各种类型文件的数量统计；如果为 1，包含登录设备列表
         """
         api = "https://webapi.115.com/files/index_info"
         if not isinstance(payload, dict):
@@ -4182,7 +4146,7 @@ class P115Client:
 
         POST https://webapi.115.com/label/add_multi
 
-        可传入多个 label 描述，每个 label 的格式都是 "{label_name}" 或 "{label_name}\x07{color}"，例如 "tag\x07#FF0000"
+        可传入多个 label 描述，每个 label 的格式都是 "{label_name}" 或 "{label_name}\x07{color}"，例如 "tag\x07💡FF0000"
         """
         api = "https://webapi.115.com/label/add_multi"
         payload = [("name[]", label) for label in lables if label]
@@ -4231,8 +4195,7 @@ class P115Client:
         POST https://webapi.115.com/label/delete
 
         :payload:
-
-            - id: :class:`int` | :class:`str` # 标签 id，多个用逗号 ``","`` 隔开
+            - id: int | str 💡 标签 id，多个用逗号 "," 隔开
         """
         api = "https://webapi.115.com/label/delete"
         if isinstance(payload, (int, str)):
@@ -4269,11 +4232,10 @@ class P115Client:
         POST https://webapi.115.com/label/edit
 
         :payload:
-
-            - id: :class:`int` | :class:`str` # 标签 id
-            - name: :class:`str` = ``<default>``  # 标签名
-            - color: :class:`str` = ``<default>`` # 标签颜色，支持 css 颜色语法
-            - sort: :class:`int` = ``<default>``  # 序号
+            - id: int | str 💡 标签 id
+            - name: str = <default>  💡 标签名
+            - color: str = <default> 💡 标签颜色，支持 css 颜色语法
+            - sort: int = <default>  💡 序号
         """
         api = "https://webapi.115.com/label/edit"
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
@@ -4308,16 +4270,16 @@ class P115Client:
         GET https://webapi.115.com/label/list
 
         :payload:
+            - offset: int = 0 💡 索引偏移，从 0 开始
+            - limit: int = 11500 💡 一页大小
+            - keyword: str = <default> 💡 搜索关键词
+            - sort: "name" | "update_time" | "create_time" = <default> 💡 排序字段
 
-            - offset: int = 0 # 索引偏移，从 0 开始
-            - limit: int = 11500 # 一页大小
-            - keyword: :class:`str` = ``<default>`` # 搜索关键词
-            - sort: "name" | "update_time" | "create_time" = ``<default>``
-                # 排序字段:
-                # - 名称: "name"
-                # - 创建时间: "create_time"
-                # - 更新时间: "update_time"
-            - order: "asc" | "desc" = ``<default>`` # 排序顺序："asc"(升序), "desc"(降序)
+              - 名称: "name"
+              - 创建时间: "create_time"
+              - 更新时间: "update_time"
+
+            - order: "asc" | "desc" = <default> 💡 排序顺序："asc"(升序), "desc"(降序)
         """
         api = "https://webapi.115.com/label/list"
         payload = {"offset": 0, "limit": 11500, **payload}
@@ -4354,7 +4316,7 @@ class P115Client:
         """为文件或目录设置标签，此接口是对 `fs_edit` 的封装
 
         :param fids: 单个或多个文件或目录 id
-        :param file_label: 标签 id，多个用逗号 ``","`` 隔开
+        :param file_label: 标签 id，多个用逗号 "," 隔开
         """
         if isinstance(fids, (int, str)):
             payload = [("fid", fids)]
@@ -4395,16 +4357,16 @@ class P115Client:
         POST https://webapi.115.com/files/batch_label
 
         :payload:
+            - action: "add" | "remove" | "reset" | "replace" 💡 操作名
 
-            - action: "add" | "remove" | "reset" | "replace"
-                # 操作名
-                # - 添加: "add"
-                # - 移除: "remove"
-                # - 重设: "reset"
-                # - 替换: "replace"
-            - file_ids: :class:`int` | :class:`str` # 文件或目录 id，多个用逗号 ``","`` 隔开
-            - file_label: :class:`int` | :class:`str` = ``<default>`` # 标签 id，多个用逗号 ``","`` 隔开
-            - file_label[{file_label}]: :class:`int` | :class:`str` = ``<default>`` # action 为 replace 时使用此参数，file_label[{原标签id}]: {目标标签id}，例如 file_label[123]: 456，就是把 id 是 123 的标签替换为 id 是 456 的标签
+              - "add": 添加
+              - "remove": 移除
+              - "reset": 重设
+              - "replace": 替换
+
+            - file_ids: int | str 💡 文件或目录 id，多个用逗号 "," 隔开
+            - file_label: int | str = <default> 💡 标签 id，多个用逗号 "," 隔开
+            - file_label[{file_label}]: int | str = <default> 💡 action 为 replace 时使用此参数，file_label[{原标签id}]: {目标标签id}，例如 file_label[123]: 456，就是把 id 是 123 的标签替换为 id 是 456 的标签
         """
         api = "https://webapi.115.com/files/batch_label"
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
@@ -4439,7 +4401,6 @@ class P115Client:
         POST https://webapi.115.com/files/add
 
         :payload:
-
             - cname: str
             - pid: int | str = 0
         """
@@ -4486,12 +4447,11 @@ class P115Client:
         POST https://webapi.115.com/files/move
 
         :payload:
-
             - pid: int | str
             - fid[0]: int | str
             - fid[1]: int | str
             - ...
-            - move_proid: :class:`str` = ``<default>`` # 任务 id
+            - move_proid: str = <default> 💡 任务 id
         """
         api = "https://webapi.115.com/files/move"
         if isinstance(payload, (int, str)):
@@ -4535,18 +4495,18 @@ class P115Client:
         POST https://webapi.115.com/files/order
 
         :payload:
+            - user_order: str 💡 用某字段排序
 
-            - user_order: str
-                # 用某字段排序：
-                # - 文件名："file_name"
-                # - 文件大小："file_size"
-                # - 文件种类："file_type"
-                # - 修改时间："user_utime"
-                # - 创建时间："user_ptime"
-                # - 上一次打开时间："user_otime"
-            - file_id: int | str = 0 # 目录 id
-            - user_asc: ``0`` | ``1`` = ``<default>`` # 是否升序排列
-            - fc_mix: ``0`` | ``1`` = ``<default>``   # 是否目录和文件混合，如果为 0 则目录在前
+              - "file_name": 文件名
+              - "file_size": 文件大小
+              - "file_type": 文件种类
+              - "user_utime": 修改时间
+              - "user_ptime": 创建时间
+              - "user_otime": 上一次打开时间
+
+            - file_id: int | str = 0 💡 目录 id
+            - user_asc: 0 | 1 = <default> 💡 是否升序排列
+            - fc_mix: 0 | 1 = <default>   💡 是否目录和文件混合，如果为 0 则目录在前
         """
         api = "https://webapi.115.com/files/order"
         if isinstance(payload, str):
@@ -4585,8 +4545,7 @@ class P115Client:
         POST https://webapi.115.com/files/batch_rename
 
         :payload:
-
-            - files_new_name[{file_id}]: str # 值为新的文件名（basename）
+            - files_new_name[{file_id}]: str 💡 值为新的文件名（basename）
         """
         api = "https://webapi.115.com/files/batch_rename"
         if isinstance(payload, tuple) and len(payload) == 2 and isinstance(payload[0], (int, str)):
@@ -4627,7 +4586,6 @@ class P115Client:
         GET https://webapi.115.com/files/get_repeat_sha
 
         :payload:
-
             file_id: int | str
             offset: int = 0
             limit: int = 1150
@@ -4674,9 +4632,8 @@ class P115Client:
         POST https://webapi.115.com/files/score
 
         :payload:
-
-            - file_id: :class:`int` | :class:`str` # 文件或目录 id，多个用逗号 ``","`` 隔开
-            - score: int = 0     # 0 为删除评分
+            - file_id: int | str 💡 文件或目录 id，多个用逗号 "," 隔开
+            - score: int = 0     💡 0 为删除评分
         """
         api = "https://webapi.115.com/files/score"
         payload = {"file_id": file_id, "score": score}
@@ -4712,41 +4669,41 @@ class P115Client:
         GET https://webapi.115.com/files/search
 
         :payload:
+            - aid: int | str = 1 💡 area_id，不知道的话，设置为 1
+            - asc: 0 | 1 = <default> 💡 是否升序排列
+            - cid: int | str = 0 💡 目录 id
+            - count_folders: 0 | 1 = <default>
+            - date: str = <default> 💡 筛选日期
+            - fc_mix: 0 | 1 = <default> 💡 是否目录和文件混合，如果为 0 则目录在前
+            - file_label: int | str = <default> 💡 标签 id
+            - format: str = "json" 💡 输出格式（不用管）
+            - limit: int = 32 💡 一页大小，意思就是 page_size
+            - o: str = <default> 💡 用某字段排序
 
-            - aid: int | str = 1 # area_id，不知道的话，设置为 1
-            - asc: ``0`` | ``1`` = ``<default>`` # 是否升序排列
-            - cid: int | str = 0 # 目录 id
-            - count_folders: ``0`` | ``1`` = ``<default>``
-            - date: :class:`str` = ``<default>`` # 筛选日期
-            - fc_mix: ``0`` | ``1`` = ``<default>`` # 是否目录和文件混合，如果为 0 则目录在前
-            - file_label: :class:`int` | :class:`str` = ``<default>`` # 标签 id
-            - format: str = "json" # 输出格式（不用管）
-            - limit: int = 32 # 一页大小，意思就是 page_size
-            - o: :class:`str` = ``<default>``
-                # 用某字段排序：
-                # - 文件名："file_name"
-                # - 文件大小："file_size"
-                # - 文件种类："file_type"
-                # - 修改时间："user_utime"
-                # - 创建时间："user_ptime"
-                # - 上一次打开时间："user_otime"
-            - offset: int = 0  # 索引偏移，索引从 0 开始计算
-            - pick_code: :class:`str` = ``<default>``
-            - search_value: :class:`str` = ``<default>``
-            - show_dir: ``0`` | ``1`` = 1
-            - source: :class:`str` = ``<default>``
-            - star: ``0`` | ``1`` = ``<default>``
-            - suffix: :class:`str` = ``<default>``
-            - type: :class:`int` = ``<default>``
-                # 文件类型：
-                # - 全部: 0
-                # - 文档: 1
-                # - 图片: 2
-                # - 音频: 3
-                # - 视频: 4
-                # - 压缩包: 5
-                # - 应用: 6
-                # - 书籍: 7
+              - "file_name": 文件名
+              - "file_size": 文件大小
+              - "file_type": 文件种类
+              - "user_utime": 修改时间
+              - "user_ptime": 创建时间
+              - "user_otime": 上一次打开时间
+
+            - offset: int = 0  💡 索引偏移，索引从 0 开始计算
+            - pick_code: str = <default>
+            - search_value: str = <default>
+            - show_dir: 0 | 1 = 1
+            - source: str = <default>
+            - star: 0 | 1 = <default>
+            - suffix: str = <default>
+            - type: int = <default> 💡 文件类型
+
+              - 1: 文档
+              - 2: 图片
+              - 3: 音频
+              - 4: 视频
+              - 5: 压缩包
+              - 6: 应用
+              - 7: 书籍
+              - 99: 仅文件
         """
         api = "https://webapi.115.com/files/search"
         if isinstance(payload, str):
@@ -4791,7 +4748,6 @@ class P115Client:
         GET https://webapi.115.com/files/shasearch
 
         :payload:
-
             - sha1: str
         """
         api = "https://webapi.115.com/files/shasearch"
@@ -4861,8 +4817,7 @@ class P115Client:
         GET https://webapi.115.com/user/report
 
         :payload:
-
-            - month: str # 年月，格式为 YYYYMM
+            - month: str 💡 年月，格式为 YYYYMM
         """
         api = "https://webapi.115.com/user/report"
         if isinstance(payload, str):
@@ -4934,9 +4889,8 @@ class P115Client:
         POST https://webapi.115.com/files/star
 
         :payload:
-
-            - file_id: :class:`int` | :class:`str` # 文件或目录 id，多个用逗号 ``","`` 隔开
-            - star: ``0`` | ``1`` = 1
+            - file_id: int | str 💡 文件或目录 id，多个用逗号 "," 隔开
+            - star: 0 | 1 = 1
         """
         api = "https://webapi.115.com/files/star"
         payload = {"file_id": file_id, "star": int(star)}
@@ -5001,10 +4955,9 @@ class P115Client:
         GET https://webapi.115.com/files/video
 
         :payload:
-
             - pickcode: str
-            - share_id: :class:`int` | :class:`str` = ``<default>``
-            - local: ``0`` | ``1`` = ``<default>``
+            - share_id: int | str = <default>
+            - local: 0 | 1 = <default>
         """
         api = "https://webapi.115.com/files/video"
         if isinstance(payload, str):
@@ -5056,11 +5009,11 @@ class P115Client:
 
         :return: 接口返回值
 
-        # 其它替代接口：
-        # 1. 需要破解里面一个 rsa 请求参数的生成方法，此接口不限设备（不强制为 web 的 cookies）
+        💡 其它替代接口：
+        💡 1. 需要破解里面一个 rsa 请求参数的生成方法，此接口不限设备（不强制为 web 的 cookies）
         GET http://videoplay.115.com/m3u8
         params = {filesha1: str, time: int, userid: int, rsa: str = "<md5_sign>"}
-        # 2. 需要破解 data 参数具体如何生成
+        💡 2. 需要破解 data 参数具体如何生成
         POST https://proapi.115.com/android/2.0/video/play
         data = {data: str = "<{b64encode(rsa_encrypt(data))>"}
         """
@@ -5098,7 +5051,6 @@ class P115Client:
         GET https://webapi.115.com/movies/subtitle
 
         :payload:
-
             - pickcode: str
         """
         api = "https://webapi.115.com/movies/subtitle"
@@ -5138,27 +5090,27 @@ class P115Client:
         GET https://proapi.115.com/android/1.0/behavior/detail
 
         :payload:
+            - type: str 💡 操作类型
 
-            - type: str
-                # 操作类型
-                # - "browser_image":     浏览图片
-                # - "browser_video":     浏览视频
-                # - "browser_document":  浏览文件
-                # - "new_folder":        新增目录
-                # - "copy_folder":       复制目录
-                # - "folder_rename":     目录改名
-                # - "folder_label":      目录设置标签
-                # - "star_file":         设置星标
-                # - "move_file":         移动文件或目录
-                # - "delete_file":       删除文件或目录
-                # - "upload_file":       上传文件
-                # - "upload_image_file": 上传图片
-                # - "receive_files":     接收文件
-                # - "rename_file":       文件改名（未实现）
-                # - "copy_file":         复制文件（未实现）
+              - "browser_image":     浏览图片
+              - "browser_video":     浏览视频
+              - "browser_document":  浏览文件
+              - "new_folder":        新增目录
+              - "copy_folder":       复制目录
+              - "folder_rename":     目录改名
+              - "folder_label":      目录设置标签
+              - "star_file":         设置星标
+              - "move_file":         移动文件或目录
+              - "delete_file":       删除文件或目录
+              - "upload_file":       上传文件
+              - "upload_image_file": 上传图片
+              - "receive_files":     接收文件
+              - "rename_file":       文件改名（未实现）
+              - "copy_file":         复制文件（未实现）
+
             - limit: int = 32
             - offset: int = 0
-            - date: :class:`str` = ``<default>`` # 默认为今天，格式为 yyyy-mm-dd
+            - date: str = <default> 💡 默认为今天，格式为 yyyy-mm-dd
         """
         api = "https://proapi.115.com/android/1.0/behavior/detail"
         if isinstance(payload, str):
@@ -5229,16 +5181,15 @@ class P115Client:
         POST https://life.115.com/api/1.0/web/1.0/calendar/setoption
 
         :payload:
-
-            - locus: ``0`` | ``1`` = 1     # 开启或关闭最近记录
-            - open_life: ``0`` | ``1`` = 1 # 显示或关闭
-            - birthday: ``0`` | ``1`` = ``<default>``
-            - holiday: ``0`` | ``1`` = ``<default>``
-            - lunar: ``0`` | ``1`` = ``<default>``
-            - view: ``0`` | ``1`` = ``<default>``
-            - diary: ``0`` | ``1`` = ``<default>``
-            - del_notice_item: ``0`` | ``1`` = ``<default>``
-            - first_week: ``0`` | ``1`` = ``<default>``
+            - locus: 0 | 1 = 1     💡 开启或关闭最近记录
+            - open_life: 0 | 1 = 1 💡 显示或关闭
+            - birthday: 0 | 1 = <default>
+            - holiday: 0 | 1 = <default>
+            - lunar: 0 | 1 = <default>
+            - view: 0 | 1 = <default>
+            - diary: 0 | 1 = <default>
+            - del_notice_item: 0 | 1 = <default>
+            - first_week: 0 | 1 = <default>
         """
         if isinstance(payload, dict):
             payload = {"locus": 1, "open_life": 1, **payload}
@@ -5280,28 +5231,27 @@ class P115Client:
         GET https://life.115.com/api/1.0/web/1.0/life/life_list
 
         :payload:
-
             - start: int = 0
             - limit: int = 1000
             - show_type: int = 0
-                # 筛选类型，有多个则用逗号 ',' 隔开:
-                # 0: 所有
-                # 1: 增、删、改、移动、上传、接收、设置标签等文件系统操作
-                # 2: 浏览文件
-                # 3: <UNKNOWN>
-                # 4: account_security
-            - type: :class:`int` = ``<default>``
-            - tab_type: :class:`int` = ``<default>``
-            - file_behavior_type: :class:`int` | :class:`str` = ``<default>``
-            - mode: :class:`str` = ``<default>``
-            - check_num: :class:`int` = ``<default>``
-            - total_count: :class:`int` = ``<default>``
-            - start_time: :class:`int` = ``<default>``
-            - end_time: :class:`int` = ``<default>`` # 默认为次日零点前一秒
-            - show_note_cal: ``0`` | ``1`` = ``<default>``
-            - isShow: ``0`` | ``1`` = ``<default>``
-            - isPullData: 'true' | 'false' = ``<default>``
-            - last_data: :class:`str` = ``<default>`` # JSON object, e.g. {"last_time":1700000000,"last_count":1,"total_count":200}
+                💡 筛选类型，有多个则用逗号 ',' 隔开:
+                💡 0: 所有
+                💡 1: 增、删、改、移动、上传、接收、设置标签等文件系统操作
+                💡 2: 浏览文件
+                💡 3: <UNKNOWN>
+                💡 4: account_security
+            - type: int = <default>
+            - tab_type: int = <default>
+            - file_behavior_type: int | str = <default>
+            - mode: str = <default>
+            - check_num: int = <default>
+            - total_count: int = <default>
+            - start_time: int = <default>
+            - end_time: int = <default> 💡 默认为次日零点前一秒
+            - show_note_cal: 0 | 1 = <default>
+            - isShow: 0 | 1 = <default>
+            - isPullData: 'true' | 'false' = <default>
+            - last_data: str = <default> 💡 JSON object, e.g. {"last_time":1700000000,"last_count":1,"total_count":200}
         """
         api = "https://life.115.com/api/1.0/web/1.0/life/life_list"
         now = datetime.now()
@@ -5503,7 +5453,6 @@ class P115Client:
         GET https://passportapi.115.com/app/1.0/web/1.0/login_log/log
 
         :payload:
-
             - start: int = 0
             - limit: int = 100
         """
@@ -5615,7 +5564,6 @@ class P115Client:
         GET https://qrcodeapi.115.com/api/2.0/prompt.php
 
         :payload:
-
             - uid: str
         """
         api = "https://qrcodeapi.115.com/api/2.0/prompt.php"
@@ -5653,7 +5601,6 @@ class P115Client:
         GET https://hnqrcodeapi.115.com/api/2.0/slogin.php
 
         :payload:
-
             - key: str
             - uid: str
             - client: int = 0
@@ -5696,7 +5643,6 @@ class P115Client:
         GET https://hnqrcodeapi.115.com/api/2.0/cancel.php
 
         :payload:
-
             - key: str
             - uid: str
             - client: int = 0
@@ -5743,7 +5689,6 @@ class P115Client:
         POST https://passportapi.115.com/app/1.0/{app}/1.0/login/qrcode/
 
         :payload:
-
             - account: int | str
             - app: str = "qandroid"
         """
@@ -5794,7 +5739,6 @@ class P115Client:
         GET https://qrcodeapi.115.com/get/status/
 
         :payload:
-
             - uid: str
             - time: int
             - sign: str
@@ -6025,7 +5969,6 @@ class P115Client:
         GET https://passportapi.115.com/app/1.0/web/1.0/logout/mange
 
         :payload:
-
             ssoent: str
 
         :设备列表如下:
@@ -6124,10 +6067,9 @@ class P115Client:
         GET https://pmsg.115.com/api/1.0/app/1.0/contact/ls
 
         :payload:
-
             limit: int = 115
             skip: int = 0
-            t: ``0`` | ``1`` = 1
+            t: 0 | 1 = 1
         """
         api = "https://pmsg.115.com/api/1.0/app/1.0/contact/ls"
         if isinstance(payload, int):
@@ -6226,13 +6168,12 @@ class P115Client:
         POST https://115.com/web/lixian/?ct=lixian&ac=add_task_bt
 
         :payload:
-
             - info_hash: str
             - wanted: str
-            - sign: :class:`str` = ``<default>``
-            - time: :class:`int` = ``<default>``
-            - savepath: :class:`str` = ``<default>``
-            - wp_path_id: :class:`int` | :class:`str` = ``<default>``
+            - sign: str = <default>
+            - time: int = <default>
+            - savepath: str = <default>
+            - wp_path_id: int | str = <default>
         """
         api = "https://115.com/web/lixian/?ct=lixian&ac=add_task_bt"
         if "sign" not in payload:
@@ -6271,12 +6212,11 @@ class P115Client:
         POST https://115.com/web/lixian/?ct=lixian&ac=add_task_url
 
         :payload:
-
             - url: str
-            - sign: :class:`str` = ``<default>``
-            - time: :class:`int` = ``<default>``
-            - savepath: :class:`str` = ``<default>``
-            - wp_path_id: :class:`int` | :class:`str` = ``<default>``
+            - sign: str = <default>
+            - time: int = <default>
+            - savepath: str = <default>
+            - wp_path_id: int | str = <default>
         """
         api = "https://115.com/web/lixian/?ct=lixian&ac=add_task_url"
         if isinstance(payload, str):
@@ -6317,14 +6257,13 @@ class P115Client:
         POST https://115.com/web/lixian/?ct=lixian&ac=add_task_urls
 
         :payload:
-
             - url[0]: str
             - url[1]: str
             - ...
-            - sign: :class:`str` = ``<default>``
-            - time: :class:`int` = ``<default>``
-            - savepath: :class:`str` = ``<default>``
-            - wp_path_id: :class:`int` | :class:`str` = ``<default>``
+            - sign: str = <default>
+            - time: int = <default>
+            - savepath: str = <default>
+            - wp_path_id: int | str = <default>
         """
         api = "https://115.com/web/lixian/?ct=lixian&ac=add_task_urls"
         if not isinstance(payload, dict):
@@ -6367,7 +6306,6 @@ class P115Client:
         POST https://115.com/web/lixian/?ct=lixian&ac=task_clear
 
         :payload:
-
             flag: int = 0
                 - 0: 已完成
                 - 1: 全部
@@ -6474,7 +6412,6 @@ class P115Client:
         POST https://lixian.115.com/lixian/?ct=lixian&ac=task_lists
 
         :payload:
-
             - page: int | str
         """
         api = "https://lixian.115.com/lixian/?ct=lixian&ac=task_lists"
@@ -6570,13 +6507,12 @@ class P115Client:
         POST https://lixian.115.com/lixian/?ct=lixian&ac=task_del
 
         :payload:
-
             - hash[0]: str
             - hash[1]: str
             - ...
-            - sign: :class:`str` = ``<default>``
-            - time: :class:`int` = ``<default>``
-            - flag: ``0`` | ``1`` = ``<default>`` # 是否删除源文件
+            - sign: str = <default>
+            - time: int = <default>
+            - flag: 0 | 1 = <default> 💡 是否删除源文件
         """
         api = "https://lixian.115.com/lixian/?ct=lixian&ac=task_del"
         if isinstance(payload, str):
@@ -6617,7 +6553,6 @@ class P115Client:
         POST https://lixian.115.com/lixian/?ct=lixian&ac=torrent
 
         :payload:
-
             - sha1: str
         """
         api = "https://lixian.115.com/lixian/?ct=lixian&ac=torrent"
@@ -6686,11 +6621,10 @@ class P115Client:
         POST https://webapi.115.com/rb/clean
 
         :payload:
-
-            - rid[0]: :class:`int` | :class:`str` # NOTE: 如果没有 rid，就是清空回收站
+            - rid[0]: int | str 💡 NOTE: 如果没有 rid，就是清空回收站
             - rid[1]: int | str
             - ...
-            - password: :class:`int` | :class:`str` = ``<default>``
+            - password: int | str = <default>
         """
         api = "https://webapi.115.com/rb/clean"
         if isinstance(payload, (int, str)):
@@ -6729,7 +6663,6 @@ class P115Client:
         POST https://webapi.115.com/rb/rb_info
 
         :payload:
-
             - rid: int | str
         """
         api = "https://webapi.115.com/rb/rb_info"
@@ -6770,13 +6703,12 @@ class P115Client:
         GET https://webapi.115.com/rb
 
         :payload:
-
             - aid: int | str = 7
             - cid: int | str = 0
             - limit: int = 32
             - offset: int = 0
             - format: str = "json"
-            - source: :class:`str` = ``<default>``
+            - source: str = <default>
         """ 
         api = "https://webapi.115.com/rb"
         if isinstance(payload, int):
@@ -6815,7 +6747,6 @@ class P115Client:
         POST https://webapi.115.com/rb/revert
 
         :payload:
-
             - rid[0]: int | str
             - rid[1]: int | str
             - ...
@@ -6859,7 +6790,6 @@ class P115Client:
         GET https://proapi.115.com/app/share/downlist
 
         :payload:
-
             - share_code: str
             - receive_code: str
             - cid: int | str = 0
@@ -6906,11 +6836,10 @@ class P115Client:
         POST https://proapi.115.com/app/share/downurl
 
         :payload:
-
             - file_id: int | str
             - receive_code: str
             - share_code: str
-            - user_id: :class:`int` | :class:`str` = ``<default>``
+            - user_id: int | str = <default>
         """
         if use_web_api:
             resp = self.share_download_url_web(payload, async_=async_, **request_kwargs)
@@ -6974,11 +6903,10 @@ class P115Client:
         POST https://proapi.115.com/app/share/downurl
 
         :payload:
-
             - file_id: int | str
             - receive_code: str
             - share_code: str
-            - user_id: :class:`int` | :class:`str` = ``<default>``
+            - user_id: int | str = <default>
         """
         api = "https://proapi.115.com/app/share/downurl"
         def parse(resp, content: bytes) -> dict:
@@ -7020,11 +6948,10 @@ class P115Client:
         GET https://webapi.115.com/share/downurl
 
         :payload:
-
             - file_id: int | str
             - receive_code: str
             - share_code: str
-            - user_id: :class:`int` | :class:`str` = ``<default>``
+            - user_id: int | str = <default>
         """
         api = "https://webapi.115.com/share/downurl"
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
@@ -7059,7 +6986,6 @@ class P115Client:
         GET https://webapi.115.com/share/shareinfo
 
         :payload:
-
             - share_code: str
         """
         api = "https://webapi.115.com/share/shareinfo"
@@ -7097,10 +7023,9 @@ class P115Client:
         GET https://webapi.115.com/share/slist
 
         :payload:
-
             - limit: int = 32
             - offset: int = 0
-            - user_id: :class:`int` | :class:`str` = ``<default>``
+            - user_id: int | str = <default>
         """
         api = "https://webapi.115.com/share/slist"
         payload = {"offset": 0, "limit": 32, **payload}
@@ -7136,12 +7061,11 @@ class P115Client:
         POST https://webapi.115.com/share/receive
 
         :payload:
-
             - share_code: str
             - receive_code: str
-            - file_id: int | str             # 有多个时，用逗号 "," 分隔
-            - cid: :class:`int` | :class:`str` = ``<default>``     # 这是你网盘的目录 cid
-            - user_id: :class:`int` | :class:`str` = ``<default>``
+            - file_id: int | str             💡 有多个时，用逗号 "," 分隔
+            - cid: int | str = <default>     💡 这是你网盘的目录 cid
+            - user_id: int | str = <default>
         """
         api = "https://webapi.115.com/share/receive"
         payload = {"cid": 0, **payload}
@@ -7177,19 +7101,19 @@ class P115Client:
         POST https://webapi.115.com/share/send
 
         :payload:
+            - file_ids: int | str 💡 文件列表，有多个用逗号 "," 隔开
+            - is_asc: 0 | 1 = 1 💡 是否升序排列
+            - order: str = "file_name" 💡 用某字段排序
 
-            - file_ids: :class:`int` | :class:`str` # 文件列表，有多个用逗号 ``","`` 隔开
-            - is_asc: ``0`` | ``1`` = 1 # 是否升序排列
-            - order: str = "file_name"
-                # 用某字段排序：
-                # - 文件名："file_name"
-                # - 文件大小："file_size"
-                # - 文件种类："file_type"
-                # - 修改时间："user_utime"
-                # - 创建时间："user_ptime"
-                # - 上一次打开时间："user_otime"
-            - ignore_warn: ``0`` | ``1`` = 1 # 忽略信息提示，传 1 就行了
-            - user_id: :class:`int` | :class:`str` = ``<default>``
+              - "file_name": 文件名
+              - "file_size": 文件大小
+              - "file_type": 文件种类
+              - "user_utime": 修改时间
+              - "user_ptime": 创建时间
+              - "user_otime": 上一次打开时间
+
+            - ignore_warn: 0 | 1 = 1 💡 忽略信息提示，传 1 就行了
+            - user_id: int | str = <default>
         """
         api = "https://webapi.115.com/share/send"
         if isinstance(payload, (int, str)):
@@ -7231,21 +7155,20 @@ class P115Client:
         GET https://webapi.115.com/share/snap
 
         :payload:
-
             - share_code: str
             - receive_code: str
             - cid: int | str = 0
             - limit: int = 32
             - offset: int = 0
-            - asc: ``0`` | ``1`` = ``<default>`` # 是否升序排列
-            - o: :class:`str` = ``<default>``
-                # 用某字段排序：
-                # - 文件名："file_name"
-                # - 文件大小："file_size"
-                # - 文件种类："file_type"
-                # - 修改时间："user_utime"
-                # - 创建时间："user_ptime"
-                # - 上一次打开时间："user_otime"
+            - asc: 0 | 1 = <default> 💡 是否升序排列
+            - o: str = <default> 💡 用某字段排序
+
+              - "file_name": 文件名
+              - "file_size": 文件大小
+              - "file_type": 文件种类
+              - "user_utime": 修改时间
+              - "user_ptime": 创建时间
+              - "user_otime": 上一次打开时间
         """
         api = "https://webapi.115.com/share/snap"
         payload = {"cid": 0, "limit": 32, "offset": 0, **payload}
@@ -7285,14 +7208,13 @@ class P115Client:
         POST https://webapi.115.com/share/updateshare
 
         :payload:
-
             - share_code: str
-            - receive_code: :class:`str` = ``<default>``         # 访问密码（口令）
-            - share_duration: :class:`int` = ``<default>``       # 分享天数: 1(1天), 7(7天), -1(长期)
-            - is_custom_code: ``0`` | ``1`` = ``<default>``     # 用户自定义口令（不用管）
-            - auto_fill_recvcode: ``0`` | ``1`` = ``<default>`` # 分享链接自动填充口令（不用管）
-            - share_channel: :class:`int` = ``<default>``        # 分享渠道代码（不用管）
-            - action: :class:`str` = ``<default>``               # 操作: 取消分享 "cancel"
+            - receive_code: str = <default>         💡 访问密码（口令）
+            - share_duration: int = <default>       💡 分享天数: 1(1天), 7(7天), -1(长期)
+            - is_custom_code: 0 | 1 = <default>     💡 用户自定义口令（不用管）
+            - auto_fill_recvcode: 0 | 1 = <default> 💡 分享链接自动填充口令（不用管）
+            - share_channel: int = <default>        💡 分享渠道代码（不用管）
+            - action: str = <default>               💡 操作: 取消分享 "cancel"
         """
         api = "https://webapi.115.com/share/updateshare"
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
@@ -7358,8 +7280,7 @@ class P115Client:
         POST https://aps.115.com/repeat/repeat.php
 
         :payload:
-
-            - folder_id: :class:`int` | :class:`str` # 目录 id
+            - folder_id: int | str 💡 目录 id
         """
         api = "https://aps.115.com/repeat/repeat.php"
         if isinstance(payload, (int, str)):
@@ -7396,24 +7317,25 @@ class P115Client:
         POST https://aps.115.com/repeat/repeat_delete.php
 
         :payload:
-
             这 3 个参数用于批量删除
 
-            - filter_field: "parents" | "file_name" | "" | "" = ``<default>``
-                # 保留条件
-                # - "file_name": 文件名（按长度）
-                # - "parents": 所在目录路径（按长度）
-                # - "user_utime": 操作时间
-                # - "user_ptime": 创建时间
-            - filter_order: "asc" | "desc" = ``<default>``
-                # 排序
-                # - "asc": 升序，从小到大，取最小
-                # - "desc": 降序，从大到小，取最大
-            - batch: ``0`` | ``1`` = ``<default>``
+            - filter_field: "parents" | "file_name" | "" | "" = <default> 💡 保留条件
+
+              - "file_name": 文件名（按长度）
+              - "parents": 所在目录路径（按长度）
+              - "user_utime": 操作时间
+              - "user_ptime": 创建时间
+
+            - filter_order: "asc" | "desc" = <default> 💡 排序
+
+              - "asc": 升序，从小到大，取最小
+              - "desc": 降序，从大到小，取最大
+
+            - batch: 0 | 1 = <default>
 
             这 1 个参数用于手动指定删除对象
 
-            - sha1s[{sha1}]: :class:`int` | :class:`str` = ``<default>`` # 文件 id，多个用逗号 ``","`` 隔开
+            - sha1s[{sha1}]: int | str = <default> 💡 文件 id，多个用逗号 "," 隔开
         """
         api = "https://aps.115.com/repeat/repeat_delete.php"
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
@@ -7480,9 +7402,8 @@ class P115Client:
         GET https://aps.115.com/repeat/repeat_list.php
 
         :payload:
-
-            - s: int = 0 # offset，从 0 开始
-            - l: int = 0 # limit
+            - s: int = 0 💡 offset，从 0 开始
+            - l: int = 0 💡 limit
         """
         api = "https://aps.115.com/repeat/repeat_list.php"
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
@@ -8704,7 +8625,6 @@ class P115Client:
         GET https://webapi.115.com/usershare/action
 
         :payload:
-
             - share_id: int | str
             - offset: int = 0
             - limit: int = 32
@@ -8746,7 +8666,6 @@ class P115Client:
         POST https://webapi.115.com/usershare/invite
 
         :payload:
-
             - share_id: int | str
         """
         api = "https://webapi.115.com/usershare/invite"
@@ -8787,10 +8706,9 @@ class P115Client:
         GET https://webapi.115.com/usershare/list
 
         :payload:
-
             - offset: int = 0
             - limit: int = 1150
-            - all: ``0`` | ``1`` = 1
+            - all: 0 | 1 = 1
         """
         api = "https://webapi.115.com/usershare/list"
         if isinstance(payload, int):
@@ -8829,10 +8747,9 @@ class P115Client:
         GET https://webapi.115.com/usershare/member
 
         :payload:
-
             - share_id: int | str
             - action: "member_list" | "member_info" | "noticeset" = "member_list"
-            - notice_set: ``0`` | ``1`` = ``<default>`` # action 为 "noticeset" 时可以设置
+            - notice_set: 0 | 1 = <default> 💡 action 为 "noticeset" 时可以设置
         """
         api = "https://webapi.115.com/usershare/member"
         if isinstance(payload, int):
@@ -8871,10 +8788,9 @@ class P115Client:
         POST https://webapi.115.com/usershare/share
 
         :payload:
-
             - file_id: int | str
-            - share_opt: 1 | 2 = 1 # 1: 设置 2: 取消
-            - ignore_warn: ``0`` | ``1`` = 0
+            - share_opt: 1 | 2 = 1 💡 1: 设置 2: 取消
+            - ignore_warn: 0 | 1 = 0
             - safe_pwd: str = "" 
         """
         api = "https://webapi.115.com/usershare/share"
