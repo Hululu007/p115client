@@ -21,7 +21,7 @@ pip install -U p115client
 导入模块
 
 ```python
-from p115 import P115Client
+from p115client import P115Client
 ```
 
 创建客户端对象，需要传入 <kbd>cookies</kbd>，如果不传，则需要扫码登录
@@ -79,30 +79,77 @@ response = client.request(url=url, params={"cid": 0, "show_dir": 1})
 ```python
 from collections.abc import Coroutine
 from typing import overload, Any, Literal
+
 from p115client import P115Client
 
 class MyCustom115Client(P115Client):
 
     @overload
-    def foo(self, payload: dict, async_: Literal[False] = False) -> dict:
+    def foo(
+        self, 
+        payload: dict, 
+        /, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
         ...
     @overload
-    def foo(self, payload: dict, async_: Literal[True]) -> Coroutine[Any, Any, dict]:
+    def foo(
+        self, 
+        payload: dict, 
+        /, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
         ...
-    def foo(self, payload: dict, async_: bool = False) -> dict | Coroutine[Any, Any, dict]:
+    def foo(
+        self, 
+        payload: dict, 
+        /, 
+        async_: bool = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
         api = "https://webapi.115.com/foo"
-        return self.request(api, method="GET", params=payload)
+        return self.request(
+            api, 
+            method="GET", 
+            params=payload, 
+            async_=async_, 
+            **request_kwargs, 
+        )
 
     @overload
-    def bar(self, payload: dict, async_: Literal[False] = False) -> dict:
+    def bar(
+        self, 
+        payload: dict, 
+        /, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
         ...
     @overload
-    def bar(self, payload: dict, async_: Literal[True]) -> Coroutine[Any, Any, dict]:
+    def bar(
+        self, 
+        payload: dict, 
+        /, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
         ...
-    def bar(self, payload: dict, async_: bool = False) -> dict | Coroutine[Any, Any, dict]:
+    def bar(
+        self, 
+        payload: dict, 
+        /, 
+        async_: bool = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
         api = "https://webapi.115.com/bar"
-        return self.request(api, method="POST", data=payload)
+        return self.request(
+            api, 
+            method="POST", 
+            data=payload, 
+            async_=async_, 
+            **request_kwargs, 
+        )
 ```
-
-
 

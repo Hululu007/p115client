@@ -843,6 +843,7 @@ class P115Client:
         **request_kwargs, 
     ) -> Self | Coroutine[Any, Any, Self]:
         """登录某个设备（同一个设备最多同时一个在线，即最近登录的那个）
+
         :param app: 要登录的 app，如果为 None，则用同一登录设备
         :param replace: 替换当前 client 对象的 cookie，否则返回新的 client 对象
 
@@ -1713,7 +1714,7 @@ class P115Client:
 
         :payload:
             - code: int | str 💡 从 0 到 9 中选取 4 个数字的一种排列
-            - sign: str = <default>
+            - sign: str = <default>     💡 来自 `captcha_sign` 接口的响应
             - ac: str = "security_code" 💡 默认就行，不要自行决定
             - type: str = "web"         💡 默认就行，不要自行决定
             - ctype: str = "web"        💡 需要和 type 相同
@@ -2539,8 +2540,8 @@ class P115Client:
         GET https://webapi.115.com/category/get
 
         :payload:
-            cid: int | str
-            aid: int | str = 1
+            - cid: int | str
+            - aid: int | str = 1
         """
         api = "https://webapi.115.com/category/get"
         if isinstance(payload, (int, str)):
@@ -2928,13 +2929,10 @@ class P115Client:
         POST https://webapi.115.com/files/edit
 
         :payload:
-            💡 如果是单个文件或目录，也可以是多个但用逗号 "," 隔开
-            - fid: int | str
-            💡 如果是多个文件或目录
+            - fid: int | str 💡 也可以是多个但用逗号 "," 隔开，这样就不需要 "fid[]" 了
             - fid[]: int | str
             - fid[]: int | str
             - ...
-            💡 其它配置信息
             - file_desc: str = <default> 💡 可以用 html
             - file_label: int | str = <default> 💡 标签 id，多个用逗号 "," 隔开
             - fid_cover: int | str = <default> 💡 封面图片的文件 id，多个用逗号 "," 隔开，如果要删除，值设为 0 即可
@@ -2984,9 +2982,9 @@ class P115Client:
         POST https://webapi.115.com/files/export_dir
 
         :payload:
-            file_ids: int | str   💡 有多个时，用逗号 "," 隔开
-            target: str = "U_1_0" 💡 导出目录树到这个目录
-            layer_limit: int = <default> 💡 层级深度，自然数
+            - file_ids: int | str   💡 有多个时，用逗号 "," 隔开
+            - target: str = "U_1_0" 💡 导出目录树到这个目录
+            - layer_limit: int = <default> 💡 层级深度，自然数
         """
         api = "https://webapi.115.com/files/export_dir"
         if isinstance(payload, (int, str)):
@@ -3023,7 +3021,7 @@ class P115Client:
         GET https://webapi.115.com/files/export_dir
 
         :payload:
-            export_id: int | str
+            - export_id: int | str
         """
         api = "https://webapi.115.com/files/export_dir"
         if isinstance(payload, (int, str)):
@@ -3661,9 +3659,9 @@ class P115Client:
         POST https://115.com/?ct=hiddenfiles&ac=switching
 
         :payload:
-            safe_pwd: str = "" 💡 密码，如果需要进入隐藏模式，请传递此参数
-            show: 0 | 1 = 1
-            valid_type: int = 1
+            - safe_pwd: str = "" 💡 密码，如果需要进入隐藏模式，请传递此参数
+            - show: 0 | 1 = 1
+            - valid_type: int = 1
         """
         api = "https://115.com/?ct=hiddenfiles&ac=switching"
         if isinstance(payload, str):
@@ -4109,7 +4107,7 @@ class P115Client:
         GET https://webapi.115.com/files/index_info
 
         :payload:
-            count_space_nums: 0 | 1 = 0 💡 如果为 0，包含各种类型文件的数量统计；如果为 1，包含登录设备列表
+            - count_space_nums: 0 | 1 = 0 💡 如果为 0，包含各种类型文件的数量统计；如果为 1，包含登录设备列表
         """
         api = "https://webapi.115.com/files/index_info"
         if not isinstance(payload, dict):
@@ -4145,7 +4143,7 @@ class P115Client:
 
         POST https://webapi.115.com/label/add_multi
 
-        可传入多个 label 描述，每个 label 的格式都是 "{label_name}" 或 "{label_name}\x07{color}"，例如 "tag\x07💡FF0000"
+        :param lables: 可传入多个 label 描述，每个 label 的格式都是 "{label_name}" 或 "{label_name}\x07{color}"，例如 "tag\x07#FF0000"（中间有个 "\\x07"）
         """
         api = "https://webapi.115.com/label/add_multi"
         payload = [("name[]", label) for label in lables if label]
@@ -4585,11 +4583,11 @@ class P115Client:
         GET https://webapi.115.com/files/get_repeat_sha
 
         :payload:
-            file_id: int | str
-            offset: int = 0
-            limit: int = 1150
-            source: str = ""
-            format: str = "json"
+            - file_id: int | str
+            - offset: int = 0
+            - limit: int = 1150
+            - source: str = ""
+            - format: str = "json"
         """
         api = "https://webapi.115.com/files/get_repeat_sha"
         if isinstance(payload, (int, str)):
@@ -5008,13 +5006,19 @@ class P115Client:
 
         :return: 接口返回值
 
-        💡 其它替代接口：
-        💡 1. 需要破解里面一个 rsa 请求参数的生成方法，此接口不限设备（不强制为 web 的 cookies）
-        GET http://videoplay.115.com/m3u8
-        params = {filesha1: str, time: int, userid: int, rsa: str = "<md5_sign>"}
-        💡 2. 需要破解 data 参数具体如何生成
-        POST https://proapi.115.com/android/2.0/video/play
-        data = {data: str = "<{b64encode(rsa_encrypt(data))>"}
+        其它替代接口（下面只提供伪代码，相关函数并无具体实现）:
+
+        1. 需要破解里面一个 rsa 请求参数的生成方法，此接口不限设备（不强制为 web 的 cookies）
+
+            GET http://videoplay.115.com/m3u8
+
+            params = {filesha1: str, time: int, userid: int, rsa: str = "<md5_sign>"}
+
+        2. 需要破解 data 参数具体如何生成
+
+            POST https://proapi.115.com/android/2.0/video/play
+
+            data = {data: str = "<{b64encode(rsa_encrypt(data))>"}
         """
         api = f"http://115.com/api/video/m3u8/{pickcode}.m3u8?definition={definition}"
         request_kwargs.setdefault("parse", False)
@@ -5968,7 +5972,7 @@ class P115Client:
         GET https://passportapi.115.com/app/1.0/web/1.0/logout/mange
 
         :payload:
-            ssoent: str
+            - ssoent: str
 
         :设备列表如下:
 
@@ -6066,9 +6070,9 @@ class P115Client:
         GET https://pmsg.115.com/api/1.0/app/1.0/contact/ls
 
         :payload:
-            limit: int = 115
-            skip: int = 0
-            t: 0 | 1 = 1
+            - limit: int = 115
+            - skip: int = 0
+            - t: 0 | 1 = 1
         """
         api = "https://pmsg.115.com/api/1.0/app/1.0/contact/ls"
         if isinstance(payload, int):
@@ -6167,12 +6171,12 @@ class P115Client:
         POST https://115.com/web/lixian/?ct=lixian&ac=add_task_bt
 
         :payload:
-            - info_hash: str
-            - wanted: str
-            - sign: str = <default>
-            - time: int = <default>
-            - savepath: str = <default>
-            - wp_path_id: int | str = <default>
+            - info_hash: str 💡 种子文件的 info_hash
+            - wanted: str 💡 选择文件进行下载（是数字用 "," 分隔）
+            - sign: str = <default> 💡 来自 `offline_info` 接口
+            - time: int = <default> 💡 来自 `offline_info` 接口
+            - savepath: str = <default> 💡 保存到目录下的相对路径
+            - wp_path_id: int | str = <default> 💡 保存到目录的 id
         """
         api = "https://115.com/web/lixian/?ct=lixian&ac=add_task_bt"
         if "sign" not in payload:
@@ -6211,11 +6215,11 @@ class P115Client:
         POST https://115.com/web/lixian/?ct=lixian&ac=add_task_url
 
         :payload:
-            - url: str
-            - sign: str = <default>
-            - time: int = <default>
-            - savepath: str = <default>
-            - wp_path_id: int | str = <default>
+            - url: str 💡 链接，支持HTTP、HTTPS、FTP、磁力链和电驴链接
+            - sign: str = <default> 💡 来自 `offline_info` 接口
+            - time: int = <default> 💡 来自 `offline_info` 接口
+            - savepath: str = <default> 💡 保存到目录下的相对路径
+            - wp_path_id: int | str = <default> 💡 保存到目录的 id
         """
         api = "https://115.com/web/lixian/?ct=lixian&ac=add_task_url"
         if isinstance(payload, str):
@@ -6256,13 +6260,13 @@ class P115Client:
         POST https://115.com/web/lixian/?ct=lixian&ac=add_task_urls
 
         :payload:
-            - url[0]: str
+            - url[0]: str 💡 链接，支持HTTP、HTTPS、FTP、磁力链和电驴链接
             - url[1]: str
             - ...
-            - sign: str = <default>
-            - time: int = <default>
-            - savepath: str = <default>
-            - wp_path_id: int | str = <default>
+            - sign: str = <default> 💡 来自 `offline_info` 接口
+            - time: int = <default> 💡 来自 `offline_info` 接口
+            - savepath: str = <default> 💡 保存到目录下的相对路径
+            - wp_path_id: int | str = <default> 💡 保存到目录的 id
         """
         api = "https://115.com/web/lixian/?ct=lixian&ac=add_task_urls"
         if not isinstance(payload, dict):
@@ -6305,13 +6309,14 @@ class P115Client:
         POST https://115.com/web/lixian/?ct=lixian&ac=task_clear
 
         :payload:
-            flag: int = 0
-                - 0: 已完成
-                - 1: 全部
-                - 2: 已失败
-                - 3: 进行中
-                - 4: 已完成+删除源文件
-                - 5: 全部+删除源文件
+            - flag: int = 0 💡 标识，用于对应某种情况
+
+              - 0: 已完成
+              - 1: 全部
+              - 2: 已失败
+              - 3: 进行中
+              - 4: 已完成+删除源文件
+              - 5: 全部+删除源文件
         """
         api = "https://115.com/web/lixian/?ct=lixian&ac=task_clear"
         if isinstance(payload, int):
@@ -6374,7 +6379,7 @@ class P115Client:
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
-        """获取关于离线的限制的信息
+        """获取关于离线的限制的信息，以及 sign 和 time 字段（各个添加任务的接口需要）
 
         GET https://115.com/?ct=offline&ac=space
         """
@@ -7316,25 +7321,20 @@ class P115Client:
         POST https://aps.115.com/repeat/repeat_delete.php
 
         :payload:
-            这 3 个参数用于批量删除
-
-            - filter_field: "parents" | "file_name" | "" | "" = <default> 💡 保留条件
+            - filter_field: "parents" | "file_name" | "" | "" = <default> 💡 保留条件（1. 用于批量删除）
 
               - "file_name": 文件名（按长度）
               - "parents": 所在目录路径（按长度）
               - "user_utime": 操作时间
               - "user_ptime": 创建时间
 
-            - filter_order: "asc" | "desc" = <default> 💡 排序
+            - filter_order: "asc" | "desc" = <default> 💡 排序（2. 用于批量删除）
 
               - "asc": 升序，从小到大，取最小
               - "desc": 降序，从大到小，取最大
 
-            - batch: 0 | 1 = <default>
-
-            这 1 个参数用于手动指定删除对象
-
-            - sha1s[{sha1}]: int | str = <default> 💡 文件 id，多个用逗号 "," 隔开
+            - batch: 0 | 1 = <default> 💡 是否批量操作（3. 用于批量删除）
+            - sha1s[{sha1}]: int | str = <default> 💡 文件 id，多个用逗号 "," 隔开（1. 用于手动指定删除对象）
         """
         api = "https://aps.115.com/repeat/repeat_delete.php"
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
@@ -8951,9 +8951,11 @@ class P115Client:
 
         :param url: 115 文件的下载链接（可以从网盘、网盘上的压缩包内、分享链接中获取）
         :param digest: hash 算法
+
             - 如果是 str，则可以是 `hashlib.algorithms_available` 中任一，也可以是 "ed2k" 或 "crc32"
             - 如果是 HashObj (来自 python-hashtools)，就相当于是 `_hashlib.HASH` 类型，需要有 update 和 digest 等方法
             - 如果是 Callable，则返回值必须是 HashObj，或者是一个可用于累计的函数，第 1 个参数是本次所传入的字节数据，第 2 个参数是上一次的计算结果，返回值是这一次的计算结果，第 2 个参数可省略
+
         :param start: 开始索引，可以为负数（从文件尾部开始）
         :param stop: 结束索引（不含），可以为负数（从文件尾部开始）
         :param headers: 请求头
@@ -9023,9 +9025,11 @@ class P115Client:
 
         :param url: 115 文件的下载链接（可以从网盘、网盘上的压缩包内、分享链接中获取）
         :param digest: hash 算法
+
             - 如果是 str，则可以是 `hashlib.algorithms_available` 中任一，也可以是 "ed2k" 或 "crc32"
             - 如果是 HashObj (来自 python-hashtools)，就相当于是 `_hashlib.HASH` 类型，需要有 update 和 digest 等方法
             - 如果是 Callable，则返回值必须是 HashObj，或者是一个可用于累计的函数，第 1 个参数是本次所传入的字节数据，第 2 个参数是上一次的计算结果，返回值是这一次的计算结果，第 2 个参数可省略
+
         :param digests: 同 `digest`，但可以接受多个
         :param start: 开始索引，可以为负数（从文件尾部开始）
         :param stop: 结束索引（不含），可以为负数（从文件尾部开始）
