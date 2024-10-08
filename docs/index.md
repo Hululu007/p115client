@@ -11,7 +11,10 @@ hide-toc: true
 :caption: Reference
 :hidden:
 
-reference/api
+reference/client
+reference/const
+reference/exception
+reference/type
 ```
 
 ```{toctree}

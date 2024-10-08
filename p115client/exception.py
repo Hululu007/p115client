@@ -13,11 +13,13 @@ from .type import MultipartResumeData
 
 
 class P115Warning(UserWarning):
-    pass
+    """本模块的最基础警示类
+    """
 
 
 class P115OSError(OSError):
-
+    """本模块的最基础异常类
+    """
     def __init__(self, /, *args):
         super().__init__(*args)
 
@@ -48,31 +50,38 @@ class P115OSError(OSError):
 
 
 class AuthenticationError(P115OSError):
-    pass
+    """当登录状态无效时抛出
+    """
 
 
 class BusyOSError(P115OSError):
-    pass
+    """当操作繁忙时抛出（115 网盘的复制、移动、删除、还原只允许最多一个操作进行中）
+    """
 
 
 class DataError(P115OSError):
-    pass
+    """当响应数据解析失败时抛出
+    """
 
 
 class LoginError(AuthenticationError):
-    pass
+    """当登录失败时抛出
+    """
 
 
 class MultipartUploadAbort(P115OSError):
-
+    """当分块上传失败时抛出，有个 ticket 属性，下次可用以继续任务
+    """
     def __init__(self, ticket: MultipartResumeData, /):
         self.ticket = ticket
 
 
 class NotSupportedError(P115OSError):
-    pass
+    """当调用不存在的接口时抛出
+    """
 
 
 class OperationalError(P115OSError):
-    pass
+    """当接口使用方法错误时抛出，例如参数错误、空间不足、超出允许数量范围等
+    """
 

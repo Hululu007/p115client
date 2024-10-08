@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
-from __future__ import annotations
-
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __all__ = ["check_response", "P115Client"]
 

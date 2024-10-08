@@ -2,7 +2,7 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__all__ = ["RequestKeywords", "MultipartResumeData", "P115Cookies", "P115URL"]
+__all__ = ["MultipartResumeData", "P115Cookies", "P115URL"]
 
 from collections.abc import Callable
 from functools import cached_property
@@ -28,6 +28,8 @@ class RequestKeywords(TypedDict):
 
 
 class MultipartResumeData(TypedDict):
+    """分块上传的所需参数的封装，便于中断后下次继续
+    """
     bucket: str
     object: str
     token: NotRequired[dict]
@@ -39,7 +41,8 @@ class MultipartResumeData(TypedDict):
 
 
 class P115Cookies(str):
-
+    """cookies 的封装
+    """
     def __getattr__(self, attr: str, /):
         try:
             return self.mapping[attr]
@@ -120,7 +123,8 @@ class P115Cookies(str):
 
 
 class P115URL(str):
-
+    """下载链接的封装
+    """
     def __new__(cls, url: Any = "", /, *args, **kwds):
         return super().__new__(cls, url)
 

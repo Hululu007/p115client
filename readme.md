@@ -153,3 +153,34 @@ class MyCustom115Client(P115Client):
         )
 ```
 
+### 3. 检查响应
+
+接口被调用后，如果返回的是 dict 类型的数据（说明原本是 JSON），则可以用 `p115client.check_response` 执行检查。首先会查看其中名为 "state" 的键的对应值，如果为  True、1 或不存在，则原样返回被检查的数据；否则，"state" 的对应值大概是 False 或 0，说明有问题出现，会根据实际情况抛出一个异常，但都是 `p115client.P115OSError` 的实例。
+
+```python
+from p115client import check_response
+
+# 检查同步调用
+data = check_response(client.method(payload))
+# 检查异步调用
+data = check_response(await client.method(payload, async_=True))
+```
+
+### 4. 辅助工具
+
+一些简单的封装工具可能是必要的，特别是那种实现起来代码量比较少，可以封装成单个函数的。我把平常使用过程中，积累的一些经验具体化为一组工具函数。这些工具函数分别有着不同的功能，如果组合起来使用，或许能解决很多问题。
+
+```python
+from p115client import tool
+```
+
+## 其它资源
+
+- 如果你需要更详细的文档，特别是关于各种接口的信息，可以阅读
+
+    [https://p115client.readthedocs.io/en/latest/](https://p115client.readthedocs.io/en/latest/)
+
+- 如果你想要一组更高级的封装，特别是一组文件系统的操作集合，可以使用
+
+    [https://pypi.org/project/python-115/](https://pypi.org/project/python-115/)
+
