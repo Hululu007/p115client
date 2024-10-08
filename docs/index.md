@@ -18,10 +18,17 @@ reference/type
 ```
 
 ```{toctree}
+:caption: Extension
+:hidden:
+
+reference/tool
+```
+
+```{toctree}
 :caption: Development
 :hidden:
 
-License: MIT <https://github.com/ChenyangGao/web-mount-packs/tree/main/python-module/p115client/LICENSE>
-Bug Reports <https://github.com/ChenyangGao/web-mount-packs/issues>
-Source Code <https://github.com/ChenyangGao/web-mount-packs/tree/main/python-module/p115client>
+License: MIT <https://github.com/ChenyangGao/p115client/tree/main/LICENSE>
+Bug Reports <https://github.com/ChenyangGao/p115client/issues>
+Source Code <https://github.com/ChenyangGao/p115client>
 ```

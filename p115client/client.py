@@ -1351,8 +1351,9 @@ class P115Client:
     @overload
     def act_xys_my_aid_desire(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -1360,16 +1361,18 @@ class P115Client:
     @overload
     def act_xys_my_aid_desire(
         self, 
-        payload: int | dict, 
+        payload: int | str | dict = 0, 
         /, 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
         ...
     def act_xys_my_aid_desire(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -1389,7 +1392,7 @@ class P115Client:
             - limit: int = 10 💡 分页大小
         """
         api = "https://act.115.com/api/1.0/web/1.0/act2024xys/my_aid_desire"
-        if isinstance(payload, int):
+        if isinstance(payload, (int, str)):
             payload = {"start": 0, "page": 1, "limit": 10, "type": payload}
         else:
             payload = {"type": 0, "start": 0, "page": 1, "limit": 10, **payload}
@@ -1398,8 +1401,9 @@ class P115Client:
     @overload
     def act_xys_my_desire(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -1407,16 +1411,18 @@ class P115Client:
     @overload
     def act_xys_my_desire(
         self, 
-        payload: int | dict, 
+        payload: int | str | dict = 0, 
         /, 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
         ...
     def act_xys_my_desire(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -1436,7 +1442,7 @@ class P115Client:
             - limit: int = 10 💡 分页大小
         """
         api = "https://act.115.com/api/1.0/web/1.0/act2024xys/my_desire"
-        if isinstance(payload, int):
+        if isinstance(payload, (int, str)):
             payload = {"start": 0, "page": 1, "limit": 10, "type": payload}
         else:
             payload = {"type": 0, "start": 0, "page": 1, "limit": 10, **payload}
@@ -2421,7 +2427,7 @@ class P115Client:
     @overload
     def fs_albumlist(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         *, 
         async_: Literal[False] = False, 
@@ -2431,7 +2437,7 @@ class P115Client:
     @overload
     def fs_albumlist(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         *, 
         async_: Literal[True], 
@@ -2440,7 +2446,7 @@ class P115Client:
         ...
     def fs_albumlist(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         *, 
         async_: Literal[False, True] = False, 
@@ -2456,7 +2462,7 @@ class P115Client:
             - album_type: int = 1
         """
         api = "https://webapi.115.com/photo/albumlist"
-        if isinstance(payload, int):
+        if isinstance(payload, (int, str)):
             payload = {"album_type": 1, "limit": 1150, "offset": payload}
         else:
             payload = {"album_type": 1, "limit": 1150, "offset": 0, **payload}
@@ -2551,7 +2557,7 @@ class P115Client:
     @overload
     def fs_category_shortcut(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         *, 
         async_: Literal[False] = False, 
@@ -2561,7 +2567,7 @@ class P115Client:
     @overload
     def fs_category_shortcut(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         *, 
         async_: Literal[True], 
@@ -2570,7 +2576,7 @@ class P115Client:
         ...
     def fs_category_shortcut(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         *, 
         async_: Literal[False, True] = False, 
@@ -2584,7 +2590,7 @@ class P115Client:
             - offset: int = 0
             - limit: int = 1150
         """
-        if isinstance(payload, int):
+        if isinstance(payload, (int, str)):
             payload = {"limit": 1150, "offset": payload}
         else:
             payload = {"limit": 1150, "offset": 0, **payload}
@@ -3105,7 +3111,7 @@ class P115Client:
     @overload
     def fs_files(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         *, 
         async_: Literal[False] = False, 
@@ -3115,7 +3121,7 @@ class P115Client:
     @overload
     def fs_files(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         *, 
         async_: Literal[True], 
@@ -3124,7 +3130,7 @@ class P115Client:
         ...
     def fs_files(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         *, 
         async_: Literal[False, True] = False, 
@@ -3194,7 +3200,7 @@ class P115Client:
               - 99: 仅文件
         """
         api = "https://webapi.115.com/files"
-        if isinstance(payload, int):
+        if isinstance(payload, (int, str)):
             payload = {
                 "aid": 1, "count_folders": 1, "limit": 32, "offset": 0, 
                 "record_open_time": 1, "show_dir": 1, "cid": payload, 
@@ -3211,7 +3217,7 @@ class P115Client:
     @overload
     def fs_files_app(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
         *, 
@@ -3222,7 +3228,7 @@ class P115Client:
     @overload
     def fs_files_app(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
         *, 
@@ -3232,7 +3238,7 @@ class P115Client:
         ...
     def fs_files_app(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
         *, 
@@ -3296,7 +3302,7 @@ class P115Client:
               - 99: 仅文件
         """
         api = f"https://proapi.115.com/{app}/2.0/ufile/files"
-        if isinstance(payload, int):
+        if isinstance(payload, (int, str)):
             payload = {
                 "aid": 1, "count_folders": 1, "limit": 32, "offset": 0, 
                 "record_open_time": 1, "show_dir": 1, "cid": payload, 
@@ -3313,7 +3319,7 @@ class P115Client:
     @overload
     def fs_files_aps(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         *, 
         async_: Literal[False] = False, 
@@ -3323,7 +3329,7 @@ class P115Client:
     @overload
     def fs_files_aps(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         *, 
         async_: Literal[True], 
@@ -3332,7 +3338,7 @@ class P115Client:
         ...
     def fs_files_aps(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         *, 
         async_: Literal[False, True] = False, 
@@ -3395,7 +3401,7 @@ class P115Client:
               - 99: 仅文件
         """
         api = "https://aps.115.com/natsort/files.php"
-        if isinstance(payload, int):
+        if isinstance(payload, (int, str)):
             payload = {
                 "aid": 1, "count_folders": 1, "limit": 32, "offset": 0, 
                 "record_open_time": 1, "show_dir": 1, "cid": payload, 
@@ -3762,7 +3768,7 @@ class P115Client:
     @overload
     def fs_history_list(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         *, 
         async_: Literal[False] = False, 
@@ -3772,7 +3778,7 @@ class P115Client:
     @overload
     def fs_history_list(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         *, 
         async_: Literal[True], 
@@ -3781,7 +3787,7 @@ class P115Client:
         ...
     def fs_history_list(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         *, 
         async_: Literal[False, True] = False, 
@@ -3808,7 +3814,7 @@ class P115Client:
               - ？？: 8
         """
         api = "https://webapi.115.com/history/list"
-        if isinstance(payload, int):
+        if isinstance(payload, (int, str)):
             payload = {"limit": 1150, "offset": payload}
         else:
             payload = {"limit": 1150, "offset": 0, **payload}
@@ -3817,7 +3823,7 @@ class P115Client:
     @overload
     def fs_history_move_target_list(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         *, 
         async_: Literal[False] = False, 
@@ -3827,7 +3833,7 @@ class P115Client:
     @overload
     def fs_history_move_target_list(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         *, 
         async_: Literal[True], 
@@ -3836,7 +3842,7 @@ class P115Client:
         ...
     def fs_history_move_target_list(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         *, 
         async_: Literal[False, True] = False, 
@@ -3851,7 +3857,7 @@ class P115Client:
             - limit: int = 1150
         """
         api = "https://webapi.115.com/history/move_target_list"
-        if isinstance(payload, int):
+        if isinstance(payload, (int, str)):
             payload = {"limit": 1150, "offset": payload}
         else:
             payload = {"limit": 1150, "offset": 0, **payload}
@@ -3860,7 +3866,7 @@ class P115Client:
     @overload
     def fs_history_receive_list(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         *, 
         async_: Literal[False] = False, 
@@ -3870,7 +3876,7 @@ class P115Client:
     @overload
     def fs_history_receive_list(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         *, 
         async_: Literal[True], 
@@ -3879,7 +3885,7 @@ class P115Client:
         ...
     def fs_history_receive_list(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         *, 
         async_: Literal[False, True] = False, 
@@ -3894,7 +3900,7 @@ class P115Client:
             - limit: int = 1150
         """
         api = "https://webapi.115.com/history/receive_list"
-        if isinstance(payload, int):
+        if isinstance(payload, (int, str)):
             payload = {"limit": 1150, "offset": payload}
         else:
             payload = {"limit": 1150, "offset": 0, **payload}
@@ -5202,7 +5208,7 @@ class P115Client:
     @overload
     def life_list(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         *, 
         async_: Literal[False] = False, 
@@ -5212,7 +5218,7 @@ class P115Client:
     @overload
     def life_list(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         *, 
         async_: Literal[True], 
@@ -5221,7 +5227,7 @@ class P115Client:
         ...
     def life_list(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         *, 
         async_: Literal[False, True] = False, 
@@ -5257,7 +5263,7 @@ class P115Client:
         api = "https://life.115.com/api/1.0/web/1.0/life/life_list"
         now = datetime.now()
         today_end = int(datetime.combine(now.date(), now.time().max).timestamp())
-        if isinstance(payload, int):
+        if isinstance(payload, (int, str)):
             payload = {"end_time": today_end, "limit": 1000, "show_type": 0, "start": payload}
         else:
             payload = {"end_time": today_end, "limit": 1000, "show_type": 0, "start": 0, **payload}
@@ -6038,7 +6044,7 @@ class P115Client:
     @overload
     def msg_contacts_ls(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         *, 
         async_: Literal[False] = False, 
@@ -6048,7 +6054,7 @@ class P115Client:
     @overload
     def msg_contacts_ls(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         *, 
         async_: Literal[True], 
@@ -6057,7 +6063,7 @@ class P115Client:
         ...
     def msg_contacts_ls(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         *, 
         async_: Literal[False, True] = False, 
@@ -6073,7 +6079,7 @@ class P115Client:
             - t: 0 | 1 = 1
         """
         api = "https://pmsg.115.com/api/1.0/app/1.0/contact/ls"
-        if isinstance(payload, int):
+        if isinstance(payload, (int, str)):
             payload = {"limit": 115, "t": 1, "skip": payload}
         else:
             payload = {"limit": 115, "t": 1, "skip": 0, **payload}
@@ -6675,7 +6681,7 @@ class P115Client:
     @overload
     def recyclebin_list(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         *, 
         async_: Literal[False] = False, 
@@ -6685,7 +6691,7 @@ class P115Client:
     @overload
     def recyclebin_list(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         *, 
         async_: Literal[True], 
@@ -6694,7 +6700,7 @@ class P115Client:
         ...
     def recyclebin_list(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         *, 
         async_: Literal[False, True] = False, 
@@ -6713,7 +6719,7 @@ class P115Client:
             - source: str = <default>
         """ 
         api = "https://webapi.115.com/rb"
-        if isinstance(payload, int):
+        if isinstance(payload, (int, str)):
             payload = {"aid": 7, "cid": 0, "limit": 32, "format": "json", "offset": payload}
         else:
             payload = {"aid": 7, "cid": 0, "limit": 32, "format": "json", "offset": 0, **payload}
@@ -8673,7 +8679,7 @@ class P115Client:
     @overload
     def usershare_list(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         *, 
         async_: Literal[False] = False, 
@@ -8683,7 +8689,7 @@ class P115Client:
     @overload
     def usershare_list(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         *, 
         async_: Literal[True], 
@@ -8692,7 +8698,7 @@ class P115Client:
         ...
     def usershare_list(
         self, 
-        payload: int | dict = 0, 
+        payload: int | str | dict = 0, 
         /, 
         *, 
         async_: Literal[False, True] = False, 
@@ -8708,7 +8714,7 @@ class P115Client:
             - all: 0 | 1 = 1
         """
         api = "https://webapi.115.com/usershare/list"
-        if isinstance(payload, int):
+        if isinstance(payload, (int, str)):
             payload = {"all": 1, "limit": 1150, "offset": payload}
         else:
             payload = {"all": 1, "limit": 1150, "offset": 0, **payload}
