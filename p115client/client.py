@@ -3541,6 +3541,108 @@ class P115Client:
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
+    def fs_files_category(
+        self, 
+        payload: int | str | dict = 0, 
+        /, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_files_category(
+        self, 
+        payload: int | str | dict = 0, 
+        /, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_files_category(
+        self, 
+        payload: int | str | dict = 0, 
+        /, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取目录中的文件列表和基本信息
+
+        GET https://webapi.115.com/category/files
+
+        .. hint::
+            这个接口和 https://webapi.115.com/files 基本上完全相同
+
+        :payload:
+            - cid: int | str = 0 💡 目录 id
+            - limit: int = 32 💡 分页大小
+            - offset: int = 0 💡 分页开始的索引，索引从 0 开始计算
+
+            - aid: int | str = 1 💡 area_id，默认即可
+            - asc: 0 | 1 = <default> 💡 是否升序排列。0: 降序 1: 升序
+            - code: int | str = <default>
+            - count_folders: 0 | 1 = 1 💡 统计文件数和目录数
+            - cur: 0 | 1 = <default> 💡 是否只搜索当前目录
+            - custom_order: 0 | 1 = <default> 💡 启用自定义排序，如果指定了 "asc"、"fc_mix"、"o" 中其一，则此参数会被自动设置为 1 
+            - date: str = <default> 💡 筛选日期
+            - fc_mix: 0 | 1 = <default> 💡 是否目录和文件混合，如果为 0 则目录在前
+            - fields: str = <default>
+            - format: str = "json" 💡 返回格式，默认即可
+            - hide_data: str = <default>
+            - is_q: 0 | 1 = <default>
+            - is_share: 0 | 1 = <default>
+            - min_size: int = 0 💡 最小的文件大小
+            - max_size: int = 0 💡 最大的文件大小
+            - natsort: 0 | 1 = <default> 💡 是否执行自然排序(natural sorting) 💡 natural sorting
+            - o: str = <default> 💡 用某字段排序
+
+              - "file_name": 文件名
+              - "file_size": 文件大小
+              - "file_type": 文件种类
+              - "user_utime": 修改时间
+              - "user_ptime": 创建时间
+              - "user_otime": 上一次打开时间
+
+            - r_all: 0 | 1 = <default>
+            - record_open_time: 0 | 1 = 1 💡 是否要记录目录的打开时间
+            - scid: int | str = <default>
+            - show_dir: 0 | 1 = 1
+            - snap: 0 | 1 = <default>
+            - source: str = <default>
+            - sys_dir: int | str = <default>
+            - star: 0 | 1 = <default> 💡 是否星标文件
+            - stdir: 0 | 1 = <default>
+            - suffix: str = <default> 💡 后缀名（优先级高于 `type`）
+            - type: int = <default> 💡 文件类型
+
+              - 0: 全部
+              - 1: 文档
+              - 2: 图片
+              - 3: 音频
+              - 4: 视频
+              - 5: 压缩包
+              - 6: 应用
+              - 7: 书籍
+              - 99: 仅文件
+        """
+        api = "https://webapi.115.com/category/files"
+        if isinstance(payload, (int, str)):
+            payload = {
+                "aid": 1, "count_folders": 1, "limit": 32, "offset": 0, 
+                "record_open_time": 1, "show_dir": 1, "cid": payload, 
+            }
+        else:
+            payload = {
+                "aid": 1, "count_folders": 1, "limit": 32, "offset": 0, 
+                "record_open_time": 1, "show_dir": 1, "cid": 0, **payload, 
+            }
+        if payload.keys() & frozenset(("asc", "fc_mix", "o")):
+            payload["custom_order"] = 1
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
     def fs_files_history(
         self, 
         payload: str | dict, 
@@ -4199,7 +4301,7 @@ class P115Client:
     @overload
     def fs_imglist(
         self, 
-        payload: int | str | dict = 0, 
+        payload: dict, 
         /, 
         *, 
         async_: Literal[False] = False, 
@@ -4209,7 +4311,7 @@ class P115Client:
     @overload
     def fs_imglist(
         self, 
-        payload: int | str | dict = 0, 
+        payload: dict, 
         /, 
         *, 
         async_: Literal[True], 
@@ -4218,25 +4320,28 @@ class P115Client:
         ...
     def fs_imglist(
         self, 
-        payload: int | str | dict = 0, 
+        payload: dict, 
         /, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
         """获取目录中的图片列表和基本信息
+        
+        .. attention::
+            目前尚不清楚此接口如何使用，所以暂时不要使用，除非你知道怎么用
+            请用 `P115Client.fs_files(..., type=2)` 作为替代
 
         GET https://webapi.115.com/files/imglist
 
         :payload:
-            - cid: int | str = 0 💡 目录 id
-            - limit: int = 32    💡 一页大小，建议控制在 <= 9000，不然会报错
+            - cid: int | str 💡 目录 id
+            - file_id: int | str
+            - limit: int = <default> 💡 分页大小
             - offset: int = 0    💡 索引偏移，索引从 0 开始计算
-
-            - aid: int | str = 1 💡 area_id，不知道的话，设置为 1
-            - asc: 0 | 1 = <default> 💡 是否升序排列
-            - cur: 0 | 1 = <default> 💡 只罗列当前目录
-            - o: str = <default> 💡 用某字段排序
+            - is_asc: 0 | 1 = <default> 💡 是否升序排列
+            - next: 0 | 1 = <default>
+            - order: str = <default> 💡 用某字段排序            
 
               - 文件名："file_name"
               - 文件大小："file_size"
@@ -4246,10 +4351,6 @@ class P115Client:
               - 上一次打开时间："user_otime"
         """
         api = "https://webapi.115.com/files/imglist"
-        if isinstance(payload, (int, str)):
-            payload = {"limit": 32, "offset": 0, "aid": 1, "cid": payload}
-        else:
-            payload = {"limit": 32, "offset": 0, "aid": 1, "cid": 0, **payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
