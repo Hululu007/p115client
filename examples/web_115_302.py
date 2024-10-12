@@ -292,7 +292,7 @@ def make_application(
     ) -> AsyncIterator[dict]:
         """获取目录中的文件信息迭代器
         """
-        payload = {"cid": cid, "fc_mix": 1, "show_dir": 1, "limit": 10_000}
+        payload = {"cid": cid, "cur": 1, "fc_mix": 1, "show_dir": 1, "limit": 10_000}
         only_dirs = only_dirs_or_files
         if only_dirs is None:
             only_dirs = False
@@ -530,8 +530,8 @@ def make_application(
     async def do_run(request: Request, cid: str = "0", type: int = 2, password: str = ""):
         """运行后台（预热）任务
 
-        :param cid: 把此 cid 加入后台（预热）任务
-        :param type: 文件类型
+        :param cid: 把此 cid 加入后台（预热）任务（默认值 0）
+        :param type: 文件类型（默认值 2）
               <br />- 1 文档
               <br />- 2 图片
               <br />- 3 音频

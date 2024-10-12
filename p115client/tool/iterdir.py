@@ -533,8 +533,8 @@ def iterdir_raw(
     return _iter_fs_files(
         client, 
         payload={
-            "asc": asc, "cid": cid, "count_folders": 1, "fc_mix": fc_mix, "limit": page_size, 
-            "show_dir": show_dir, "o": order, "offset": 0, 
+            "asc": asc, "cid": cid, "cur": 1, "count_folders": 1, "fc_mix": fc_mix, 
+            "limit": page_size, "show_dir": show_dir, "o": order, "offset": 0, 
         }, 
         id_to_dirnode=id_to_dirnode, 
         raise_for_changed_count=raise_for_changed_count, 

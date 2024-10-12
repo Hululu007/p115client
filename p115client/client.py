@@ -3271,6 +3271,7 @@ class P115Client:
             1. cid=0 且 star=1
             2. suffix 为非空的字符串
             3. type 为正整数
+            4. show_dir=0 且 cur=0（或不指定 cur）
 
         :payload:
             - cid: int | str = 0 💡 目录 id
