@@ -534,7 +534,7 @@ def make_application(
                 return None
             if sign != calc_sha1(bytes(f"302@115-{token}-{t}-{value}", "utf-8")).hexdigest():
                 return json({"state": False, "message": "invalid sign"}, 403)
-            elif t <= time():
+            elif t > 0 and t <= time():
                 return json({"state": False, "message": "url was expired"}, 401)
         do_request = partial(blacksheep_request, session=client)
         if pickcode := pickcode.strip():
