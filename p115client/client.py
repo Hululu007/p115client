@@ -1943,7 +1943,7 @@ class P115Client:
         POST https://proapi.115.com/app/chrome/downurl
 
         :payload:
-            - pickcode: str
+            - pickcode: str 💡 多个用逗号 "," 隔开
         """
         api = "https://proapi.115.com/app/chrome/downurl"
         if isinstance(payload, str):
@@ -2752,7 +2752,7 @@ class P115Client:
         POST https://webapi.115.com/category/shortcut
 
         :payload:
-            - file_id: int | str 目录 id，如果有多个，则用逗号 "," 隔开
+            - file_id: int | str 目录 id，多个用逗号 "," 隔开
             - op: "add" | "delete" | "top" = "add" 操作代码
 
               - "add":    添加
@@ -3058,7 +3058,7 @@ class P115Client:
         POST https://webapi.115.com/files/edit
 
         :payload:
-            - fid: int | str 💡 也可以是多个但用逗号 "," 隔开，这样就不需要 "fid[]" 了
+            - fid: int | str 💡 也可以是多个用逗号 "," 隔开，这样就不需要 "fid[]" 了
             - fid[]: int | str
             - fid[]: int | str
             - ...
@@ -3224,7 +3224,7 @@ class P115Client:
         GET https://webapi.115.com/files/file
 
         :payload:
-            - file_id: int | str 💡 文件或目录的 id，不能为 0，如果有多个则用逗号 "," 隔开
+            - file_id: int | str 💡 文件或目录的 id，不能为 0，多个用逗号 "," 隔开
         """
         api = "https://webapi.115.com/files/file"
         if isinstance(payload, (int, str)):
@@ -3725,7 +3725,7 @@ class P115Client:
               - 6: 应用
               - 7: 书籍
 
-            - file_label: int | str = <default> 💡 标签 id，如果有多个则用逗号 "," 隔开
+            - file_label: int | str = <default> 💡 标签 id，多个用逗号 "," 隔开
         """
         api = "https://webapi.115.com/files/get_second_type"
         if isinstance(payload, int):

@@ -154,14 +154,14 @@ def _iter_fs_files(
             if ans and ans != cur_ans:
                 warn(f"cid={cid} ancestors changed: {ans} -> {cur_ans}", category=P115Warning)
             if count == 0:
-                count = resp[key_of_count]
-            elif count != resp[key_of_count]:
+                count = int(resp.get(key_of_count) or 0)
+            elif count != int(resp.get(key_of_count) or 0):
                 message = f"cid={cid} detected count changes during iteration: {count} -> {resp['count']}"
                 if raise_for_changed_count:
                     raise P115OSError(errno.EIO, message)
                 else:
                     warn(message, category=P115Warning)
-                count = resp[key_of_count]
+                count = int(resp.get(key_of_count) or 0)
             if not count or offset != resp["offset"]:
                 return
             for info in resp["data"]:
@@ -465,6 +465,7 @@ def iterdir_raw(
     fc_mix: Literal[0, 1] = 1, 
     id_to_dirnode: None | dict[int, DirNode] = None, 
     raise_for_changed_count: bool = False, 
+    only_dirs: bool = False, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -481,6 +482,7 @@ def iterdir_raw(
     fc_mix: Literal[0, 1] = 1, 
     id_to_dirnode: None | dict[int, DirNode] = None, 
     raise_for_changed_count: bool = False, 
+    only_dirs: bool = False, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -496,6 +498,7 @@ def iterdir_raw(
     fc_mix: Literal[0, 1] = 1, 
     id_to_dirnode: None | dict[int, DirNode] = None, 
     raise_for_changed_count: bool = False, 
+    only_dirs: bool = False, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -519,6 +522,7 @@ def iterdir_raw(
     :param fc_mix: 文件夹置顶。0: 文件夹在文件之前，1: 文件和文件夹混合并按指定排序
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
+    :param only_dirs: 仅罗列目录
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -534,6 +538,7 @@ def iterdir_raw(
         }, 
         id_to_dirnode=id_to_dirnode, 
         raise_for_changed_count=raise_for_changed_count, 
+        only_dirs=only_dirs, 
         async_=async_, 
         **request_kwargs, 
     )
@@ -553,6 +558,7 @@ def iterdir(
     escape: None | Callable[[str], str] = escape, 
     id_to_dirnode: None | dict[int, DirNode] = None, 
     raise_for_changed_count: bool = False, 
+    only_dirs: bool = False, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -572,6 +578,7 @@ def iterdir(
     escape: None | Callable[[str], str] = escape, 
     id_to_dirnode: None | dict[int, DirNode] = None, 
     raise_for_changed_count: bool = False, 
+    only_dirs: bool = False, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -590,6 +597,7 @@ def iterdir(
     escape: None | Callable[[str], str] = escape, 
     id_to_dirnode: None | dict[int, DirNode] = None, 
     raise_for_changed_count: bool = False, 
+    only_dirs: bool = False, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -616,6 +624,7 @@ def iterdir(
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
+    :param only_dirs: 仅罗列目录
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -636,6 +645,7 @@ def iterdir(
             fc_mix=fc_mix, 
             id_to_dirnode=id_to_dirnode, 
             raise_for_changed_count=raise_for_changed_count, 
+            only_dirs=only_dirs, 
             async_=async_, # type: ignore
             **request_kwargs, 
         )
@@ -1242,7 +1252,7 @@ def traverse_files(
                     except ReadTimeout:
                         file_count = float("inf")
                     else:
-                        file_count = resp["count"]
+                        file_count = int(resp.get("count") or 0)
                     if file_count <= auto_splitting_threshold:
                         if file_count <= 16:
                             attrs = map(normalize_attr, resp["data"])
@@ -1653,14 +1663,14 @@ def iter_image_files(
             if int(resp["cid"]) != cid:
                 raise FileNotFoundError(errno.ENOENT, cid)
             if count == 0:
-                count = resp["count"]
-            elif count != resp["count"]:
+                count = int(resp.get("count") or 0)
+            elif count != int(resp.get("count") or 0):
                 message = f"cid={cid} detected count changes during traversing: {count} => {resp['count']}"
                 if raise_for_changed_count:
                     raise P115OSError(errno.EIO, message)
                 else:
                     warn(message, category=P115Warning)
-                count = resp["count"]
+                count = int(resp.get("count") or 0)
             if offset != resp["offset"]:
                 break
             yield YieldFrom(map(normalize, resp["data"]), identity=True)

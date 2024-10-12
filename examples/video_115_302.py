@@ -39,6 +39,10 @@ TIPS: 请在脚本同一目录下，创建一个 115-cookies.txt 文件，并写
 或者
 
     http://localhost:8000/redocs
+
+我推荐一个命令行使用，用于执行 HTTP 请求的工具，类似 wget
+
+    https://pypi.org/project/httpie/
 """
 __requirements__ = ["blacksheep", "blacksheep_client_request", "p115client", "uvicorn"]
 
@@ -127,7 +131,7 @@ def make_application(
     app = Application(router=Router())
     # 启用文档
     docs = OpenAPIHandler(info=Info(
-        title="115 filelist web api docs", 
+        title="video-115-302.py web api docs", 
         version=".".join(map(str, __version__)), 
     ))
     docs.ui_providers.append(ReDocUIProvider())
@@ -232,7 +236,7 @@ def make_application(
                     cmd = e.args[0]
                     if cmd == "sleep":
                         break
-                except:
+                except Exception:
                     logger.exception(f"error occurred while loading cid={bcid}")
                 finally:
                     bcid = ""
@@ -276,13 +280,12 @@ def make_application(
 
     @app.lifespan
     async def register_client(app: Application):
-        async with ClientSession() as client:
+        async with ClientSession(follow_redirects=False) as client:
             app.services.register(ClientSession, instance=client)
             yield
 
     @app.lifespan
     async def register_p115client(app: Application):
-
         client = P115Client(
             cookies_path, 
             app="harmony", 
@@ -311,11 +314,11 @@ def make_application(
     ):
         if not pickcode:
             if not name:
-                return json({"state": False, "msg": "please provide a name or pickcode"}, 400)
+                return json({"state": False, "message": "please provide a name or pickcode"}, 400)
             try:
                 pickcode = NAME_TO_PICKCODE[name]
             except KeyError:
-                return json({"state": False, "msg": f"name not found: {name!r}"}, 404)
+                return json({"state": False, "message": f"name not found: {name!r}"}, 404)
         user_agent = (request.get_first_header(b"User-agent") or b"").decode("utf-8")
         resp = await p115client.download_url_app(
             pickcode, 
@@ -326,7 +329,9 @@ def make_application(
         )
         if not resp["state"]:
             return json(resp, 404)
-        return redirect(next(iter(resp["data"].values()))["url"]["url"])
+        info = next(iter(resp["data"].values()))
+        NAME_TO_PICKCODE[info["file_name"]] = info["pick_code"]
+        return redirect(info["url"]["url"])
 
     @app.router.route("/", methods=["GET", "HEAD"])
     async def get_url_by_pickcode(
@@ -368,15 +373,15 @@ def make_application(
         :param password: 口令
         """
         if PASSWORD and PASSWORD != password:
-            return json({"state": False, "msg": "password does not match"}, 401)
+            return json({"state": False, "message": "password does not match"}, 401)
         if cid:
             QUEUE.put_nowait(cid)
-            return json({"state": True, "msg": "ok"})
+            return json({"state": True, "message": "ok"})
         try:
             waiting_task.cancel("run") # type: ignore
-            return json({"state": True, "msg": "ok"})
+            return json({"state": True, "message": "ok"})
         except AttributeError:
-            return json({"state": True, "msg": "skip"})
+            return json({"state": True, "message": "skip"})
 
     @app.router.route("/sleep", methods=["POST"])
     async def do_sleep(request: Request, password: str = ""):
@@ -385,12 +390,12 @@ def make_application(
         :param password: 口令
         """
         if PASSWORD and PASSWORD != password:
-            return json({"state": False, "msg": "password does not match"}, 401)
+            return json({"state": False, "message": "password does not match"}, 401)
         try:
             running_task.cancel("sleep") # type: ignore
-            return json({"state": True, "msg": "ok"})
+            return json({"state": True, "message": "ok"})
         except AttributeError:
-            return json({"state": True, "msg": "skip"})
+            return json({"state": True, "message": "skip"})
 
     @app.router.route("/skip", methods=["POST"])
     async def do_skip(request: Request, cid: str = "", password: str = ""):
@@ -400,13 +405,13 @@ def make_application(
         :param password: 口令
         """
         if PASSWORD and PASSWORD != password:
-            return json({"state": False, "msg": "password does not match"}, 401)
+            return json({"state": False, "message": "password does not match"}, 401)
         try:
             if not cid or cid == bcid:
                 running_task.cancel("skip") # type: ignore
         except AttributeError:
             pass
-        return json({"state": True, "msg": "ok"})
+        return json({"state": True, "message": "ok"})
 
     @app.router.route("/qskip", methods=["POST"])
     async def do_qskip(request: Request, cid: str = "", password: str = ""):
@@ -416,27 +421,26 @@ def make_application(
         :param password: 口令
         """
         if PASSWORD and PASSWORD != password:
-            return json({"state": False, "msg": "password does not match"}, 401)
+            return json({"state": False, "message": "password does not match"}, 401)
         try:
             if not cid or cid == qcid:
                 qrunning_task.cancel("skip") # type: ignore
         except AttributeError:
             pass
-        return json({"state": True, "msg": "ok"})
+        return json({"state": True, "message": "ok"})
 
     @app.router.route("/running", methods=["POST"])
     async def get_batch_task_running(request: Request, password: str = ""):
         """批量任务中，是否有任务在运行中
 
-        :param cid: 
         :param password: 口令
         """
         if PASSWORD and PASSWORD != password:
-            return json({"state": False, "msg": "password does not match"}, 401)
+            return json({"state": False, "message": "password does not match"}, 401)
         if running_task is None:
-            return json({"state": True, "msg": "ok", "value": False})
+            return json({"state": True, "message": "ok", "value": False})
         else:
-            return json({"state": True, "msg": "ok", "value": True, "cid": bcid})
+            return json({"state": True, "message": "ok", "value": True, "cid": bcid})
 
     @app.router.route("/qrunning", methods=["POST"])
     async def get_queue_task_running(request: Request, password: str = ""):
@@ -445,11 +449,11 @@ def make_application(
         :param password: 口令
         """
         if PASSWORD and PASSWORD != password:
-            return json({"state": False, "msg": "password does not match"}, 401)
+            return json({"state": False, "message": "password does not match"}, 401)
         if qrunning_task is None:
-            return json({"state": True, "msg": "ok", "value": False})
+            return json({"state": True, "message": "ok", "value": False})
         else:
-            return json({"state": True, "msg": "ok", "value": True, "cid": qcid, "pending": list(getattr(QUEUE, "_queue"))})
+            return json({"state": True, "message": "ok", "value": True, "cid": qcid, "pending": list(getattr(QUEUE, "_queue"))})
 
     @app.router.route("/interval", methods=["POST"])
     async def set_interval(request: Request, value: float = nan, password: str = ""):
@@ -460,15 +464,15 @@ def make_application(
         """
         nonlocal interval
         if PASSWORD and PASSWORD != password:
-            return json({"state": False, "msg": "password does not match"}, 401)
+            return json({"state": False, "message": "password does not match"}, 401)
         if not isnan(value):
             interval = value
             try:
                 waiting_task.cancel("change") # type: ignore
             except AttributeError:
                 pass
-            return json({"state": True, "msg": "ok", "value": interval})
-        return json({"state": True, "msg": "skip", "value": interval})
+            return json({"state": True, "message": "ok", "value": interval})
+        return json({"state": True, "message": "skip", "value": interval})
 
     @app.router.route("/cookies", methods=["POST"])
     async def set_cookies(request: Request, p115client: P115Client, password: str = "", body: None | FromJSON[dict] = None):
@@ -478,17 +482,17 @@ def make_application(
         :param body: 请求体为 json 格式 <code>{"value"&colon; "新的 cookies"}</code>
         """
         if PASSWORD and PASSWORD != password:
-            return json({"state": False, "msg": "password does not match"}, 401)
+            return json({"state": False, "message": "password does not match"}, 401)
         if body:
             payload = body.value
             cookies = payload.get("value")
             if isinstance(cookies, str):
                 try:
                     p115client.cookies = cookies
-                    return json({"state": True, "msg": "ok"})
+                    return json({"state": True, "message": "ok"})
                 except Exception as e:
-                    return json({"state": False, "msg": str(e)})
-        return json({"state": True, "msg": "skip"})
+                    return json({"state": False, "message": str(e)})
+        return json({"state": True, "message": "skip"})
 
     @app.router.route("/cids", methods=["POST"])
     async def get_cids(request: Request, password: str = ""):
@@ -497,8 +501,8 @@ def make_application(
         :param password: 口令
         """
         if PASSWORD and PASSWORD != password:
-            return json({"state": False, "msg": "password does not match"}, 401)
-        return json({"state": True, "msg": "ok", "value": list(CIDS)})
+            return json({"state": False, "message": "password does not match"}, 401)
+        return json({"state": True, "message": "ok", "value": list(CIDS)})
 
     @app.router.route("/cids/update", methods=["POST"])
     async def update_cids(request: Request, password: str = "", body: None | FromJSON[dict] = None):
@@ -508,17 +512,17 @@ def make_application(
         :param body: 请求体为 json 格式 <code>{"value"&colon; ["cid1", "cid2", "..."]}</code>
         """
         if PASSWORD and PASSWORD != password:
-            return json({"state": False, "msg": "password does not match"}, 401)
+            return json({"state": False, "message": "password does not match"}, 401)
         if body:
             payload = body.value
             cids_new = payload.get("value")
             if isinstance(cids_new, (int, str)):
                 CIDS.add(str(cids_new))
-                return json({"state": True, "msg": "ok", "value": list(CIDS)})
+                return json({"state": True, "message": "ok", "value": list(CIDS)})
             elif isinstance(cids_new, list):
                 CIDS.update(map(str, cids_new))
-                return json({"state": True, "msg": "ok", "value": list(CIDS)})
-        return json({"state": True, "msg": "skip", "value": list(CIDS)})
+                return json({"state": True, "message": "ok", "value": list(CIDS)})
+        return json({"state": True, "message": "skip", "value": list(CIDS)})
 
     @app.router.route("/cids/discard", methods=["POST"])
     async def discard_cids(request: Request, password: str = "", body: None | FromJSON[dict] = None):
@@ -528,17 +532,17 @@ def make_application(
         :param body: 请求体为 json 格式 <code>{"value"&colon; ["cid1", "cid2", "..."]}</code>
         """
         if PASSWORD and PASSWORD != password:
-            return json({"state": False, "msg": "password does not match"}, 401)
+            return json({"state": False, "message": "password does not match"}, 401)
         if body:
             payload = body.value
             cids_new = payload.get("value")
             if isinstance(cids_new, (int, str)):
                 CIDS.discard(str(cids_new))
-                return json({"state": True, "msg": "ok", "value": list(CIDS)})
+                return json({"state": True, "message": "ok", "value": list(CIDS)})
             elif isinstance(cids_new, list):
                 CIDS.difference_update(map(str, cids_new))
-                return json({"state": True, "msg": "ok", "value": list(CIDS)})
-        return json({"state": True, "msg": "skip", "value": list(CIDS)})
+                return json({"state": True, "message": "ok", "value": list(CIDS)})
+        return json({"state": True, "message": "skip", "value": list(CIDS)})
 
     return app
 
