@@ -2,20 +2,26 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 0, 1)
+__version__ = (0, 0, 2)
 __all__ = ["make_application"]
 __requirements__ = ["blacksheep", "blacksheep_client_request", "cachetools", "p115client", "posixpatht", "uvicorn"]
 __doc__ = """\
         \x1b[5m🚀\x1b[0m 115 直链服务 \x1b[5m🍳\x1b[0m
 
-链接格式（每个参数都是\x1b[1;31m可选的\x1b[0m）：\x1b[4m\x1b[34mhttp://localhost:8000{\x1b[1;32mpath2\x1b[0m\x1b[4m\x1b[34m}?pickcode={\x1b[1;32mpickcode\x1b[0m\x1b[4m\x1b[34m}&id={\x1b[1;32mid\x1b[0m\x1b[4m\x1b[34m}&sha1={\x1b[1;32msha1\x1b[0m\x1b[4m\x1b[34m}&path={\x1b[1;32mpath\x1b[0m\x1b[4m\x1b[34m}&image={\x1b[1;32mimage\x1b[0m\x1b[4m\x1b[34m}&ppc={\x1b[1;32mppc\x1b[0m\x1b[4m\x1b[34m}\x1b[0m
+链接格式（每个参数都是\x1b[1;31m可选的\x1b[0m）：\x1b[4m\x1b[34mhttp://localhost:8000{\x1b[1;32mpath2\x1b[0m\x1b[4m\x1b[34m}?pickcode={\x1b[1;32mpickcode\x1b[0m\x1b[4m\x1b[34m}&id={\x1b[1;32mid\x1b[0m\x1b[4m\x1b[34m}&sha1={\x1b[1;32msha1\x1b[0m\x1b[4m\x1b[34m}&path={\x1b[1;32mpath\x1b[0m\x1b[4m\x1b[34m}&image={\x1b[1;32mimage\x1b[0m\x1b[4m\x1b[34m}&ppc={\x1b[1;32mppc\x1b[0m\x1b[4m\x1b[34m}\x1b[0m&sign={\x1b[1;32msign\x1b[0m\x1b[4m\x1b[34m}\x1b[0m&t={\x1b[1;32mt\x1b[0m\x1b[4m\x1b[34m}\x1b[0m
 
 - \x1b[1;32mpickcode\x1b[0m: 文件的 \x1b[1;32mpickcode\x1b[0m，优先级高于 \x1b[1;32mid\x1b[0m
 - \x1b[1;32mid\x1b[0m: 文件的 \x1b[1;32mid\x1b[0m，优先级高于 \x1b[1;32msha1\x1b[0m
 - \x1b[1;32msha1\x1b[0m: 文件的 \x1b[1;32msha1\x1b[0m，优先级高于 \x1b[1;32mpath\x1b[0m
 - \x1b[1;32mpath\x1b[0m: 文件的路径，优先级高于 \x1b[1;32mpath2\x1b[0m
+- \x1b[1;32mpath2\x1b[0m: 文件的路径，优先级最低
 - \x1b[1;32mimage\x1b[0m: 接受 \x1b[1;36m1\x1b[0m | \x1b[1;36mtrue\x1b[0m 或 \x1b[1;36m0\x1b[0m | \x1b[1;36mfalse\x1b[0m，如果为 \x1b[1;36m1\x1b[0m | \x1b[1;36mtrue\x1b[0m，则尝试获取图片的 cdn 链接
-- \x1b[1;32mppc\x1b[0m: 接受 \x1b[1;36m1\x1b[0m | \x1b[1;36mtrue\x1b[0m 或 \x1b[1;36m0\x1b[0m | \x1b[1;36mfalse\x1b[0m，如果为 \x1b[1;36m1\x1b[0m | \x1b[1;36mtrue\x1b[0m，则使用 \x1b[1;32mpath\x1b[0m 到 \x1b[1;32mpickcode\x1b[0m 的缓存（如果有的话）
+- \x1b[1;32mppc\x1b[0m: 接受 \x1b[1;36m1\x1b[0m | \x1b[1;36mtrue\x1b[0m 或 \x1b[1;36m0\x1b[0m | \x1b[1;36mfalse\x1b[0m，如果为 \x1b[1;36m1\x1b[0m | \x1b[1;36mtrue\x1b[0m，则使用 \x1b[1;32mpath\x1b[0m 到 \x1b[1;32mpickcode\x1b[0m 的缓存（\x1b[1m如果有的话\x1b[0m）
+- \x1b[1;32msign\x1b[0m: 计算方式为 \x1b[2mhashlib.sha1(bytes(f"302@115-{token}-{t}-{value}", "utf-8")).hexdigest()\x1b[0m
+    - \x1b[1mtoken\x1b[0m: 命令行中所传入的 \x1b[1mtoken\x1b[0m
+    - \x1b[1mt\x1b[0m: 过期时间戳（\x1b[1m超过这个时间后，链接不可用\x1b[0m）
+    - \x1b[1mvalue\x1b[0m: 按顺序检查 \x1b[1;32mpickcode\x1b[0m、\x1b[1;32mid\x1b[0m、\x1b[1;32msha1\x1b[0m、\x1b[1;32mpath\x1b[0m、\x1b[1;32mpath2\x1b[0m，最先有效的那个值
+- \x1b[1;32mt\x1b[0m: 链接过期时间戳，接受一个整数，只在使用签名时有效，如果不提供或者小于等于 0，则永久有效
 
         \x1b[5m🔨\x1b[0m 如何运行 \x1b[5m🪛\x1b[0m
 
@@ -50,6 +56,7 @@ if __name__ == "__main__":
     parser = ArgumentParser(formatter_class=RawTextHelpFormatter, description=__doc__)
     parser.add_argument("-cp", "--cookies-path", default="", help="cookies 文件保存路径，默认是此脚本同一目录下的 115-cookies.txt")
     parser.add_argument("-p", "--password", help="执行 POST 请求所需密码")
+    parser.add_argument("-t", "--token", default="", help="用于给链接进行签名的 token，如果不提供则无签名")
     parser.add_argument("-ppc", "--path-persistence-commitment", action="store_true", help="路径一致性承诺，如果指定此参数，则当使用路径查询时，会先尝试从 路径 到 pickcode 的映射中获取")
     parser.add_argument("-H", "--host", default="0.0.0.0", help="ip 或 hostname，默认值：'0.0.0.0'")
     parser.add_argument("-P", "--port", default=8000, type=int, help="端口号，默认值：8000")
@@ -100,6 +107,7 @@ import logging
 from asyncio import create_task, CancelledError, Queue
 from collections.abc import AsyncIterator, Callable, MutableMapping
 from functools import partial, update_wrapper
+from hashlib import sha1 as calc_sha1
 from pathlib import Path
 from time import time
 from typing import cast, Literal
@@ -117,6 +125,7 @@ def reduce_image_url_layers(url: str, /) -> str:
 def make_application(
     path_persistence_commitment: bool = False, 
     password: str = "", 
+    token: str = "", 
     cookies_path: str | Path = "", 
 ):
     # NOTE: cookies 保存路径
@@ -502,6 +511,8 @@ def make_application(
         path2: str = "", 
         image: bool = False, 
         ppc: bool = True, 
+        sign: str = "", 
+        t: int = 0, 
     ):
         """获取文件的下载链接
 
@@ -512,15 +523,38 @@ def make_application(
         :param path2: 文件的路径，这个直接在接口路径之后，不在查询字符串中
         :param image: 是否视为图片，如果为 True，则尝试获取图片的 cdn 链接
         :param ppc: 是否使用 路径 到 pickcode 的缓存
+        :param sign: 签名，计算方式为 `hashlib.sha1(bytes(f"302@115-{token}-{t}-{value}", "utf-8")).hexdigest()`
+            <br />- **token**&colon; 命令行中所传入的 token
+            <br />- **t**&colon; 过期时间戳（超过这个时间后，链接不可用）
+            <br />- **value**&colon; 按顺序检查 `pickcode`、`id`、`sha1`、`path`、`path2`，最先有效的那个值
+        :param t: 过期时间戳
         """
+        def check_sign(value, /):
+            if not token:
+                return None
+            if sign != calc_sha1(bytes(f"302@115-{token}-{t}-{value}", "utf-8")).hexdigest():
+                return json({"state": False, "message": "invalid sign"}, 403)
+            elif t <= time():
+                return json({"state": False, "message": "url was expired"}, 401)
         do_request = partial(blacksheep_request, session=client)
-        if not (pickcode := pickcode.strip()):
-            if id := id.strip():
-                pickcode = await get_pickcode_by_id(p115client, id, do_request)
-            elif sha1 := sha1.strip():
-                pickcode = await get_pickcode_by_sha1(p115client, sha1, do_request)
-            else:
-                pickcode = await get_pickcode_by_path(p115client, path or path2, do_request, ppc)
+        if pickcode := pickcode.strip():
+            if resp := check_sign(pickcode):
+                return resp
+        elif id := id.strip():
+            if resp := check_sign(id):
+                return resp
+            pickcode = await get_pickcode_by_id(p115client, id, do_request)
+        elif sha1 := sha1.strip():
+            if resp := check_sign(sha1):
+                return resp
+            pickcode = await get_pickcode_by_sha1(p115client, sha1, do_request)
+        else:
+            value = path or path2
+            if not value:
+                return json({"state": False, "message": "no query value"}, 400)
+            if resp := check_sign(value):
+                return resp
+            pickcode = await get_pickcode_by_path(p115client, value, do_request, ppc)
         if image:
             return redirect(await get_image_url(p115client, pickcode, do_request))
         user_agent = (request.get_first_header(b"User-agent") or b"").decode("latin-1")
@@ -532,14 +566,14 @@ def make_application(
 
         :param cid: 把此 cid 加入后台（预热）任务（默认值 0）
         :param type: 文件类型（默认值 2）
-              <br />- 1 文档
-              <br />- 2 图片
-              <br />- 3 音频
-              <br />- 4 视频
-              <br />- 5 压缩包
-              <br />- 6 应用
-              <br />- 7 书籍
-              <br />- 99 任意文件
+              <br />- **1**&colon; 文档
+              <br />- **2**&colon; 图片
+              <br />- **3**&colon; 音频
+              <br />- **4**&colon; 视频
+              <br />- **5**&colon; 压缩包
+              <br />- **6**&colon; 应用
+              <br />- **7**&colon; 书籍
+              <br />- **99**&colon; 任意文件
         :param password: 口令
         """
         if PASSWORD and PASSWORD != password:
@@ -613,6 +647,7 @@ if __name__ == "__main__":
     app = make_application(
         path_persistence_commitment=args.path_persistence_commitment, 
         password=args.password, 
+        token=args.token, 
         cookies_path=args.cookies_path, 
     )
     print(__doc__)

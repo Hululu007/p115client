@@ -3686,6 +3686,51 @@ class P115Client:
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
+    def fs_files_history_set(
+        self, 
+        payload: str | dict, 
+        /, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_files_history_set(
+        self, 
+        payload: str | dict, 
+        /, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_files_history_set(
+        self, 
+        payload: str | dict, 
+        /, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """更新文件的观看历史，主要用于视频
+
+        POST https://webapi.115.com/files/history
+
+        :payload:
+            - pick_code: str
+            - op: str = "update"
+            - category: int = <default>
+            - definition: int = <default>
+            - share_id: int | str = <default>
+            - time: int = <default>
+            - ...（其它未找全的参数）
+        """
+        api = "https://webapi.115.com/files/history"
+        if isinstance(payload, str):
+            payload = {"op": "update", "pick_code": payload}
+        else:
+            payload = {"op": "update", **payload}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
     def fs_files_second_type(
         self, 
         payload: Literal[1,2,3,4,5,6,7] | dict, 
@@ -4179,51 +4224,6 @@ class P115Client:
         else:
             payload = {"limit": 1150, "offset": 0, **payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
-
-    @overload
-    def fs_history_set(
-        self, 
-        payload: str | dict, 
-        /, 
-        async_: Literal[False] = False, 
-        **request_kwargs, 
-    ) -> dict:
-        ...
-    @overload
-    def fs_history_set(
-        self, 
-        payload: str | dict, 
-        /, 
-        async_: Literal[True], 
-        **request_kwargs, 
-    ) -> Coroutine[Any, Any, dict]:
-        ...
-    def fs_history_set(
-        self, 
-        payload: str | dict, 
-        /, 
-        async_: Literal[False, True] = False, 
-        **request_kwargs, 
-    ) -> dict | Coroutine[Any, Any, dict]:
-        """更新文件的观看历史，主要用于视频
-
-        POST https://webapi.115.com/files/history
-
-        :payload:
-            - pick_code: str
-            - op: str = "update"
-            - category: int = <default>
-            - definition: int = <default>
-            - share_id: int | str = <default>
-            - time: int = <default>
-            - ...（其它未找全的参数）
-        """
-        api = "https://webapi.115.com/files/history"
-        if isinstance(payload, str):
-            payload = {"op": "update", "pick_code": payload}
-        else:
-            payload = {"op": "update", **payload}
-        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
     def fs_image(

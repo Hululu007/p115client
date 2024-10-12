@@ -2,7 +2,7 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 0, 3)
+__version__ = (0, 0, 4)
 __all__ = ["make_application"]
 __doc__ = """115 302 服务（仅针对视频）
 
@@ -55,6 +55,7 @@ if __name__ == "__main__":
     parser.add_argument("-f", "--store-file", help="缓存到文件的路径，如果不提供，则在内存中（程序关闭后销毁）")
     parser.add_argument("-cp", "--cookies-path", default="", help="cookies 文件保存路径，默认是此脚本同一目录下的 115-cookies.txt")
     parser.add_argument("-p", "--password", help="执行 POST 请求所需密码")
+    parser.add_argument("-t", "--token", default="", help="用于给链接进行签名的 token，如果不提供则无签名")
     parser.add_argument("-H", "--host", default="0.0.0.0", help="ip 或 hostname，默认值：'0.0.0.0'")
     parser.add_argument("-P", "--port", default=8000, type=int, help="端口号，默认值：8000")
     parser.add_argument("-v", "--version", action="store_true", help="输出版本号")
@@ -93,6 +94,7 @@ import logging
 from asyncio import create_task, sleep, CancelledError, Queue
 from collections.abc import Iterable, Iterator, MutableMapping, Sequence
 from functools import partial
+from hashlib import sha1
 from math import isinf, isnan, nan
 from pathlib import Path
 from time import time
@@ -103,6 +105,7 @@ def make_application(
     interval: int | float = 5, 
     store_file: str = "", 
     password: str = "", 
+    token: str = "", 
     cookies_path: str | Path = "", 
 ) -> Application:
     # cookies 保存路径
@@ -311,10 +314,24 @@ def make_application(
         p115client: P115Client, 
         name: str = "", 
         pickcode: str = "", 
+        sign: str = "", 
+        t: int = 0, 
     ):
-        if not pickcode:
+        def check_sign(value, /):
+            if not token:
+                return None
+            if sign != sha1(bytes(f"302@115-{token}-{t}-{value}", "utf-8")).hexdigest():
+                return json({"state": False, "message": "invalid sign"}, 403)
+            elif t <= time():
+                return json({"state": False, "message": "url was expired"}, 401)
+        if pickcode := pickcode.strip():
+            if resp := check_sign(pickcode):
+                return resp
+        else:
             if not name:
                 return json({"state": False, "message": "please provide a name or pickcode"}, 400)
+            if resp := check_sign(name):
+                return resp
             try:
                 pickcode = NAME_TO_PICKCODE[name]
             except KeyError:
@@ -339,10 +356,17 @@ def make_application(
         client: ClientSession, 
         p115client: P115Client, 
         pickcode: str = "", 
+        sign: str = "", 
+        t: int = 0, 
     ):
         """获取文件直链，用 pickcode 查询任意文件
 
         :param pickcode: 文件的提取码
+        :param sign: 签名，计算方式为 `hashlib.sha1(bytes(f"302@115-{token}-{t}-{pickcode}", "utf-8")).hexdigest()`
+            <br />- **token**&colon; 命令行中所传入的 token
+            <br />- **t**&colon; 过期时间戳（超过这个时间后，链接不可用）
+            <br />- **pickcode**&colon; 所传入的 `pickcode`
+        :param t: 过期时间戳
 
         :return: 文件的直链
         """
@@ -355,11 +379,18 @@ def make_application(
         p115client: P115Client, 
         name: str = "", 
         pickcode: str = "", 
+        sign: str = "", 
+        t: int = 0, 
     ):
         """获取文件直链，仅支持用文件名查询视频文件，或者用 pickcode 查询任意文件
 
         :param name: 文件名
         :param pickcode: 文件的提取码，优先级高于 `name`
+        :param sign: 签名，计算方式为 `hashlib.sha1(bytes(f"302@115-{token}-{t}-{value}", "utf-8")).hexdigest()`
+            <br />- **token**&colon; 命令行中所传入的 token
+            <br />- **t**&colon; 过期时间戳（超过这个时间后，链接不可用）
+            <br />- **value**&colon; 按顺序检查 `pickcode`、`name`，最先有效的那个值
+        :param t: 过期时间戳
 
         :return: 文件的直链
         """
@@ -560,6 +591,7 @@ if __name__ == "__main__":
         interval=args.interval, 
         store_file=args.store_file, 
         password=args.password or "", 
+        token=args.token, 
         cookies_path=args.cookies_path, 
     )
     uvicorn.run(
