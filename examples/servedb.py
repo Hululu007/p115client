@@ -336,16 +336,18 @@ WHERE parent_id = :id AND name NOT IN ('', '.', '..') AND name NOT LIKE '%/%';
             for r in CON.execute(sql, self.attr):
                 attr = dict(zip(FIELDS, r))
                 is_strm = False
+                name = attr["name"]
+                path = attr["path"]
                 if not attr["is_dir"] and strm_predicate and strm_predicate(MappingPath(attr)):
-                    attr["name"] = splitext(attr["name"])[0] + ".strm"
-                    attr["path"] = splitext(attr["path"])[0] + ".strm"
+                    name = splitext(name)[0] + ".strm"
+                    path = splitext(path)[0] + ".strm"
                     is_strm = True
                 elif predicate and not predicate(MappingPath(attr)):
                     continue
                 if attr["is_dir"]:
-                    children[attr["name"]] = FolderResource(attr["path"], environ, attr)
+                    children[name] = FolderResource(path, environ, attr)
                 else:
-                    children[attr["name"]] = FileResource(attr["path"], environ, attr, is_strm=is_strm)
+                    children[name] = FileResource(path, environ, attr, is_strm=is_strm)
             return children
 
         def get_descendants(
@@ -391,16 +393,16 @@ WHERE path LIKE ? || '%' AND name NOT IN ('', '.', '..') AND name NOT LIKE '%/%'
             for r in CON.execute(sql, (self.path,)):
                 attr = dict(zip(FIELDS, r))
                 is_strm = False
+                path = attr["path"]
                 if not attr["is_dir"] and strm_predicate and strm_predicate(MappingPath(attr)):
-                    attr["name"] = splitext(attr["name"])[0] + ".strm"
-                    attr["path"] = splitext(attr["path"])[0] + ".strm"
+                    path = splitext(path)[0] + ".strm"
                     is_strm = True
                 elif predicate and not predicate(MappingPath(attr)):
                     continue
                 if attr["is_dir"]:
-                    push(FolderResource(attr["path"], environ, attr))
+                    push(FolderResource(path, environ, attr))
                 else:
-                    push(FileResource(attr["path"], environ, attr, is_strm=is_strm))
+                    push(FileResource(path, environ, attr, is_strm=is_strm))
             return descendants
 
         def get_member(self, /, name: str) -> FileResource | FolderResource:
@@ -463,8 +465,7 @@ CREATE TABLE IF NOT EXISTS file.data (
             is_strm = False
             if not attr["is_dir"] and strm_predicate and strm_predicate(MappingPath(attr)):
                 is_strm = True
-                attr["name"] = splitext(attr["name"])[0] + ".strm"
-                path = attr["path"] = splitext(path)[0] + ".strm"
+                path = splitext(path)[0] + ".strm"
             elif predicate and not predicate(MappingPath(attr)):
                 raise DAVError(404, path)
             if attr["is_dir"]:
