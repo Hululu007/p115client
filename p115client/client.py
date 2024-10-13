@@ -1086,35 +1086,42 @@ class P115Client:
         .. note:: 
             `request` 可以由不同的请求库来提供，下面是封装了一些模块
 
-            1. `httpx_request <https://pypi.org/project/httpx_request/>`_，由 httpx 封装，支持同步和异步调用，本模块默认用的就是这个封装
+            1. `httpx_request <https://pypi.org/project/httpx_request/>`_，由 `httpx <https://pypi.org/project/httpx/>`_ 封装，支持同步和异步调用，本模块默认用的就是这个封装
 
                 .. code:: python
 
                     from httpx_request import request
 
-            2. `python-urlopen <https://pypi.org/project/python-urlopen/>`_，由 urllib.request.urlopen 封装，支持同步调用，性能相对最差
+            2. `python-urlopen <https://pypi.org/project/python-urlopen/>`_，由 `urllib.request.urlopen <https://docs.python.org/3/library/urllib.request.html#urllib.request.urlopen>`_ 封装，支持同步调用，性能相对最差
 
                 .. code:: python
 
                     from urlopen import request
 
-            3. `urllib3_request <https://pypi.org/project/urllib3_request/>`_，由 urllib.request.urlopen 封装，支持同步调用
+            3. `urllib3_request <https://pypi.org/project/urllib3_request/>`_，由 `urllib3 <https://pypi.org/project/urllib3/>`_ 封装，支持同步调用
 
                 .. code:: python
 
                     from urllib3_request import request
 
-            4. `requests_request <https://pypi.org/project/requests_request/>`_，由 urllib.request.urlopen 封装，支持同步调用，性能相对最好，推荐使用
+            4. `requests_request <https://pypi.org/project/requests_request/>`_，由 `requests <https://pypi.org/project/requests/>`_ 封装，支持同步调用，性能相对最好，推荐使用
 
                 .. code:: python
 
                     from requests_request import request
 
-            5. `aiohttp_client_request <https://pypi.org/project/aiohttp_client_request/>`_，由 urllib.request.urlopen 封装，支持异步调用，异步并发能力最强，推荐使用
+            5. `aiohttp_client_request <https://pypi.org/project/aiohttp_client_request/>`_，由 `aiohttp <https://pypi.org/project/aiohttp/>`_ 封装，支持异步调用，异步并发能力最强，推荐使用
 
                 .. code:: python
 
                     from aiohttp_client_request import request
+
+            6. `blacksheep_client_request <https://pypi.org/project/blacksheep_client_request/>`_，由 `blacksheep <https://pypi.org/project/blacksheep/>`_ 封装，支持异步调用，异步并发能力最强，推荐使用
+
+                .. code:: python
+
+                    from blacksheep_client_request import request
+
         """
         if params:
             url = make_url(url, params)

@@ -460,11 +460,10 @@ def ensure_attr_path(
             pid = attr["parent_id"]
             if attr.get("is_directory", False):
                 id_to_dirnode[attr["id"]] = DirNode(attr["name"], pid)
-            if pid != 0:
+            if pid:
                 pids.add(pid)
         def take_while(v, /) -> bool:
-            if v in find_ids:
-                find_ids.remove(v)
+            find_ids.discard(v)
             return bool(find_ids)
         while pids:
             if find_ids := pids - id_to_dirnode.keys():
@@ -503,7 +502,7 @@ def ensure_attr_path(
                             raise
                         case "warn":
                             warn(f"{type(e).__module__}.{type(e).__qualname__}: {e}", category=P115Warning)
-            pids = {ppid for pid in pids if (ppid := id_to_dirnode[pid][1]) != 0}
+            pids = {ppid for pid in pids if (ppid := id_to_dirnode[pid][1])}
         if with_ancestors:
             for attr in attrs:
                 try:
@@ -736,7 +735,7 @@ def iterdir(
                 attr = normalize_attr(info)
                 if not pancestors:
                     cid = attr["parent_id"]
-                    while cid != 0:
+                    while cid:
                         name, pid = id_to_dirnode[cid]
                         pancestors.append({"id": cid, "parent_id": pid, "name": name})
                         cid = pid
