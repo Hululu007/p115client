@@ -2979,6 +2979,9 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """为文件或目录设置备注，最多允许 65535 个字节 (64 KB 以内)，此接口是对 `fs_edit` 的封装
 
+        .. hint::
+            修改文件备注会更新文件的更新时间，即使什么也没改
+
         :param fids: 单个或多个文件或目录 id
         :param file_desc: 备注信息，可以用 html
         """
@@ -3272,6 +3275,9 @@ class P115Client:
             2. suffix 为非空的字符串
             3. type 为正整数
             4. show_dir=0 且 cur=0（或不指定 cur）
+
+        .. hint::
+            如果仅指定 cid 和 natsort=1 和 o="file_name"，则可仅统计当前目录的总数，而不返回具体的文件信息
 
         :payload:
             - cid: int | str = 0 💡 目录 id

@@ -111,11 +111,13 @@ except ImportError:
 from collections.abc import Callable, Mapping, ItemsView
 from functools import cached_property, partial
 from io import BytesIO
+from os import fsdecode, PathLike
 from pathlib import Path
 from posixpath import dirname, splitext
 from sqlite3 import connect, Connection, OperationalError
 from threading import Lock
 from typing import Literal
+from urllib.parse import quote
 
 
 transtab = {c: f"%{c:02x}" for c in b"#%/?"}
@@ -166,7 +168,7 @@ class LRUDict(dict):
 
 
 def make_application(
-    dbfile: str | Path, 
+    dbfile: bytes | str | PathLike, 
     config_path: str | Path = "", 
     cookies_path: str | Path = "", 
     predicate: None | Callable = None, 
@@ -184,6 +186,7 @@ def make_application(
     urlopen = partial(urllib3_request, pool=PoolManager(num_pools=50))
 
     CON: Connection
+    CON_FILE: Connection
     FIELDS = ("id", "name", "path", "ctime", "mtime", "size", "pickcode", "is_dir")
     ROOT = {"id": 0, "name": "", "path": "/", "ctime": 0, "mtime": 0, "size": 0, "pickcode": "", "is_dir": 1}
     STRM_CACHE: LRUDict = LRUDict(65536)
@@ -281,24 +284,24 @@ def make_application(
                 return BytesIO(self.strm_data)
             fid = self.attr["id"]
             try:
-                return CON.blobopen("data", "data", fid, readonly=True, name="file")
+                return CON_FILE.blobopen("data", "data", fid, readonly=True)
             except (OperationalError, SystemError):
                 pass
             if self.attr["size"] >= 1024 * 64:
                 raise DAVError(302, add_headers=[("Location", self.url)])
-            CON.execute("""\
-INSERT INTO file.data(id, data) VALUES(?, zeroblob(?)) 
+            CON_FILE.execute("""\
+INSERT INTO data(id, data) VALUES(?, zeroblob(?)) 
 ON CONFLICT(id) DO UPDATE SET data=excluded.data;""", (fid, self.attr["size"]))
-            CON.commit()
+            CON_FILE.commit()
             try:
                 data = urlopen(self.url).read()
                 with WRITE_LOCK:
-                    with CON.blobopen("data", "data", fid, name="file") as fdst:
+                    with CON_FILE.blobopen("data", "data", fid) as fdst:
                         fdst.write(data)
-                return CON.blobopen("data", "data", fid, readonly=True, name="file")
+                return CON_FILE.blobopen("data", "data", fid, readonly=True)
             except:
-                CON.execute("DELETE FROM file WHERE id=?", (fid,))
-                CON.commit()
+                CON_FILE.execute("DELETE FROM data WHERE id=?", (fid,))
+                CON_FILE.commit()
                 raise
 
         def get_content_length(self, /) -> int:
@@ -425,15 +428,15 @@ WHERE path LIKE ? || '%' AND name NOT IN ('', '.', '..') AND name NOT LIKE '%/%'
 
     class ServeDBProvider(DAVProvider):
 
-        def __init__(self, /, dbfile: str | Path):
-            nonlocal CON
-            CON = connect(dbfile, check_same_thread=False)
+        def __init__(self, /, dbfile: bytes | str | PathLike):
+            nonlocal CON, CON_FILE
+            CON = connect("file:%s?mode=ro" % quote(fsdecode(dbfile)), uri=True, check_same_thread=False)
             CON.create_function("dirname", 1, dirname)
-            dbfile = CON.execute("SELECT file FROM pragma_database_list() WHERE name='main';").fetchone()[0]
-            head, suffix = splitext(dbfile)
-            CON.execute("ATTACH DATABASE ? AS file;", (f"{head}-file{suffix}",))
-            CON.execute("""\
-CREATE TABLE IF NOT EXISTS file.data (
+            dbpath = CON.execute("SELECT file FROM pragma_database_list() WHERE name='main';").fetchone()[0]
+            CON_FILE = connect("%s-file%s" % splitext(dbpath), check_same_thread=False)
+            CON_FILE.execute("PRAGMA journal_mode = WAL;")
+            CON_FILE.execute("""\
+CREATE TABLE IF NOT EXISTS data (
     id INTEGER NOT NULL PRIMARY KEY,
     data BLOB,
     temp_path TEXT
@@ -442,7 +445,11 @@ CREATE TABLE IF NOT EXISTS file.data (
         def __del__(self, /):
             try:
                 CON.close()
-            except AttributeError:
+            except:
+                pass
+            try:
+                CON_FILE.close()
+            except:
                 pass
 
         def get_resource_inst(

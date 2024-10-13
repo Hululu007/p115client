@@ -5,15 +5,15 @@ from __future__ import annotations
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __all__ = [
-    "ID_TO_DIRNODE_CACHE", "type_of_attr", "traverse_stared_dirs", "ensure_attr_path", 
-    "iterdir_raw", "iterdir", "iter_files", "iter_files_raw", "dict_files", "traverse_files", 
-    "iter_dupfiles", "dict_dupfiles", "iter_image_files", "dict_image_files", 
+    "ID_TO_DIRNODE_CACHE", "type_of_attr", "iter_stared_dirs_raw", "iter_stared_dirs", 
+    "ensure_attr_path", "iterdir_raw", "iterdir", "iter_files", "iter_files_raw", "dict_files", 
+    "traverse_files", "iter_dupfiles", "dict_dupfiles", "iter_image_files", "dict_image_files", 
 ]
 
 import errno
 
 from collections import defaultdict, deque
-from collections.abc import AsyncIterator, Callable, Collection, Coroutine, Iterable, Iterator
+from collections.abc import AsyncIterator, Callable, Collection, Coroutine, Iterable, Iterator, Mapping
 from itertools import chain, islice
 from operator import itemgetter
 from typing import cast, overload, Any, Final, Literal, NamedTuple, TypeVar
@@ -21,7 +21,6 @@ from warnings import warn
 
 from asynctools import async_filter, async_map, to_list
 from iterutils import run_gen_step, run_gen_step_iter, through, async_through, Yield, YieldFrom
-from dictattr import AttrDict
 from httpx import ReadTimeout
 from iter_collect import grouped_mapping, grouped_mapping_async, iter_keyed_dups, iter_keyed_dups_async, SupportsLT
 from p115client import check_response, normalize_attr, P115Client, P115OSError, P115Warning
@@ -41,7 +40,7 @@ class DirNode(NamedTuple):
     parent_id: int = 0
 
 
-def type_of_attr(attr: dict, /) -> int:
+def type_of_attr(attr: Mapping, /) -> int:
     """推断文件信息所属类型（试验版，未必准确）
 
     :param attr: 文件信息
@@ -178,10 +177,9 @@ def _iter_fs_files(
 
 
 @overload
-def traverse_stared_dirs(
+def iter_stared_dirs_raw(
     client: str | P115Client, 
     page_size: int = 10_000, 
-    find_ids: None | Iterable[int] = None, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     id_to_dirnode: None | dict[int, DirNode] = None, 
@@ -189,13 +187,12 @@ def traverse_stared_dirs(
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
-) -> Iterator[AttrDict]:
+) -> Iterator[dict]:
     ...
 @overload
-def traverse_stared_dirs(
+def iter_stared_dirs_raw(
     client: str | P115Client, 
     page_size: int = 10_000, 
-    find_ids: None | Iterable[int] = None, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     id_to_dirnode: None | dict[int, DirNode] = None, 
@@ -203,12 +200,11 @@ def traverse_stared_dirs(
     *, 
     async_: Literal[True], 
     **request_kwargs, 
-) -> AsyncIterator[AttrDict]:
+) -> AsyncIterator[dict]:
     ...
-def traverse_stared_dirs(
+def iter_stared_dirs_raw(
     client: str | P115Client, 
     page_size: int = 10_000, 
-    find_ids: None | Iterable[int] = None, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     id_to_dirnode: None | dict[int, DirNode] = None, 
@@ -216,15 +212,11 @@ def traverse_stared_dirs(
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
-) -> Iterator[AttrDict] | AsyncIterator[AttrDict]:
+) -> Iterator[dict] | AsyncIterator[dict]:
     """遍历以迭代获得所有被打上星标的目录信息
 
     :param client: 115 客户端或 cookies
     :param page_size: 分页大小
-    :param find_ids: 需要寻找的 id 集合
-        如果为 None 或空，则拉取所有打星标的文件夹；否则当找到所有这些 id 时，
-        如果之前的迭代过程中获取到其它 id 都已存在于 id_to_dirnode 就立即终止，否则就拉取所有打星标的文件夹。
-        如果从网上全部拉取完，还有一些在 find_ids 中的 id 没被看到，则报错 RuntimeError。
     :param order: 排序
 
         - "file_name": 文件名
@@ -246,59 +238,94 @@ def traverse_stared_dirs(
         page_size = 10_000
     elif page_size < 16:
         page_size = 16
-    if isinstance(client, str):
-        client = P115Client(client, check_for_relogin=True)
-    if id_to_dirnode is None:
-        id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
     payload = {
         "asc": asc, "cid": 0, "count_folders": 1, "cur": 0, "fc_mix": 0, "limit": page_size, 
         "o": order, "offset": 0, "show_dir": 1, "star": 1, 
     }
-    if find_ids:
-        if not isinstance(find_ids, Collection):
-            find_ids = tuple(find_ids)
-        need_to_find = set(find_ids)
-        remove_find = need_to_find.remove
-    else:
-        need_to_find = None
-    def gen_step():
-        all_seen: bool = True
-        it = _iter_fs_files(
-            client, 
-            payload=payload, 
-            id_to_dirnode=id_to_dirnode, 
-            raise_for_changed_count=raise_for_changed_count, 
-            only_dirs=True, 
-            async_=async_, 
-            **request_kwargs, 
-        )
-        def process(info: dict, /) -> AttrDict:
-            nonlocal all_seen
-            attr = normalize_attr(info)
-            cid = attr["id"]
-            if need_to_find and cid in need_to_find:
-                remove_find(cid)
-            elif cid not in id_to_dirnode:
-                all_seen = False
-            id_to_dirnode[cid] = DirNode(attr["name"], attr["parent_id"])
-            return attr
-        if async_:
-            async def request():
-                async for attr in async_map(process, it):
-                    yield attr
-                    if all_seen and not need_to_find:
-                        return
-                if need_to_find:
-                    raise P115OSError(errno.EIO, f"unable to find these ids: {need_to_find!r}")
-            yield YieldFrom(request())
-        else:
-            for attr in map(process, cast(Iterator, it)):
-                yield Yield(attr, identity=True)
-                if all_seen and not need_to_find:
-                    return
-            if need_to_find:
-                raise P115OSError(errno.EIO, f"unable to find these ids: {need_to_find!r}")
-    return run_gen_step_iter(gen_step, async_=async_)
+    return _iter_fs_files(
+        client, 
+        payload=payload, 
+        id_to_dirnode=id_to_dirnode, 
+        raise_for_changed_count=raise_for_changed_count, 
+        only_dirs=True, 
+        async_=async_, 
+        **request_kwargs, 
+    )
+
+
+@overload
+def iter_stared_dirs(
+    client: str | P115Client, 
+    page_size: int = 10_000, 
+    order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
+    asc: Literal[0, 1] = 1, 
+    normalize_attr: Callable[[dict], dict] = normalize_attr, 
+    id_to_dirnode: None | dict[int, DirNode] = None, 
+    raise_for_changed_count: bool = False, 
+    *, 
+    async_: Literal[False] = False, 
+    **request_kwargs, 
+) -> Iterator[dict]:
+    ...
+@overload
+def iter_stared_dirs(
+    client: str | P115Client, 
+    page_size: int = 10_000, 
+    order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
+    asc: Literal[0, 1] = 1, 
+    normalize_attr: Callable[[dict], dict] = normalize_attr, 
+    id_to_dirnode: None | dict[int, DirNode] = None, 
+    raise_for_changed_count: bool = False, 
+    *, 
+    async_: Literal[True], 
+    **request_kwargs, 
+) -> AsyncIterator[dict]:
+    ...
+def iter_stared_dirs(
+    client: str | P115Client, 
+    page_size: int = 10_000, 
+    order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
+    asc: Literal[0, 1] = 1, 
+    normalize_attr: Callable[[dict], dict] = normalize_attr, 
+    id_to_dirnode: None | dict[int, DirNode] = None, 
+    raise_for_changed_count: bool = False, 
+    *, 
+    async_: Literal[False, True] = False, 
+    **request_kwargs, 
+) -> Iterator[dict] | AsyncIterator[dict]:
+    """遍历以迭代获得所有被打上星标的目录信息
+
+    :param client: 115 客户端或 cookies
+    :param page_size: 分页大小
+    :param order: 排序
+
+        - "file_name": 文件名
+        - "file_size": 文件大小
+        - "file_type": 文件种类
+        - "user_utime": 修改时间
+        - "user_ptime": 创建时间
+        - "user_otime": 上一次打开时间
+
+    :param asc: 升序排列。0: 否，1: 是
+    :param normalize_attr: 把数据进行转换处理，使之便于阅读
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
+    :param async_: 是否异步
+    :param request_kwargs: 其它请求参数
+
+    :return: 迭代器，被打上星标的目录信息
+    """
+    do_map = async_map if async_ else map
+    return do_map(normalize_attr, iter_stared_dirs_raw( # type: ignore
+        client, 
+        page_size=page_size, 
+        order=order, 
+        asc=asc, 
+        id_to_dirnode=id_to_dirnode, 
+        raise_for_changed_count=raise_for_changed_count, 
+        async_=async_, # type: ignore
+        **request_kwargs, 
+    ))
 
 
 @overload
@@ -310,6 +337,7 @@ def ensure_attr_path(
     with_path: bool = True, 
     escape: None | Callable[[str], str] = escape, 
     id_to_dirnode: None | dict[int, DirNode] = None, 
+    errors: Literal["ignore", "raise", "warn"] = "raise", 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -324,6 +352,7 @@ def ensure_attr_path(
     with_path: bool = True, 
     escape: None | Callable[[str], str] = escape, 
     id_to_dirnode: None | dict[int, DirNode] = None, 
+    errors: Literal["ignore", "raise", "warn"] = "raise", 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -337,6 +366,7 @@ def ensure_attr_path(
     with_path: bool = True, 
     escape: None | Callable[[str], str] = escape, 
     id_to_dirnode: None | dict[int, DirNode] = None, 
+    errors: Literal["ignore", "raise", "warn"] = "raise", 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -350,6 +380,12 @@ def ensure_attr_path(
     :param with_path: 文件信息中是否要包含 "path"
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param errors: 如何处理错误
+
+        - "ignore": 忽略异常后继续
+        - "raise": 抛出异常
+        - "warn": 输出警告信息后继续
+
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -406,12 +442,19 @@ def ensure_attr_path(
     walk_through: Any = async_through if async_ else through
     def gen_step():
         if len(id_to_dirnode) <= 10_000:
-            yield walk_through(traverse_stared_dirs(
-                client, 
-                id_to_dirnode=id_to_dirnode, 
-                async_=async_, 
-                **request_kwargs, 
-            ))
+            try:
+                yield walk_through(iter_stared_dirs_raw(
+                    client, 
+                    id_to_dirnode=id_to_dirnode, 
+                    async_=async_, 
+                    **request_kwargs, 
+                ))
+            except Exception as e:
+                match errors:
+                    case "raise":
+                        raise
+                    case "warn":
+                        warn(f"{type(e).__module__}.{type(e).__qualname__}: {e}", category=P115Warning)
         pids: set[int] = set()
         for attr in attrs:
             pid = attr["parent_id"]
@@ -419,37 +462,68 @@ def ensure_attr_path(
                 id_to_dirnode[attr["id"]] = DirNode(attr["name"], pid)
             if pid != 0:
                 pids.add(pid)
+        def take_while(v, /) -> bool:
+            if v in find_ids:
+                find_ids.remove(v)
+            return bool(find_ids)
         while pids:
             if find_ids := pids - id_to_dirnode.keys():
-                if len(find_ids) <= len(id_to_dirnode) // page_size:
-                    for pid in find_ids:
-                        yield walk_next(iterdir(
+                try:
+                    if len(find_ids) <= len(id_to_dirnode) // page_size:
+                        for pid in find_ids:
+                            yield walk_next(iterdir_raw(
+                                client, 
+                                pid, 
+                                page_size=1, 
+                                id_to_dirnode=id_to_dirnode, 
+                                async_=async_, 
+                                **request_kwargs, 
+                            ), None)
+                    else:
+                        ids_it = iter(find_ids)
+                        while ids := ",".join(map(str, islice(ids_it, 10_000))):
+                            # NOTE: 批量给目录添加星标，这样便于把这些目录进行批量拉取
+                            yield client.fs_star_set(ids, async_=async_, **request_kwargs)
+                            # NOTE: 批量给目录添加空备注，这样可以更新这些目录的更新时间
+                            yield client.fs_desc_set(ids, async_=async_, **request_kwargs)
+                        yield walk_through(iter_stared_dirs_raw(
                             client, 
-                            pid, 
-                            page_size=1, 
+                            page_size, 
+                            order="user_utime", 
+                            asc=0, 
                             id_to_dirnode=id_to_dirnode, 
                             async_=async_, 
                             **request_kwargs, 
-                        ), None)
-                else:
-                    ids_it = iter(find_ids)
-                    while ids := ",".join(map(str, islice(ids_it, 10_000))):
-                        yield client.fs_star_set(ids, async_=async_, **request_kwargs)
-                    yield walk_through(traverse_stared_dirs(
-                        client, 
-                        page_size, 
-                        find_ids, 
-                        id_to_dirnode=id_to_dirnode, 
-                        async_=async_, 
-                        **request_kwargs, 
-                    ))
+                        ), take_while=take_while)
+                        if find_ids:
+                            raise P115OSError(errno.EIO, f"unable to find these ids: {find_ids}")
+                except Exception as e:
+                    match errors:
+                        case "raise":
+                            raise
+                        case "warn":
+                            warn(f"{type(e).__module__}.{type(e).__qualname__}: {e}", category=P115Warning)
             pids = {ppid for pid in pids if (ppid := id_to_dirnode[pid][1]) != 0}
         if with_ancestors:
             for attr in attrs:
-                attr["ancestors"] = get_ancestors(attr["id"], attr)
+                try:
+                    attr["ancestors"] = get_ancestors(attr["id"], attr)
+                except Exception as e:
+                    match errors:
+                        case "raise":
+                            raise
+                        case "warn":
+                            warn(f"{type(e).__module__}.{type(e).__qualname__}: {e}", category=P115Warning)
         if with_path:
             for attr in attrs:
-                attr["path"] = get_path(attr)
+                try:
+                    attr["path"] = get_path(attr)
+                except Exception as e:
+                    match errors:
+                        case "raise":
+                            raise
+                        case "warn":
+                            warn(f"{type(e).__module__}.{type(e).__qualname__}: {e}", category=P115Warning)
         return attrs
     return run_gen_step(gen_step, async_=async_)
 
@@ -556,13 +630,14 @@ def iterdir(
     with_ancestors: bool = False, 
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
+    normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode] = None, 
     raise_for_changed_count: bool = False, 
     only_dirs: bool = False, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
-) -> Iterator[AttrDict]:
+) -> Iterator[dict]:
     ...
 @overload
 def iterdir(
@@ -576,13 +651,14 @@ def iterdir(
     with_ancestors: bool = False, 
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
+    normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode] = None, 
     raise_for_changed_count: bool = False, 
     only_dirs: bool = False, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
-) -> AsyncIterator[AttrDict]:
+) -> AsyncIterator[dict]:
     ...
 def iterdir(
     client: str | P115Client, 
@@ -595,13 +671,14 @@ def iterdir(
     with_ancestors: bool = False, 
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
+    normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode] = None, 
     raise_for_changed_count: bool = False, 
     only_dirs: bool = False, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
-) -> Iterator[AttrDict] | AsyncIterator[AttrDict]:
+) -> Iterator[dict] | AsyncIterator[dict]:
     """迭代目录，获取文件信息
 
     :param client: 115 客户端或 cookies
@@ -622,6 +699,7 @@ def iterdir(
     :param with_ancestors: 文件信息中是否要包含 "ancestors"
     :param with_path: 文件信息中是否要包含 "path"
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
+    :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param only_dirs: 仅罗列目录
@@ -653,7 +731,7 @@ def iterdir(
         dirname = ""
         pancestors: list[dict] = []
         if with_ancestors or with_path:
-            def process(info: dict, /) -> AttrDict:
+            def process(info: dict, /) -> dict:
                 nonlocal dirname, pancestors
                 attr = normalize_attr(info)
                 if not pancestors:
@@ -803,12 +881,13 @@ def iter_files(
     with_ancestors: bool = False, 
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
+    normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
-) -> Iterator[AttrDict]:
+) -> Iterator[dict]:
     ...
 @overload
 def iter_files(
@@ -823,12 +902,13 @@ def iter_files(
     with_ancestors: bool = False, 
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
+    normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
-) -> AsyncIterator[AttrDict]:
+) -> AsyncIterator[dict]:
     ...
 def iter_files(
     client: str | P115Client, 
@@ -842,12 +922,13 @@ def iter_files(
     with_ancestors: bool = False, 
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
+    normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
-) -> Iterator[AttrDict] | AsyncIterator[AttrDict]:
+) -> Iterator[dict] | AsyncIterator[dict]:
     """遍历目录树，获取文件信息
 
     :param client: 115 客户端或 cookies
@@ -879,6 +960,7 @@ def iter_files(
     :param with_ancestors: 文件信息中是否要包含 "ancestors"
     :param with_path: 文件信息中是否要包含 "path"
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
+    :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param async_: 是否异步
@@ -891,7 +973,7 @@ def iter_files(
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
     if with_ancestors or with_path:
-        cache: list[AttrDict] = []
+        cache: list[dict] = []
         add_to_cache = cache.append
     if with_ancestors:
         id_to_ancestors: dict[int, list[dict]] = {}
@@ -988,12 +1070,13 @@ def dict_files(
     with_ancestors: bool = False, 
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
+    normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
-) -> dict[int, AttrDict]:
+) -> dict[int, dict]:
     ...
 @overload
 def dict_files(
@@ -1008,12 +1091,13 @@ def dict_files(
     with_ancestors: bool = False, 
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
+    normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
-) -> Coroutine[Any, Any, dict[int, AttrDict]]:
+) -> Coroutine[Any, Any, dict[int, dict]]:
     ...
 def dict_files(
     client: str | P115Client, 
@@ -1027,12 +1111,13 @@ def dict_files(
     with_ancestors: bool = False, 
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
+    normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
-) -> dict[int, AttrDict] | Coroutine[Any, Any, dict[int, AttrDict]]:
+) -> dict[int, dict] | Coroutine[Any, Any, dict[int, dict]]:
     """获取一个目录内的所有文件信息
 
     :param client: 115 客户端或 cookies
@@ -1064,6 +1149,7 @@ def dict_files(
     :param with_ancestors: 文件信息中是否要包含 "ancestors"
     :param with_path: 文件信息中是否要包含 "path"
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
+    :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param async_: 是否异步
@@ -1083,6 +1169,7 @@ def dict_files(
             order=order, 
             asc=asc, 
             cur=cur, 
+            normalize_attr=normalize_attr, 
             id_to_dirnode=id_to_dirnode, 
             raise_for_changed_count=raise_for_changed_count, 
             async_=async_, # type: ignore
@@ -1091,7 +1178,7 @@ def dict_files(
         if async_:
             async def request():
                 return {attr["id"]: attr async for attr in it} # type: ignore
-            id_to_attr: dict[int, AttrDict] = yield request
+            id_to_attr: dict[int, dict] = yield request
         else:
             id_to_attr = {attr["id"]: attr for attr in it}
         if with_ancestors or with_path:
@@ -1123,12 +1210,13 @@ def traverse_files(
     with_ancestors: bool = False, 
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
+    normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
-) -> Iterator[AttrDict]:
+) -> Iterator[dict]:
     ...
 @overload
 def traverse_files(
@@ -1143,12 +1231,13 @@ def traverse_files(
     with_ancestors: bool = False, 
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
+    normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
-) -> AsyncIterator[AttrDict]:
+) -> AsyncIterator[dict]:
     ...
 def traverse_files(
     client: str | P115Client, 
@@ -1162,12 +1251,13 @@ def traverse_files(
     with_ancestors: bool = False, 
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
+    normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
-) -> Iterator[AttrDict] | AsyncIterator[AttrDict]:
+) -> Iterator[dict] | AsyncIterator[dict]:
     """遍历目录树，获取文件信息（会根据统计信息，分解任务）
 
     :param client: 115 客户端或 cookies
@@ -1191,6 +1281,7 @@ def traverse_files(
     :param with_ancestors: 文件信息中是否要包含 "ancestors"
     :param with_path: 文件信息中是否要包含 "path"
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
+    :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param async_: 是否异步
@@ -1208,6 +1299,7 @@ def traverse_files(
             with_ancestors=with_ancestors, 
             with_path=with_path, 
             escape=escape, 
+            normalize_attr=normalize_attr, 
             id_to_dirnode=id_to_dirnode, 
             raise_for_changed_count=raise_for_changed_count, 
             async_=async_, # type: ignore
@@ -1279,6 +1371,7 @@ def traverse_files(
                                 with_ancestors=with_ancestors, 
                                 with_path=with_path, 
                                 escape=escape, 
+                                normalize_attr=normalize_attr, 
                                 id_to_dirnode=id_to_dirnode, 
                                 raise_for_changed_count=raise_for_changed_count, 
                                 async_=async_, 
@@ -1292,6 +1385,7 @@ def traverse_files(
                     with_ancestors=with_ancestors, 
                     with_path=with_path, 
                     escape=escape, 
+                    normalize_attr=normalize_attr, 
                     id_to_dirnode=id_to_dirnode, 
                     raise_for_changed_count=raise_for_changed_count, 
                     async_=async_, 
@@ -1319,57 +1413,60 @@ def traverse_files(
 def iter_dupfiles(
     client: str | P115Client, 
     cid: int = 0, 
-    key: Callable[[AttrDict], K] = itemgetter("sha1", "size"), 
-    keep_first: None | bool | Callable[[AttrDict], SupportsLT] = None, 
+    key: Callable[[dict], K] = itemgetter("sha1", "size"), 
+    keep_first: None | bool | Callable[[dict], SupportsLT] = None, 
     page_size: int = 10_000, 
     suffix: str = "", 
     type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
     auto_splitting_tasks: bool = True, 
     auto_splitting_threshold: int = 150_000, 
     auto_splitting_statistics_timeout: None | int | float = 5, 
+    normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
-) -> Iterator[tuple[K, AttrDict]]:
+) -> Iterator[tuple[K, dict]]:
     ...
 @overload
 def iter_dupfiles(
     client: str | P115Client, 
     cid: int = 0, 
-    key: Callable[[AttrDict], K] = itemgetter("sha1", "size"), 
-    keep_first: None | bool | Callable[[AttrDict], SupportsLT] = None, 
+    key: Callable[[dict], K] = itemgetter("sha1", "size"), 
+    keep_first: None | bool | Callable[[dict], SupportsLT] = None, 
     page_size: int = 10_000, 
     suffix: str = "", 
     type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
     auto_splitting_tasks: bool = True, 
     auto_splitting_threshold: int = 150_000, 
     auto_splitting_statistics_timeout: None | int | float = 5, 
+    normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
-) -> AsyncIterator[tuple[K, AttrDict]]:
+) -> AsyncIterator[tuple[K, dict]]:
     ...
 def iter_dupfiles(
     client: str | P115Client, 
     cid: int = 0, 
-    key: Callable[[AttrDict], K] = itemgetter("sha1", "size"), 
-    keep_first: None | bool | Callable[[AttrDict], SupportsLT] = None, 
+    key: Callable[[dict], K] = itemgetter("sha1", "size"), 
+    keep_first: None | bool | Callable[[dict], SupportsLT] = None, 
     page_size: int = 10_000, 
     suffix: str = "", 
     type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
     auto_splitting_tasks: bool = True, 
     auto_splitting_threshold: int = 150_000, 
     auto_splitting_statistics_timeout: None | int | float = 5, 
+    normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
-) -> Iterator[tuple[K, AttrDict]] | AsyncIterator[tuple[K, AttrDict]]:
+) -> Iterator[tuple[K, dict]] | AsyncIterator[tuple[K, dict]]:
     """遍历以迭代获得所有重复文件
 
     :param client: 115 客户端或 cookies
@@ -1398,6 +1495,7 @@ def iter_dupfiles(
     :param auto_splitting_tasks: 是否根据统计信息自动拆分任务
     :param auto_splitting_threshold: 如果 `auto_splitting_tasks` 为 True，且目录内的文件数大于 `auto_splitting_threshold`，则分拆此任务到它的各个直接子目录，否则批量拉取
     :param auto_splitting_statistics_timeout: 如果执行统计超过此时间，则立即终止，并认为文件是无限多
+    :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param async_: 是否异步
@@ -1405,7 +1503,7 @@ def iter_dupfiles(
 
     :return: 迭代器，返回 key 和 重复文件信息 的元组
     """
-    it: Iterator[AttrDict] | AsyncIterator[AttrDict] = traverse_files(
+    it: Iterator[dict] | AsyncIterator[dict] = traverse_files(
         client, 
         cid, 
         page_size=page_size, 
@@ -1414,20 +1512,21 @@ def iter_dupfiles(
         auto_splitting_tasks=auto_splitting_tasks, 
         auto_splitting_threshold=auto_splitting_threshold, 
         auto_splitting_statistics_timeout=auto_splitting_statistics_timeout, 
+        normalize_attr=normalize_attr, 
         id_to_dirnode=id_to_dirnode, 
         raise_for_changed_count=raise_for_changed_count, 
         async_=async_, # type: ignore
         **request_kwargs, 
     )
     if async_:
-        it = cast(AsyncIterator[AttrDict], it)
+        it = cast(AsyncIterator[dict], it)
         return iter_keyed_dups_async(
             it, 
             key=key, 
             keep_first=keep_first, 
         )
     else:
-        it = cast(Iterator[AttrDict], it)
+        it = cast(Iterator[dict], it)
         return iter_keyed_dups(
             it, 
             key=key, 
@@ -1439,8 +1538,8 @@ def iter_dupfiles(
 def dict_dupfiles(
     client: str | P115Client, 
     cid: int = 0, 
-    key: Callable[[AttrDict], K] = itemgetter("sha1", "size"), 
-    keep_first: None | bool | Callable[[AttrDict], SupportsLT] = None, 
+    key: Callable[[dict], K] = itemgetter("sha1", "size"), 
+    keep_first: None | bool | Callable[[dict], SupportsLT] = None, 
     page_size: int = 10_000, 
     suffix: str = "", 
     type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
@@ -1450,19 +1549,20 @@ def dict_dupfiles(
     with_ancestors: bool = False, 
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
+    normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
-) -> dict[K, list[AttrDict]] | Coroutine[Any, Any, dict[K, list[AttrDict]]]:
+) -> dict[K, list[dict]]:
     ...
 @overload
 def dict_dupfiles(
     client: str | P115Client, 
     cid: int = 0, 
-    key: Callable[[AttrDict], K] = itemgetter("sha1", "size"), 
-    keep_first: None | bool | Callable[[AttrDict], SupportsLT] = None, 
+    key: Callable[[dict], K] = itemgetter("sha1", "size"), 
+    keep_first: None | bool | Callable[[dict], SupportsLT] = None, 
     page_size: int = 10_000, 
     suffix: str = "", 
     type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
@@ -1472,18 +1572,19 @@ def dict_dupfiles(
     with_ancestors: bool = False, 
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
+    normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
-) -> Coroutine[Any, Any, dict[K, list[AttrDict]]]:
+) -> Coroutine[Any, Any, dict[K, list[dict]]]:
     ...
 def dict_dupfiles(
     client: str | P115Client, 
     cid: int = 0, 
-    key: Callable[[AttrDict], K] = itemgetter("sha1", "size"), 
-    keep_first: None | bool | Callable[[AttrDict], SupportsLT] = None, 
+    key: Callable[[dict], K] = itemgetter("sha1", "size"), 
+    keep_first: None | bool | Callable[[dict], SupportsLT] = None, 
     page_size: int = 10_000, 
     suffix: str = "", 
     type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
@@ -1493,12 +1594,13 @@ def dict_dupfiles(
     with_ancestors: bool = False, 
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
+    normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
-) -> dict[K, list[AttrDict]] | Coroutine[Any, Any, dict[K, list[AttrDict]]]:
+) -> dict[K, list[dict]] | Coroutine[Any, Any, dict[K, list[dict]]]:
     """遍历以迭代获得所有重复文件的分组字典
 
     :param client: 115 客户端或 cookies
@@ -1530,6 +1632,7 @@ def dict_dupfiles(
     :param with_ancestors: 文件信息中是否要包含 "ancestors"
     :param with_path: 文件信息中是否要包含 "path"
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
+    :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param async_: 是否异步
@@ -1538,7 +1641,7 @@ def dict_dupfiles(
     :return: 字典，key 是分组的 key，value 是归属这一组的文件信息列表
     """
     def gen_step():
-        it: Iterator[tuple[K, AttrDict]] | AsyncIterator[tuple[K, AttrDict]] = iter_dupfiles(
+        it: Iterator[tuple[K, dict]] | AsyncIterator[tuple[K, dict]] = iter_dupfiles(
             client, 
             cid, 
             key=key, 
@@ -1549,16 +1652,17 @@ def dict_dupfiles(
             auto_splitting_tasks=auto_splitting_tasks, 
             auto_splitting_threshold=auto_splitting_threshold, 
             auto_splitting_statistics_timeout=auto_splitting_statistics_timeout, 
+            normalize_attr=normalize_attr, 
             id_to_dirnode=id_to_dirnode, 
             raise_for_changed_count=raise_for_changed_count, 
             async_=async_, # type: ignore
             **request_kwargs, 
         )
         if async_:
-            it = cast(AsyncIterator[tuple[K, AttrDict]], it)          
-            dups: dict[K, list[AttrDict]] = yield grouped_mapping_async(it)
+            it = cast(AsyncIterator[tuple[K, dict]], it)          
+            dups: dict[K, list[dict]] = yield grouped_mapping_async(it)
         else:
-            it = cast(Iterator[tuple[K, AttrDict]], it)
+            it = cast(Iterator[tuple[K, dict]], it)
             dups = grouped_mapping(it)
         if with_ancestors or with_path:
             yield ensure_attr_path(
