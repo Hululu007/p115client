@@ -9,6 +9,7 @@ __all__ = [
     "ensure_attr_path", "iterdir_raw", "iterdir", "iter_files", "iter_files_raw", "dict_files", 
     "traverse_files", "iter_dupfiles", "dict_dupfiles", "iter_image_files", "dict_image_files", 
 ]
+__doc__ = "这个模块提供了一些和目录信息罗列有关的函数"
 
 import errno
 
@@ -69,6 +70,86 @@ def type_of_attr(attr: Mapping, /) -> int:
     if attr.get("thumb"):
         return 2
     return 99
+
+
+@overload
+def get_id_to_path(
+    client: str | P115Client, 
+    path: str, 
+    /, 
+    ensure_dir: None | bool = None, 
+    *, 
+    async_: Literal[False] = False, 
+    **request_kwargs, 
+) -> str:
+    ...
+@overload
+def get_id_to_path(
+    client: str | P115Client, 
+    path: str, 
+    /, 
+    ensure_dir: None | bool = None, 
+    *, 
+    async_: Literal[True], 
+    **request_kwargs, 
+) -> Coroutine[Any, Any, str]:
+    ...
+def get_id_to_path(
+    client: str | P115Client, 
+    path: str, 
+    /, 
+    ensure_dir: None | bool = None, 
+    *, 
+    async_: Literal[False, True] = False, 
+    **request_kwargs, 
+) -> str | Coroutine[Any, Any, str]:
+    """获取路径对应的文件信息
+    """
+    patht, _ = splits("/" + path)
+    if len(patht) == 1:
+        return 0
+    if isinstance(client, str):
+        client = P115Client(client, check_for_relogin=True)
+    error = FileNotFoundError(errno.ENOENT, f"no such path: {path!r}")
+
+    path = joins(patht)
+    if (
+        path_persistence_commitment and 
+        PATH_TO_PICKCODE is not None and
+        (pickcode := PATH_TO_PICKCODE.get(path))
+    ):
+        return pickcode
+    i = 1
+    if len(patht) > 2:
+        for i in range(1, len(patht) - 1):
+            name = patht[i]
+            if name in (".", "..") or "/" in name:
+                break
+        else:
+            i += 1
+    if i == 1:
+        cid = "0"
+        dirname = ""
+    else:
+        dirname = joins(patht[1:i])
+        resp = await client.fs_dir_getid(dirname, async_=True, request=request)
+        if not (cid := resp["id"]):
+            raise error
+    for name in patht[i:-1]:
+        async for info in iterdir(client, cid, only_dirs_or_files=True, request=request):
+            if info["n"] == name:
+                cid = info["pid"]
+                dirname += "/" + escape(name)
+                break
+        else:
+            raise error
+    name = patht[-1]
+    async for info in iterdir(client, cid, only_dirs_or_files=False, request=request):
+        attr = normalize_attr(info, dirname)
+        if attr["name"] == name:
+            return attr["pickcode"]
+    else:
+        raise error
 
 
 @overload

@@ -160,8 +160,20 @@ class P115URL(str):
     def mapping(self, /) -> dict[str, Any]:
         return self.__dict__
 
+    def get(self, key, /, default=None):
+        return self.__dict__.get(key, default)
+
     def geturl(self, /) -> str:
         return str(self)
+
+    def items(self, /):
+        return self.__dict__.items()
+
+    def keys(self, /):
+        return self.__dict__.keys()
+
+    def values(self, /):
+        return self.__dict__.values()
 
     url = property(geturl)
 

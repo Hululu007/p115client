@@ -141,9 +141,12 @@ def convert_digest(digest, /):
 
 
 def make_url(url: str, params, /):
+    query = ""
     if isinstance(params, str):
         query = params
-    else:
+    elif isinstance(params, Iterable):
+        if not isinstance(params, (Mapping, Sequence)):
+            params = tuple(params)
         query = urlencode(params)
     if query:
         if "?" in url:
@@ -1098,13 +1101,13 @@ class P115Client:
 
                     from urlopen import request
 
-            3. `urllib3_request <https://pypi.org/project/urllib3_request/>`_，由 `urllib3 <https://pypi.org/project/urllib3/>`_ 封装，支持同步调用
+            3. `urllib3_request <https://pypi.org/project/urllib3_request/>`_，由 `urllib3 <https://pypi.org/project/urllib3/>`_ 封装，支持同步调用，性能相对较好，推荐使用
 
                 .. code:: python
 
                     from urllib3_request import request
 
-            4. `requests_request <https://pypi.org/project/requests_request/>`_，由 `requests <https://pypi.org/project/requests/>`_ 封装，支持同步调用，性能相对最好，推荐使用
+            4. `requests_request <https://pypi.org/project/requests_request/>`_，由 `requests <https://pypi.org/project/requests/>`_ 封装，支持同步调用
 
                 .. code:: python
 
@@ -1116,7 +1119,7 @@ class P115Client:
 
                     from aiohttp_client_request import request
 
-            6. `blacksheep_client_request <https://pypi.org/project/blacksheep_client_request/>`_，由 `blacksheep <https://pypi.org/project/blacksheep/>`_ 封装，支持异步调用，异步并发能力最强，推荐使用
+            6. `blacksheep_client_request <https://pypi.org/project/blacksheep_client_request/>`_，由 `blacksheep <https://pypi.org/project/blacksheep/>`_ 封装，支持异步调用
 
                 .. code:: python
 
@@ -1676,7 +1679,7 @@ class P115Client:
         GET https://captchaapi.115.com/?ct=index&ac=code&t=all
         """
         api = "https://captchaapi.115.com/?ct=index&ac=code&t=all"
-        request_kwargs["parse"] = False
+        request_kwargs.setdefault("parse", False)
         return self.request(url=api, async_=async_, **request_kwargs)
 
     @overload
@@ -1706,7 +1709,7 @@ class P115Client:
         GET https://captchaapi.115.com/?ct=index&ac=code
         """
         api = "https://captchaapi.115.com/?ct=index&ac=code"
-        request_kwargs["parse"] = False
+        request_kwargs.setdefault("parse", False)
         return self.request(url=api, async_=async_, **request_kwargs)
 
     @overload
@@ -1770,7 +1773,7 @@ class P115Client:
         if not 0 <= id <= 9:
             raise ValueError(f"expected integer between 0 and 9, got {id}")
         api = f"https://captchaapi.115.com/?ct=index&ac=code&t=single&id={id}"
-        request_kwargs["parse"] = False
+        request_kwargs.setdefault("parse", False)
         return self.request(url=api, async_=async_, **request_kwargs)
 
     @overload
@@ -1814,10 +1817,20 @@ class P115Client:
             payload = {"code": payload, "ac": "security_code", "type": "web", "ctype": "web", "client": "web"}
         else:
             payload = {"ac": "security_code", "type": "web", "ctype": "web", "client": "web", **payload}
-        if "sign" not in payload:
-            payload["sign"] = self.captcha_sign()["sign"]
-        api = "https://webapi.115.com/user/captcha"
-        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+        def gen_step():
+            if "sign" not in payload:
+                resp = yield self.captcha_sign(async_=async_)
+                payload["sign"] = resp["sign"]
+            api = "https://webapi.115.com/user/captcha"
+            return (yield partial(
+                self.request, 
+                url=api, 
+                method="POST", 
+                data=payload, 
+                async_=async_, 
+                **request_kwargs, 
+            ))
+        return run_gen_step(gen_step, async_=async_)
 
     ########## Download API ##########
 
@@ -2203,7 +2216,7 @@ class P115Client:
                             break
             json["headers"] = headers
             return json
-        request_kwargs["parse"] = parse
+        request_kwargs.setdefault("parse", parse)
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -3121,13 +3134,15 @@ class P115Client:
         POST https://webapi.115.com/files/export_dir
 
         :payload:
-            - file_ids: int | str   💡 有多个时，用逗号 "," 隔开
+            - file_ids: int | str   💡 多个用逗号 "," 隔开
             - target: str = "U_1_0" 💡 导出目录树到这个目录
             - layer_limit: int = <default> 💡 层级深度，自然数
         """
         api = "https://webapi.115.com/files/export_dir"
         if isinstance(payload, (int, str)):
-            payload = {"file_ids": payload, "target": "U_1_0"}
+            payload = {"target": "U_1_0", "file_ids": payload}
+        else:
+            payload = {"target": "U_1_0", **payload}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -4722,6 +4737,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        pid: int = 0, 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4731,6 +4748,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        pid: int = 0, 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -4739,6 +4758,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        pid: int = 0, 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -4752,9 +4773,9 @@ class P115Client:
         """
         api = "https://webapi.115.com/files/add"
         if isinstance(payload, str):
-            payload = {"pid": 0, "cname": payload}
+            payload = {"pid": pid, "cname": payload}
         else:
-            payload = {"pid": 0, **payload}
+            payload = {"pid": pid, **payload}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -6627,11 +6648,20 @@ class P115Client:
             - wp_path_id: int | str = <default> 💡 保存到目录的 id
         """
         api = "https://115.com/web/lixian/?ct=lixian&ac=add_task_bt"
-        if "sign" not in payload:
-            info = self.offline_info()
-            payload["sign"] = info["sign"]
-            payload["time"] = info["time"]
-        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+        def gen_step():
+            if "sign" not in payload:
+                info = yield self.offline_info(async_=async_)
+                payload["sign"] = info["sign"]
+                payload["time"] = info["time"]
+            return (yield partial(
+                self.request, 
+                url=api, 
+                method="POST", 
+                data=payload, 
+                async_=async_, 
+                **request_kwargs, 
+            ))
+        return run_gen_step(gen_step, async_=async_)
 
     @overload
     def offline_add_url(
@@ -6672,11 +6702,20 @@ class P115Client:
         api = "https://115.com/web/lixian/?ct=lixian&ac=add_task_url"
         if isinstance(payload, str):
             payload = {"url": payload}
-        if "sign" not in payload:
-            info = self.offline_info()
-            payload["sign"] = info["sign"]
-            payload["time"] = info["time"]
-        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+        def gen_step():
+            if "sign" not in payload:
+                info = yield self.offline_info(async_=async_)
+                payload["sign"] = info["sign"]
+                payload["time"] = info["time"]
+            return (yield partial(
+                self.request, 
+                url=api, 
+                method="POST", 
+                data=payload, 
+                async_=async_, 
+                **request_kwargs, 
+            ))
+        return run_gen_step(gen_step, async_=async_)
 
     @overload
     def offline_add_urls(
@@ -6721,11 +6760,20 @@ class P115Client:
             payload = {f"url[{i}]": url for i, url in enumerate(payload)}
             if not payload:
                 raise ValueError("no `url` specified")
-        if "sign" not in payload:
-            info = self.offline_info()
-            payload["sign"] = info["sign"]
-            payload["time"] = info["time"]
-        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+        def gen_step():
+            if "sign" not in payload:
+                info = yield self.offline_info(async_=async_)
+                payload["sign"] = info["sign"]
+                payload["time"] = info["time"]
+            return (yield partial(
+                self.request, 
+                url=api, 
+                method="POST", 
+                data=payload, 
+                async_=async_, 
+                **request_kwargs, 
+            ))
+        return run_gen_step(gen_step, async_=async_)
 
     @overload
     def offline_clear(
@@ -6969,11 +7017,20 @@ class P115Client:
         api = "https://lixian.115.com/lixian/?ct=lixian&ac=task_del"
         if isinstance(payload, str):
             payload = {"hash[0]": payload}
-        if "sign" not in payload:
-            info = self.offline_info()
-            payload["sign"] = info["sign"]
-            payload["time"] = info["time"]
-        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+        def gen_step():
+            if "sign" not in payload:
+                info = yield self.offline_info(async_=async_)
+                payload["sign"] = info["sign"]
+                payload["time"] = info["time"]
+            return (yield partial(
+                self.request, 
+                url=api, 
+                method="POST", 
+                data=payload, 
+                async_=async_, 
+                **request_kwargs, 
+            ))
+        return run_gen_step(gen_step, async_=async_)
 
     @overload
     def offline_torrent_info(
@@ -8669,7 +8726,7 @@ class P115Client:
             url = self.upload_endpoint_url(bucket, object)
             token = cast(dict, (yield self.upload_token(async_=async_)))
             if partsize <= 0:
-                return (yield oss_upload(
+                resp = yield oss_upload(
                     self.request, 
                     file, 
                     url=url, 
@@ -8681,9 +8738,9 @@ class P115Client:
                     make_reporthook=make_reporthook, # type: ignore
                     async_=async_, # type: ignore
                     **request_kwargs, 
-                ))
+                )
             else:
-                return (yield oss_multipart_upload(
+                resp = yield oss_multipart_upload(
                     self.request, 
                     file, 
                     url=url, 
@@ -8696,7 +8753,22 @@ class P115Client:
                     make_reporthook=make_reporthook, # type: ignore
                     async_=async_, # type: ignore
                     **request_kwargs, 
-                ))
+                )
+            if resp["state"]:
+                call = partial(
+                    self.upload_file_init, 
+                    filename=filename, 
+                    filesize=filesize, 
+                    filesha1=filesha1, 
+                    read_range_bytes_or_hash=read_range_bytes_or_hash, 
+                    pid=pid, 
+                    **request_kwargs, 
+                )
+                if async_:
+                    create_task(to_thread(call))
+                else:
+                    start_new_thread(call, ())
+            return resp
         return run_gen_step(gen_step, async_=async_)
 
     ########## User API ##########
@@ -9589,7 +9661,9 @@ class P115Client:
                         return f"{start}-"
                     elif stop < 0:
                         stop += length
-                if start >= stop:
+                if stop is None:
+                    return f"{start}-"
+                elif start >= stop:
                     return None
                 return f"{start}-{stop-1}"
             bytes_range = yield from get_bytes_range(start, stop)
@@ -9646,10 +9720,11 @@ class P115Client:
         :param async_: 是否异步
         :param request_kwargs: 其它请求参数
         """
-        if headers:
-            headers = {**headers, "Accept-Encoding": "identity", "Range": f"bytes={bytes_range}"}
-        else:
-            headers = {"Accept-Encoding": "identity", "Range": f"bytes={bytes_range}"}
+        headers = dict(headers) if headers else {}
+        if isinstance(url, P115URL) and (headers_extra := url.get("headers")):
+            headers.update(headers_extra)
+        headers["Accept-Encoding"] = "identity"
+        headers["Range"] = f"bytes={bytes_range}"
         request_kwargs["headers"] = headers
         request_kwargs.setdefault("method", "GET")
         request_kwargs.setdefault("parse", False)
@@ -9660,7 +9735,7 @@ class P115Client:
         self, 
         /, 
         url: str, 
-        size: int = 0, 
+        size: int = -1, 
         offset: int = 0, 
         headers: None | Mapping = None, 
         *, 
@@ -9673,7 +9748,7 @@ class P115Client:
         self, 
         /, 
         url: str, 
-        size: int = 0, 
+        size: int = -1, 
         offset: int = 0, 
         headers: None | Mapping = None, 
         *, 
@@ -9685,7 +9760,7 @@ class P115Client:
         self, 
         /, 
         url: str, 
-        size: int = 0, 
+        size: int = -1, 
         offset: int = 0, 
         headers: None | Mapping = None, 
         *, 
@@ -9695,19 +9770,23 @@ class P115Client:
         """读取文件一定索引范围的数据
 
         :param url: 115 文件的下载链接（可以从网盘、网盘上的压缩包内、分享链接中获取）
-        :param size: 下载字节数（最多下载这么多字节，如果遇到 EOF，就可能较小）
+        :param size: 读取字节数（最多读取这么多字节，如果遇到 EOF (end-of-file)，则会小于这个值），如果小于 0，则读取到文件末尾
         :param offset: 偏移索引，从 0 开始，可以为负数（从文件尾部开始）
         :param headers: 请求头
         :param async_: 是否异步
         :param request_kwargs: 其它请求参数
         """
         def gen_step():
-            if size <= 0:
+            if size == 0:
                 return b""
+            elif size > 0:
+                stop: int | None = offset + size
+            else:
+                stop = None
             return (yield self.read_bytes(
                 url, 
                 start=offset, 
-                stop=offset+size, 
+                stop=stop, 
                 headers=headers, 
                 async_=async_, 
                 **request_kwargs, 

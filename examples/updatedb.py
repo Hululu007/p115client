@@ -112,7 +112,7 @@ def cut_iter(
         yield start, stop - start
 
 
-def normalize_path(path: str, /):
+def normalize_path(path: str, /) -> int | str:
     if path in ("0", ".", "..", "/"):
         return 0
     if path.isdecimal():
@@ -120,9 +120,13 @@ def normalize_path(path: str, /):
     if path.startswith("根目录 > "):
         patht = path.split(" > ")
         patht[0] = ""
-        return joins(patht)
-    if not path.startswith("/"):
-        path = "/" + path
+        path = joins(patht)
+    else:
+        if not path.startswith("/"):
+            path = "/" + path
+        path = normpath(path)
+    if path == "/":
+        return 0
     return normpath(path)
 
 
@@ -697,28 +701,37 @@ def updatedb(
         if isinstance(top_dirs, int):
             top_ids: Collection[int] = (top_dirs,)
         elif isinstance(top_dirs, str):
-            try:
-                resp = client.fs_dir_getid(normalize_path(top_dirs))
-                if not resp["state"]:
+            top_dir = normalize_path(top_dirs)
+            if isinstance(top_dir, int):
+                top_ids = (top_dir,)
+            else:
+                try:
+                    resp = client.fs_dir_getid(top_dir)
+                    if not resp["id"]:
+                        return
+                    top_ids = (int(resp["id"]),)
+                except:
+                    logger.exception("[\x1b[1;31mFAIL\x1b[0m] %r", top_dirs)
                     return
-                top_ids = (int(resp["id"]),)
-            except:
-                logger.exception("[\x1b[1;31mFAIL\x1b[0m] %s", top_dirs)
-                return
         else:
             top_ids = set()
+            add_id = top_ids.add
             for top_dir in top_dirs:
                 if isinstance(top_dir, int):
-                    top_ids.add(top_dir)
+                    add_id(top_dir)
                 else:
-                    try:
-                        resp = client.fs_dir_getid(normalize_path(top_dir))
-                        if not resp["state"]:
+                    top_dir = normalize_path(top_dir)
+                    if isinstance(top_dir, int):
+                        add_id(top_dir)
+                    else:
+                        try:
+                            resp = client.fs_dir_getid(top_dir)
+                            if not resp["id"]:
+                                continue
+                            add_id(int(resp["id"]))
+                        except:
+                            logger.exception("[\x1b[1;31mFAIL\x1b[0m] %r", top_dir)
                             continue
-                        top_ids.add(int(resp["id"]))
-                    except:
-                        logger.exception("[\x1b[1;31mFAIL\x1b[0m] %s", top_dir)
-                        continue
             if not top_ids:
                 return
         if resume:
