@@ -54,18 +54,6 @@ if __name__ == "__main__":
         print(".".join(map(str, __version__)))
         raise SystemExit(0)
 
-import logging
-
-from collections import deque, ChainMap
-from collections.abc import Collection, Iterator, Iterable, Mapping
-from errno import EBUSY, ENOENT, ENOTDIR
-from os.path import splitext
-from sqlite3 import (
-    connect, register_adapter, register_converter, Connection, Cursor, 
-    Row, PARSE_COLNAMES, PARSE_DECLTYPES
-)
-from typing import cast
-
 try:
     from orjson import dumps, loads
     from p115client import check_response, P115Client
@@ -77,6 +65,18 @@ except ImportError:
     from orjson import dumps, loads
     from p115client import check_response, P115Client
     from posixpatht import escape, joins, normpath
+
+import logging
+
+from collections import deque, ChainMap
+from collections.abc import Callable, Collection, Iterator, Iterable, Mapping
+from errno import EBUSY, ENOENT, ENOTDIR
+from os.path import splitext
+from sqlite3 import (
+    connect, register_adapter, register_converter, Connection, Cursor, 
+    Row, PARSE_COLNAMES, PARSE_DECLTYPES
+)
+from typing import cast
 
 
 register_adapter(list, dumps)
@@ -119,15 +119,14 @@ def normalize_path(path: str, /) -> int | str:
         return int(path)
     if path.startswith("根目录 > "):
         patht = path.split(" > ")
+        if len(patht) == 1:
+            return 0
         patht[0] = ""
-        path = joins(patht)
-    else:
-        if not path.startswith("/"):
-            path = "/" + path
-        path = normpath(path)
+        return joins(patht)
+    path = normpath("/" + path)
     if path == "/":
         return 0
-    return normpath(path)
+    return path
 
 
 def do_commit(

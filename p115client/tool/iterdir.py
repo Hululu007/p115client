@@ -5,7 +5,7 @@ from __future__ import annotations
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __all__ = [
-    "ID_TO_DIRNODE_CACHE", "type_of_attr", "iter_stared_dirs_raw", "iter_stared_dirs", 
+    "ID_TO_DIRNODE_CACHE", "type_of_attr", "get_id_of_path", "iter_stared_dirs_raw", "iter_stared_dirs", 
     "ensure_attr_path", "iterdir_raw", "iterdir", "iter_files", "iter_files_raw", "dict_files", 
     "traverse_files", "iter_dupfiles", "dict_dupfiles", "iter_image_files", "dict_image_files", 
 ]
@@ -26,7 +26,7 @@ from httpx import ReadTimeout
 from iter_collect import grouped_mapping, grouped_mapping_async, iter_keyed_dups, iter_keyed_dups_async, SupportsLT
 from p115client import check_response, normalize_attr, P115Client, P115OSError, P115Warning
 from p115client.const import CLASS_TO_TYPE, SUFFIX_TO_TYPE
-from posixpatht import escape, splitext
+from posixpatht import escape, splitext, splits
 
 
 D = TypeVar("D", bound=dict)
@@ -73,83 +73,131 @@ def type_of_attr(attr: Mapping, /) -> int:
 
 
 @overload
-def get_id_to_path(
+def get_id_of_path(
     client: str | P115Client, 
     path: str, 
     /, 
-    ensure_dir: None | bool = None, 
+    ensure_file: None | bool = None, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
-) -> str:
+) -> int:
     ...
 @overload
-def get_id_to_path(
+def get_id_of_path(
     client: str | P115Client, 
     path: str, 
     /, 
-    ensure_dir: None | bool = None, 
+    ensure_file: None | bool = None, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
-) -> Coroutine[Any, Any, str]:
+) -> Coroutine[Any, Any, int]:
     ...
-def get_id_to_path(
+def get_id_of_path(
     client: str | P115Client, 
     path: str, 
     /, 
-    ensure_dir: None | bool = None, 
+    ensure_file: None | bool = None, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
-) -> str | Coroutine[Any, Any, str]:
-    """获取路径对应的文件信息
+) -> int | Coroutine[Any, Any, int]:
+    """获取路径对应的 id
+
+    :param client: 115 客户端或 cookies
+    :param path: 路径
+    :param ensure_dir: 是否确保为文件
+
+        - True: 必须是文件
+        - False: 必须是目录
+        - None: 可以是目录或文件
+
+    :param async_: 是否异步
+    :param request_kwargs: 其它请求参数
+
+    :return: 文件或目录的 id
     """
-    patht, _ = splits("/" + path)
-    if len(patht) == 1:
-        return 0
     if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     error = FileNotFoundError(errno.ENOENT, f"no such path: {path!r}")
-
-    path = joins(patht)
-    if (
-        path_persistence_commitment and 
-        PATH_TO_PICKCODE is not None and
-        (pickcode := PATH_TO_PICKCODE.get(path))
-    ):
-        return pickcode
-    i = 1
-    if len(patht) > 2:
-        for i in range(1, len(patht) - 1):
-            name = patht[i]
-            if name in (".", "..") or "/" in name:
-                break
+    def gen_step():
+        nonlocal client
+        if path in (".", "..", "/"):
+            if ensure_file:
+                raise error
+            return 0
+        if path.startswith("根目录 > "):
+            patht = path.split(" > ")
+            patht[0] = ""
         else:
-            i += 1
-    if i == 1:
-        cid = "0"
-        dirname = ""
-    else:
-        dirname = joins(patht[1:i])
-        resp = await client.fs_dir_getid(dirname, async_=True, request=request)
-        if not (cid := resp["id"]):
-            raise error
-    for name in patht[i:-1]:
-        async for info in iterdir(client, cid, only_dirs_or_files=True, request=request):
-            if info["n"] == name:
-                cid = info["pid"]
-                dirname += "/" + escape(name)
-                break
+            patht, _ = splits("/" + path)
+        if len(patht) == 1:
+            if ensure_file:
+                raise error
+            return 0
+        i = 1
+        if len(patht) > 1:
+            for i in range(1, len(patht) - bool(ensure_file)):
+                name = patht[i]
+                if "/" in name:
+                    break
+            else:
+                i += 1
+        if i == 1:
+            cid = 0
+            dirname = "/"
         else:
-            raise error
-    name = patht[-1]
-    async for info in iterdir(client, cid, only_dirs_or_files=False, request=request):
-        attr = normalize_attr(info, dirname)
-        if attr["name"] == name:
-            return attr["pickcode"]
-    else:
-        raise error
+            dirname = "/".join(patht[:i])
+            resp = yield client.fs_dir_getid(dirname, async_=async_, **request_kwargs)
+            if not (resp["state"] and (cid := resp["id"])):
+                raise error
+            if not ensure_file:
+                return cid
+        for name in patht[i:-1]:
+            if async_:
+                async def request():
+                    nonlocal cid
+                    async for info in iterdir_raw(client, cid, only_dirs=True, async_=True, **request_kwargs):
+                        if info["n"] == name:
+                            cid = int(info["pid"])
+                            break
+                    else:
+                        raise error
+                yield request
+            else:
+                for info in iterdir_raw(client, cid, only_dirs=True, **request_kwargs):
+                    if info["n"] == name:
+                        cid = int(info["pid"])
+                        break
+                else:
+                    raise error
+        name = patht[-1]
+        if async_:
+            async def request():
+                async for info in iterdir_raw(client, cid, async_=True, **request_kwargs):
+                    if info["n"] == name:
+                        is_file = "fid" in info
+                        if ensure_file:
+                            if is_file:
+                                return int(info["fid"])
+                        elif not is_file:
+                            return int(info["cid"])
+                else:
+                    raise error
+            return (yield request)
+        else:
+            for info in iterdir_raw(client, cid, **request_kwargs):
+                if info["n"] == name:
+                    is_file = "fid" in info
+                    if ensure_file:
+                        if is_file:
+                            return int(info["fid"])
+                    elif not is_file:
+                        return int(info["cid"])
+            else:
+                raise error
+    return run_gen_step(gen_step, async_=async_)
 
 
 @overload

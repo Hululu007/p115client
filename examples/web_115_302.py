@@ -397,7 +397,7 @@ def make_application(
         if len(patht) > 2:
             for i in range(1, len(patht) - 1):
                 name = patht[i]
-                if name in (".", "..") or "/" in name:
+                if "/" in name:
                     break
             else:
                 i += 1
@@ -405,9 +405,9 @@ def make_application(
             cid = "0"
             dirname = ""
         else:
-            dirname = joins(patht[1:i])
+            dirname = "/".join(patht[1:i])
             resp = await client.fs_dir_getid(dirname, async_=True, request=request)
-            if not (cid := resp["id"]):
+            if not (resp["state"] and (cid := resp["id"])):
                 raise error
         for name in patht[i:-1]:
             async for info in iterdir(client, cid, only_dirs_or_files=True, request=request):

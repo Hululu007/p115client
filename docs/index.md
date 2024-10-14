@@ -18,10 +18,11 @@ reference/type
 ```
 
 ```{toctree}
-:caption: Extension
+:caption: Tool
 :hidden:
 
-reference/tool
+reference/tool/iterdir
+reference/tool/export_dir
 ```
 
 ```{toctree}

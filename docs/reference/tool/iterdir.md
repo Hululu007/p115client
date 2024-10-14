@@ -1,4 +1,4 @@
-# tool
+# iterdir
 
 ```{eval-rst}
 .. automodule:: p115client.tool.iterdir

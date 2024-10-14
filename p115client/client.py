@@ -9347,6 +9347,7 @@ class P115Client:
         start: int = 0, 
         seek_threshold: int = 1 << 20, 
         headers: None | Mapping = None, 
+        http_file_reader_cls: None | type[HTTPFileReader] = None, 
         *, 
         async_: Literal[False] = False, 
     ) -> HTTPFileReader:
@@ -9359,6 +9360,7 @@ class P115Client:
         start: int = 0, 
         seek_threshold: int = 1 << 20, 
         headers: None | Mapping = None, 
+        http_file_reader_cls: None | type[AsyncHTTPFileReader] = None, 
         *, 
         async_: Literal[True], 
     ) -> AsyncHTTPFileReader:
@@ -9370,29 +9372,45 @@ class P115Client:
         start: int = 0, 
         seek_threshold: int = 1 << 20, 
         headers: None | Mapping = None, 
+        http_file_reader_cls: None | type[HTTPFileReader] | type[AsyncHTTPFileReader] = None, 
         *, 
         async_: Literal[False, True] = False, 
     ) -> HTTPFileReader | AsyncHTTPFileReader:
-        """打开下载链接，可以从网盘、网盘上的压缩包内、分享链接中获取：
+        """打开下载链接，返回文件对象
 
-        - P115Client.download_url
-        - P115Client.share_download_url
-        - P115Client.extract_download_url
+        :param url: 115 文件的下载链接（可以从网盘、网盘上的压缩包内、分享链接中获取）
+
+            - P115Client.download_url
+            - P115Client.share_download_url
+            - P115Client.extract_download_url
+
+        :param start: 开始索引
+        :param seek_threshold: 当向前 seek 的偏移量不大于此值时，调用 read 来移动文件位置（可避免重新建立连接）
+        :param http_file_reader_cls: 返回的文件对象的类，需要是 `httpfile.HTTPFileReader` 的子类
+        :param headers: 请求头
+        :param async_: 是否异步
+
+        :return: 返回打开的文件对象，可以读取字节数据
         """
         if headers is None:
             headers = self.headers
         else:
             headers = {**self.headers, **headers}
         if async_:
-            return AsyncHTTPFileReader(
-                url, 
+            if http_file_reader_cls is None:
+                from httpfile import AsyncHttpxFileReader
+                http_file_reader_cls = AsyncHttpxFileReader
+            return http_file_reader_cls(
+                url, # type: ignore
                 headers=headers, 
                 start=start, 
                 seek_threshold=seek_threshold, 
             )
         else:
-            return HTTPFileReader(
-                cast(str | Callable[[], str], url), 
+            if http_file_reader_cls is None:
+                http_file_reader_cls = HTTPFileReader
+            return http_file_reader_cls(
+                url, # type: ignore
                 headers=headers, 
                 start=start, 
                 seek_threshold=seek_threshold, 
