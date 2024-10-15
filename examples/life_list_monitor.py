@@ -7,8 +7,6 @@ __all__ = ["main"]
 __doc__ = "115 生活事件监控（周期轮询策略，最大延迟为 1 秒）"
 __requirements__ = ["p115client", "urllib3", "urllib3_request"]
 
-# TODO: 以后会直接从 websocket 获取数据，提供实时性
-
 if __name__ == "__main__":
     from argparse import ArgumentParser, RawTextHelpFormatter
 
@@ -335,4 +333,9 @@ if __name__ == "__main__":
         collect=collect, 
         queue_collect=args.queue_collect, 
     )
+
+# TODO: 以后会直接从 websocket 获取数据，或者更短的轮询时间，提供实时性
+# TODO: 支持只监控特定的事件列表
+# TODO: 更详细的文档，以说明所能监控的事件范围
+# TODO: 支持一定时间返回的回溯，以监测一些删除事件，如果这个事件之前看到，现在看不到，说明文件被还原
 

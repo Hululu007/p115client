@@ -8,7 +8,7 @@ __requirements__ = ["blacksheep", "blacksheep_client_request", "cachetools", "p1
 __doc__ = """\
         \x1b[5m🚀\x1b[0m 115 直链服务 \x1b[5m🍳\x1b[0m
 
-链接格式（每个参数都是\x1b[1;31m可选的\x1b[0m）：\x1b[4m\x1b[34mhttp://localhost:8000{\x1b[1;36mpath2\x1b[0m\x1b[4m\x1b[34m}?pickcode={\x1b[1;36mpickcode\x1b[0m\x1b[4m\x1b[34m}&id={\x1b[1;36mid\x1b[0m\x1b[4m\x1b[34m}&sha1={\x1b[1;36msha1\x1b[0m\x1b[4m\x1b[34m}&path={\x1b[1;36mpath\x1b[0m\x1b[4m\x1b[34m}&kind={\x1b[1;36mkind\x1b[0m\x1b[4m\x1b[34m}&cache={\x1b[1;36mcache\x1b[0m\x1b[4m\x1b[34m}\x1b[0m&sign={\x1b[1;36msign\x1b[0m\x1b[4m\x1b[34m}\x1b[0m&t={\x1b[1;36mt\x1b[0m\x1b[4m\x1b[34m}\x1b[0m
+链接格式（每个参数都是\x1b[1;31m可选的\x1b[0m）：\x1b[4m\x1b[34mhttp://localhost:8000{\x1b[1;36mpath2\x1b[0m\x1b[4m\x1b[34m}?pickcode={\x1b[1;36mpickcode\x1b[0m\x1b[4m\x1b[34m}&id={\x1b[1;36mid\x1b[0m\x1b[4m\x1b[34m}&sha1={\x1b[1;36msha1\x1b[0m\x1b[4m\x1b[34m}&path={\x1b[1;36mpath\x1b[0m\x1b[4m\x1b[34m}&kind={\x1b[1;36mkind\x1b[0m\x1b[4m\x1b[34m}&cache={\x1b[1;36mcache\x1b[0m\x1b[4m\x1b[34m}&sign={\x1b[1;36msign\x1b[0m\x1b[4m\x1b[34m}&t={\x1b[1;36mt\x1b[0m\x1b[4m\x1b[34m}\x1b[0m
 
 - \x1b[1;36mpickcode\x1b[0m: 文件的 \x1b[1;36mpickcode\x1b[0m，优先级高于 \x1b[1;36mid\x1b[0m
 - \x1b[1;36mid\x1b[0m: 文件的 \x1b[1;36mid\x1b[0m，优先级高于 \x1b[1;36msha1\x1b[0m
@@ -18,7 +18,7 @@ __doc__ = """\
 - \x1b[1;36mkind\x1b[0m: 文件类型，默认为 \x1b[1mfile\x1b[0m，用于返回特定的下载链接
     - \x1b[1mfile\x1b[0m: 文件，返回普通的链接（\x1b[1;31m有\x1b[0m\x1b[1m并发数限制\x1b[0m）
     - \x1b[1mimage\x1b[0m: 图片，返回 CDN 链接（\x1b[1;32m无\x1b[0m\x1b[1m并发数限制\x1b[0m）
-    - \x1b[1msubtitle\x1b[0m: 字幕，返回链接（\x1b[1;32m无\x1b[0m并发数限制\x1b[0m）
+    - \x1b[1msubtitle\x1b[0m: 字幕，返回链接（\x1b[1;32m无\x1b[0m\x1b[1m并发数限制\x1b[0m）
 - \x1b[1;36mcache\x1b[0m: 接受 \x1b[1;33m1\x1b[0m | \x1b[1;33mtrue\x1b[0m 或 \x1b[1;33m0\x1b[0m | \x1b[1;33mfalse\x1b[0m，如果为 \x1b[1;33m1\x1b[0m | \x1b[1;33mtrue\x1b[0m，则使用 \x1b[1;36mpath\x1b[0m 到 \x1b[1;36mpickcode\x1b[0m 的缓存（\x1b[1m如果有的话\x1b[0m），否则不使用（\x1b[1m即使有的话\x1b[0m）
 - \x1b[1;36msign\x1b[0m: 计算方式为 \x1b[2mhashlib.sha1(bytes(f"302@115-{token}-{t}-{value}", "utf-8")).hexdigest()\x1b[0m
     - \x1b[1mtoken\x1b[0m: 命令行中所传入的 \x1b[1mtoken\x1b[0m
@@ -245,7 +245,7 @@ def make_application(
         if file_id:
             ID_TO_PICKCODE[file_id] = pick_code
         if PATH_TO_PICKCODE is not None and dirname:
-            PATH_TO_PICKCODE[dirname + "/" + escape(file_name)] = file_id
+            PATH_TO_PICKCODE[dirname + "/" + escape(file_name)] = pick_code
         attr = {"id": file_id, "name": file_name, "pickcode": pick_code, "sha1": file_sha1}
         if thumb:
             attr["thumb"] = IMAGE_URL_CACHE[pick_code] = bytes(reduce_image_url_layers(thumb), "utf-8")
@@ -722,3 +722,6 @@ if __name__ == "__main__":
 
 # TODO: 提供接口，可用于增删改查 PATH_TO_PICKCODE 的字典，支持使用正则表达式、通配符等，如果为 None，则报错（未开启路径缓存）
 # TODO: 提供接口，可以修改 path_cache_size 和 path_cache_ttl（修改后可能导致部分数据丢失）
+# TODO: 增加接口，用于一次性获取多个 id 对应的 pickcode
+# TODO: 增加接口，支持一次性查询多个直链（需要使用 pickcode 或 id 才行）
+

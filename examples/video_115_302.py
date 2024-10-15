@@ -108,38 +108,38 @@ def make_application(
     token: str = "", 
     cookies_path: str | Path = "", 
 ) -> Application:
-    # cookies 保存路径
+    # NOTE: cookies 保存路径
     if cookies_path:
         cookies_path = Path(cookies_path)
     else:
         cookies_path = Path(__file__).parent / "115-cookies.txt"
-    # 用来保存【视频名称】对应的【pickcode】
+    # NOTE: 用来保存【视频名称】对应的【pickcode】
     if store_file:
         from shelve import open as open_shelve
         NAME_TO_PICKCODE: MutableMapping[str, str] = open_shelve(store_file)
     else:
         NAME_TO_PICKCODE = {}
-    # 用来保存所有需要拉取的目录 id，如果某个目录 id 在其中的另一个之中，会被短时间内重复拉取
+    # NOTE: 用来保存所有需要拉取的目录 id，如果某个目录 id 在其中的另一个之中，会被短时间内重复拉取
     if isinstance(cids, (int, str)):
         CIDS = {str(cids)}
     else:
         CIDS = set(map(str, cids))
-    # 用来保存【目录 id】对应的【目录里面最近一条视频文件的更新时间】
+    # NOTE: 用来保存【目录 id】对应的【目录里面最近一条视频文件的更新时间】
     MAX_MTIME_MAP: dict[str, str] = {}
-    # 执行 POST 请求时所需要携带的密码
+    # NOTE: 执行 POST 请求时所需要携带的密码
     PASSWORD = password
-    # 排队任务（一次性运行，不在周期性运行的 cids 列表中）
+    # NOTE: 排队任务（一次性运行，不在周期性运行的 cids 列表中）
     QUEUE: Queue[str] = Queue()
-    # blacksheep 应用
+    # NOTE: blacksheep 应用
     app = Application(router=Router())
-    # 启用文档
+    # NOTE: 启用文档
     docs = OpenAPIHandler(info=Info(
         title="video-115-302.py web api docs", 
         version=".".join(map(str, __version__)), 
     ))
     docs.ui_providers.append(ReDocUIProvider())
     docs.bind_app(app)
-    # 日志对象
+    # NOTE: 日志对象
     logger = getattr(app, "logger")
     handler = logging.StreamHandler()
     handler.setFormatter(logging.Formatter("[\x1b[1m%(asctime)s\x1b[0m] (\x1b[1;36m%(levelname)s\x1b[0m) \x1b[5;31m➜\x1b[0m %(message)s"))

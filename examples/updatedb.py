@@ -1,17 +1,6 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
-# NOTE: 以下这些是待实现的设想 👇
-# TODO: 作为模块提供，允许全量更新(updatedb)和增量更新(updatedb_one)，但只允许同时最多一个写入任务
-# TODO: 可以起一个服务，其它的程序，可以发送读写任务过来，数据库可以以 fuse 或 webdav 展示
-# TODO: 支持多个不同登录设备并发
-# TODO: 支持同一个 cookies 并发因子，默认值 1
-# TODO: 使用协程进行并发，而非多线程
-# TODO: 如果请求超时，则需要进行重试
-# TODO: 使用 urllib3 替代 httpx，增加稳定性
-# TODO: 允许使用批量拉取方法，而避免递归
-# TODO: sqlite 的数据库事务和写入会自动加锁，如果有多个程序在并发，则可以等待锁，需要一个超时时间和重试次数
-
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __version__ = (0, 0, 4)
 __all__ = ["updatedb", "updatedb_one"]
@@ -802,4 +791,15 @@ if __name__ == "__main__":
         top_dirs=args.top_dirs or 0, 
         clean=args.clean, 
     )
+
+# NOTE: 以下这些是待实现的设想 👇
+# TODO: 作为模块提供，允许全量更新(updatedb)和增量更新(updatedb_one)，但只允许同时最多一个写入任务
+# TODO: 可以起一个服务，其它的程序，可以发送读写任务过来，数据库可以以 fuse 或 webdav 展示
+# TODO: 支持多个不同登录设备并发
+# TODO: 支持同一个 cookies 并发因子，默认值 1
+# TODO: 使用协程进行并发，而非多线程
+# TODO: 如果请求超时，则需要进行重试
+# TODO: 使用 urllib3 替代 httpx，增加稳定性
+# TODO: 允许使用批量拉取方法，而避免递归
+# TODO: sqlite 的数据库事务和写入会自动加锁，如果有多个程序在并发，则可以等待锁，需要一个超时时间和重试次数
 
