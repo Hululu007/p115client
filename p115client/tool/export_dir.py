@@ -431,7 +431,7 @@ def export_dir_parse_iter(
     async_: Literal[False, True] = False, 
     **request_kwargs, 
 ) -> Iterator | AsyncIterator:
-    """导出目录树到文件，读取文件并解析后返回生成器，关闭后自动删除导出的文件
+    """导出目录树到文件，读取文件并解析后返回迭代器，关闭后自动删除导出的文件
 
     :param client: 115 客户端或 cookies
     :param export_file_ids: 待导出的目录 id 或 路径（如果有多个，需传入可迭代对象）

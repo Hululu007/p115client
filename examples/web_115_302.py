@@ -2,26 +2,29 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 0, 2)
+__version__ = (0, 0, 3)
 __all__ = ["make_application"]
 __requirements__ = ["blacksheep", "blacksheep_client_request", "cachetools", "p115client", "posixpatht", "uvicorn"]
 __doc__ = """\
         \x1b[5m🚀\x1b[0m 115 直链服务 \x1b[5m🍳\x1b[0m
 
-链接格式（每个参数都是\x1b[1;31m可选的\x1b[0m）：\x1b[4m\x1b[34mhttp://localhost:8000{\x1b[1;32mpath2\x1b[0m\x1b[4m\x1b[34m}?pickcode={\x1b[1;32mpickcode\x1b[0m\x1b[4m\x1b[34m}&id={\x1b[1;32mid\x1b[0m\x1b[4m\x1b[34m}&sha1={\x1b[1;32msha1\x1b[0m\x1b[4m\x1b[34m}&path={\x1b[1;32mpath\x1b[0m\x1b[4m\x1b[34m}&image={\x1b[1;32mimage\x1b[0m\x1b[4m\x1b[34m}&ppc={\x1b[1;32mppc\x1b[0m\x1b[4m\x1b[34m}\x1b[0m&sign={\x1b[1;32msign\x1b[0m\x1b[4m\x1b[34m}\x1b[0m&t={\x1b[1;32mt\x1b[0m\x1b[4m\x1b[34m}\x1b[0m
+链接格式（每个参数都是\x1b[1;31m可选的\x1b[0m）：\x1b[4m\x1b[34mhttp://localhost:8000{\x1b[1;36mpath2\x1b[0m\x1b[4m\x1b[34m}?pickcode={\x1b[1;36mpickcode\x1b[0m\x1b[4m\x1b[34m}&id={\x1b[1;36mid\x1b[0m\x1b[4m\x1b[34m}&sha1={\x1b[1;36msha1\x1b[0m\x1b[4m\x1b[34m}&path={\x1b[1;36mpath\x1b[0m\x1b[4m\x1b[34m}&kind={\x1b[1;36mkind\x1b[0m\x1b[4m\x1b[34m}&cache={\x1b[1;36mcache\x1b[0m\x1b[4m\x1b[34m}\x1b[0m&sign={\x1b[1;36msign\x1b[0m\x1b[4m\x1b[34m}\x1b[0m&t={\x1b[1;36mt\x1b[0m\x1b[4m\x1b[34m}\x1b[0m
 
-- \x1b[1;32mpickcode\x1b[0m: 文件的 \x1b[1;32mpickcode\x1b[0m，优先级高于 \x1b[1;32mid\x1b[0m
-- \x1b[1;32mid\x1b[0m: 文件的 \x1b[1;32mid\x1b[0m，优先级高于 \x1b[1;32msha1\x1b[0m
-- \x1b[1;32msha1\x1b[0m: 文件的 \x1b[1;32msha1\x1b[0m，优先级高于 \x1b[1;32mpath\x1b[0m
-- \x1b[1;32mpath\x1b[0m: 文件的路径，优先级高于 \x1b[1;32mpath2\x1b[0m
-- \x1b[1;32mpath2\x1b[0m: 文件的路径，优先级最低
-- \x1b[1;32mimage\x1b[0m: 接受 \x1b[1;36m1\x1b[0m | \x1b[1;36mtrue\x1b[0m 或 \x1b[1;36m0\x1b[0m | \x1b[1;36mfalse\x1b[0m，如果为 \x1b[1;36m1\x1b[0m | \x1b[1;36mtrue\x1b[0m，则尝试获取图片的 cdn 链接
-- \x1b[1;32mppc\x1b[0m: 接受 \x1b[1;36m1\x1b[0m | \x1b[1;36mtrue\x1b[0m 或 \x1b[1;36m0\x1b[0m | \x1b[1;36mfalse\x1b[0m，如果为 \x1b[1;36m1\x1b[0m | \x1b[1;36mtrue\x1b[0m，则使用 \x1b[1;32mpath\x1b[0m 到 \x1b[1;32mpickcode\x1b[0m 的缓存（\x1b[1m如果有的话\x1b[0m）
-- \x1b[1;32msign\x1b[0m: 计算方式为 \x1b[2mhashlib.sha1(bytes(f"302@115-{token}-{t}-{value}", "utf-8")).hexdigest()\x1b[0m
+- \x1b[1;36mpickcode\x1b[0m: 文件的 \x1b[1;36mpickcode\x1b[0m，优先级高于 \x1b[1;36mid\x1b[0m
+- \x1b[1;36mid\x1b[0m: 文件的 \x1b[1;36mid\x1b[0m，优先级高于 \x1b[1;36msha1\x1b[0m
+- \x1b[1;36msha1\x1b[0m: 文件的 \x1b[1;36msha1\x1b[0m，优先级高于 \x1b[1;36mpath\x1b[0m
+- \x1b[1;36mpath\x1b[0m: 文件的路径，优先级高于 \x1b[1;36mpath2\x1b[0m
+- \x1b[1;36mpath2\x1b[0m: 文件的路径，优先级最低
+- \x1b[1;36mkind\x1b[0m: 文件类型，默认为 \x1b[1mfile\x1b[0m，用于返回特定的下载链接
+    - \x1b[1mfile\x1b[0m: 文件，返回普通的链接（\x1b[1;31m有\x1b[0m\x1b[1m并发数限制\x1b[0m）
+    - \x1b[1mimage\x1b[0m: 图片，返回 CDN 链接（\x1b[1;32m无\x1b[0m\x1b[1m并发数限制\x1b[0m）
+    - \x1b[1msubtitle\x1b[0m: 字幕，返回链接（\x1b[1;32m无\x1b[0m并发数限制\x1b[0m）
+- \x1b[1;36mcache\x1b[0m: 接受 \x1b[1;33m1\x1b[0m | \x1b[1;33mtrue\x1b[0m 或 \x1b[1;33m0\x1b[0m | \x1b[1;33mfalse\x1b[0m，如果为 \x1b[1;33m1\x1b[0m | \x1b[1;33mtrue\x1b[0m，则使用 \x1b[1;36mpath\x1b[0m 到 \x1b[1;36mpickcode\x1b[0m 的缓存（\x1b[1m如果有的话\x1b[0m），否则不使用（\x1b[1m即使有的话\x1b[0m）
+- \x1b[1;36msign\x1b[0m: 计算方式为 \x1b[2mhashlib.sha1(bytes(f"302@115-{token}-{t}-{value}", "utf-8")).hexdigest()\x1b[0m
     - \x1b[1mtoken\x1b[0m: 命令行中所传入的 \x1b[1mtoken\x1b[0m
     - \x1b[1mt\x1b[0m: 过期时间戳（\x1b[1m超过这个时间后，链接不可用\x1b[0m）
-    - \x1b[1mvalue\x1b[0m: 按顺序检查 \x1b[1;32mpickcode\x1b[0m、\x1b[1;32mid\x1b[0m、\x1b[1;32msha1\x1b[0m、\x1b[1;32mpath\x1b[0m、\x1b[1;32mpath2\x1b[0m，最先有效的那个值
-- \x1b[1;32mt\x1b[0m: 链接过期时间戳，接受一个整数，只在使用签名时有效，如果不提供或者小于等于 0，则永久有效
+    - \x1b[1mvalue\x1b[0m: 按顺序检查 \x1b[1;36mpickcode\x1b[0m、\x1b[1;36mid\x1b[0m、\x1b[1;36msha1\x1b[0m、\x1b[1;36mpath\x1b[0m、\x1b[1;36mpath2\x1b[0m，最先有效的那个值
+- \x1b[1;36mt\x1b[0m: 链接过期时间戳，接受一个整数，只在使用签名时有效，如果不提供或者小于等于 0，则永久有效
 
         \x1b[5m🔨\x1b[0m 如何运行 \x1b[5m🪛\x1b[0m
 
@@ -29,7 +32,7 @@ __doc__ = """\
 
     UID=...; CID=...; SEID=...
 
-然后运行脚本（默认端口：\x1b[1;36m8000\x1b[0m，可用命令行参数 \x1b[1m-P\x1b[0m/\x1b[1m--port\x1b[0m 指定其它端口号）
+然后运行脚本（默认端口：\x1b[1;33m8000\x1b[0m，可用命令行参数 \x1b[1m-P\x1b[0m/\x1b[1m--port\x1b[0m 指定其它端口号）
 
     python web_115_302.py
 
@@ -45,7 +48,7 @@ __doc__ = """\
 
     \x1b[4m\x1b[34mhttp://localhost:8000/redocs\x1b[0m
 
-再推荐一个命令行使用，用于执行 HTTP 请求的工具，类似 wget
+再推荐一个命令行使用，用于执行 HTTP 请求的工具，类似 \x1b[1;3mwget\x1b[0m
 
     \x1b[4m\x1b[34mhttps://pypi.org/project/httpie/\x1b[0m
 """
@@ -57,7 +60,8 @@ if __name__ == "__main__":
     parser.add_argument("-cp", "--cookies-path", default="", help="cookies 文件保存路径，默认是此脚本同一目录下的 115-cookies.txt")
     parser.add_argument("-p", "--password", help="执行 POST 请求所需密码")
     parser.add_argument("-t", "--token", default="", help="用于给链接进行签名的 token，如果不提供则无签名")
-    parser.add_argument("-ppc", "--path-persistence-commitment", action="store_true", help="路径一致性承诺，如果指定此参数，则当使用路径查询时，会先尝试从 路径 到 pickcode 的映射中获取")
+    parser.add_argument("-pcs", "--path-cache-size", type=int, default=1048576, help="路径缓存的容量大小，默认值 1048576，等于 0 时关闭，小于等于 0 时不限")
+    parser.add_argument("-pct", "--path-cache-ttl", type=float, default=0, help="路径缓存的存活时间，小于等于 0 或等于 inf 或 nan 时不限，默认为不限")
     parser.add_argument("-H", "--host", default="0.0.0.0", help="ip 或 hostname，默认值：'0.0.0.0'")
     parser.add_argument("-P", "--port", default=8000, type=int, help="端口号，默认值：8000")
     parser.add_argument("-v", "--version", action="store_true", help="输出版本号")
@@ -81,7 +85,7 @@ try:
     from openapidocs.v3 import Info # type: ignore
     from p115client import P115Client, AuthenticationError, SUFFIX_TO_TYPE
     from p115client.tool.iterdir import iter_files, _iter_fs_files
-    from posixpatht import escape, joins, splits
+    from posixpatht import dirname, escape, joins, splits
 except ImportError:
     from sys import executable
     from subprocess import run
@@ -99,7 +103,7 @@ except ImportError:
     from openapidocs.v3 import Info # type: ignore
     from p115client import P115Client, AuthenticationError, SUFFIX_TO_TYPE
     from p115client.tool.iterdir import iter_files, _iter_fs_files
-    from posixpatht import escape, joins, splits
+    from posixpatht import dirname, escape, joins, splits
 
 import errno
 import logging
@@ -108,10 +112,12 @@ from asyncio import create_task, CancelledError, Queue
 from collections.abc import AsyncIterator, Callable, MutableMapping
 from functools import partial, update_wrapper
 from hashlib import sha1 as calc_sha1
+from math import inf, isinf, isnan
 from pathlib import Path
+from sys import maxsize
 from time import time
 from typing import cast, Literal
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 
 def reduce_image_url_layers(url: str, /) -> str:
@@ -123,11 +129,12 @@ def reduce_image_url_layers(url: str, /) -> str:
 
 
 def make_application(
-    path_persistence_commitment: bool = False, 
+    cookies_path: str | Path = "", 
     password: str = "", 
     token: str = "", 
-    cookies_path: str | Path = "", 
-):
+    path_cache_size: int = 1048576, 
+    path_cache_ttl: int | float = 0, 
+) -> Application:
     # NOTE: cookies 保存路径
     if cookies_path:
         cookies_path = Path(cookies_path)
@@ -139,10 +146,20 @@ def make_application(
     SHA1_TO_PICKCODE: MutableMapping[str, str] = LRUCache(65536)
     # NOTE: path 到 pickcode 的映射
     PATH_TO_PICKCODE: None | MutableMapping[str, str] = None
-    if path_persistence_commitment:
-        PATH_TO_PICKCODE = LRUCache(1048576)
+    if path_cache_size:
+        if path_cache_ttl > 0 and not isinf(path_cache_ttl) and not isnan(path_cache_ttl):
+            if path_cache_size > 0:
+                PATH_TO_PICKCODE = TTLCache(path_cache_size, path_cache_ttl)
+            else:
+                PATH_TO_PICKCODE = TTLCache(maxsize, path_cache_ttl)
+        elif path_cache_size > 0:
+            PATH_TO_PICKCODE = LRUCache(path_cache_size)
+        else:
+            PATH_TO_PICKCODE = {}
     # NOTE: 缓存图片的 CDN 直链 1 小时
-    IMAGE_URL_CACHE: MutableMapping[str, bytes] = TTLCache(float("inf"), ttl=3600)
+    IMAGE_URL_CACHE: MutableMapping[str, bytes] = TTLCache(inf, ttl=3600)
+    # NOTE: 缓存字幕的 CDN 直链 1 小时
+    SUBTITLE_URL_CACHE: MutableMapping[str, bytes] = TTLCache(inf, ttl=3600)
     # 排队任务（一次性运行，不在周期性运行的 cids 列表中）
     QUEUE: Queue[tuple[str, Literal[1,2,3,4,5,6,7,99]]] = Queue()
     # 执行 POST 请求时所需要携带的密码
@@ -195,7 +212,7 @@ def make_application(
     def normalize_attr(
         info: dict, 
         /, 
-        dirname: None | str = None, 
+        dirname: str = "", 
     ) -> dict:
         """对文件信息进行规范化
         """
@@ -227,11 +244,8 @@ def make_application(
             SHA1_TO_PICKCODE[file_sha1] = pick_code
         if file_id:
             ID_TO_PICKCODE[file_id] = pick_code
-        if PATH_TO_PICKCODE is not None:
-            if dirname:
-                PATH_TO_PICKCODE[dirname + "/" + escape(file_name)] = file_id
-            elif dirname is not None:
-                PATH_TO_PICKCODE[escape(file_name)] = file_id
+        if PATH_TO_PICKCODE is not None and dirname:
+            PATH_TO_PICKCODE[dirname + "/" + escape(file_name)] = file_id
         attr = {"id": file_id, "name": file_name, "pickcode": pick_code, "sha1": file_sha1}
         if thumb:
             attr["thumb"] = IMAGE_URL_CACHE[pick_code] = bytes(reduce_image_url_layers(thumb), "utf-8")
@@ -246,7 +260,7 @@ def make_application(
         """
         client = app.services.resolve(ClientSession)
         p115client = app.services.resolve(P115Client)
-        with_path = path_persistence_commitment
+        with_path = PATH_TO_PICKCODE is not None
         count = 0
         async for attr in iter_files(
             p115client, 
@@ -261,7 +275,7 @@ def make_application(
             ID_TO_PICKCODE[str(attr["id"])] = pickcode
             SHA1_TO_PICKCODE[attr["sha1"]] = pickcode
             if with_path:
-                PATH_TO_PICKCODE[attr["path"][1:]] = pickcode # type: ignore
+                PATH_TO_PICKCODE[attr["path"]] = pickcode # type: ignore
             if thumb := attr.get("thumb"):
                 IMAGE_URL_CACHE[pickcode] = bytes(reduce_image_url_layers(thumb), "utf-8")
             count += 1
@@ -375,7 +389,7 @@ def make_application(
         path: str, 
         /, 
         request: None | Callable = None, 
-        path_persistence_commitment: bool = True, 
+        cache: bool = True, 
     ) -> str:
         """获取路径对应的文件的 pickcode
         """
@@ -388,7 +402,7 @@ def make_application(
             raise error
         path = joins(patht)
         if (
-            path_persistence_commitment and 
+            cache and 
             PATH_TO_PICKCODE is not None and
             (pickcode := PATH_TO_PICKCODE.get(path))
         ):
@@ -403,9 +417,9 @@ def make_application(
                 i += 1
         if i == 1:
             cid = "0"
-            dirname = ""
+            dirname = "/"
         else:
-            dirname = "/".join(patht[1:i])
+            dirname = "/".join(patht[:i])
             resp = await client.fs_dir_getid(dirname, async_=True, request=request)
             if not (resp["state"] and (cid := resp["id"])):
                 raise error
@@ -468,6 +482,45 @@ def make_application(
             )
         return normalize_attr(resp["data"])["thumb"]
 
+    async def get_subtitle_url(
+        client: P115Client, 
+        pickcode: str, 
+        /, 
+        request: None | Callable = None, 
+    ) -> bytes:
+        """获取字幕的下载链接
+        """
+        if url := SUBTITLE_URL_CACHE.get(pickcode):
+            return url
+        resp = await client.fs_video_subtitle(pickcode, async_=True, request=request)
+        if not resp["state"]:
+            raise FileNotFoundError(
+                errno.ENOENT, 
+                {"state": False, "message": "no such pickcode to subtitle", "pickcode": pickcode}, 
+            )
+        dir_ = ""
+        if PATH_TO_PICKCODE is not None:
+            try:
+                for k, v in PATH_TO_PICKCODE.items():
+                    if v == pickcode:
+                        dir_ = dirname(k)
+                        break
+            except RuntimeError:
+                pass
+        url = b""
+        for info in resp["data"]["list"]:
+            if pickcode2 := info.get("pick_code"):
+                attr = normalize_attr(info, dir_)
+                url2 = SUBTITLE_URL_CACHE[pickcode2] = bytes(info["url"], "utf-8")
+                if pickcode == pickcode2:
+                    url = url2
+        if not url:
+            raise FileNotFoundError(
+                errno.ENOENT, 
+                {"state": False, "message": "no such pickcode to subtitle", "pickcode": pickcode}, 
+            )
+        return url
+
     @app.on_middlewares_configuration
     def configure_forwarded_headers(app: Application):
         app.middlewares.insert(0, ForwardedHeadersMiddleware(accept_only_proxied_requests=False))
@@ -509,8 +562,8 @@ def make_application(
         sha1: str = "", 
         path: str = "", 
         path2: str = "", 
-        image: bool = False, 
-        ppc: bool = True, 
+        kind: str = "file", 
+        cache: bool = True, 
         sign: str = "", 
         t: int = 0, 
     ):
@@ -521,8 +574,11 @@ def make_application(
         :param sha1: 文件的 sha1，优先级高于 path
         :param path: 文件的路径，优先级高于 path2
         :param path2: 文件的路径，这个直接在接口路径之后，不在查询字符串中
-        :param image: 是否视为图片，如果为 True，则尝试获取图片的 cdn 链接
-        :param ppc: 是否使用 路径 到 pickcode 的缓存
+        :param kind: 文件类型，默认为 **file**，用于返回特定的下载链接
+            <br />- **file**&colon; 文件，返回普通的链接（有并发数限制）
+            <br />- **image**&colon; 图片，返回 CDN 链接（无并发数限制）
+            <br />- **subtitle**&colon; 字幕，返回链接（无并发数限制）
+        :param cache: 是否使用 路径 到 pickcode 的缓存
         :param sign: 签名，计算方式为 `hashlib.sha1(bytes(f"302@115-{token}-{t}-{value}", "utf-8")).hexdigest()`
             <br />- **token**&colon; 命令行中所传入的 token
             <br />- **t**&colon; 过期时间戳（超过这个时间后，链接不可用）
@@ -549,16 +605,20 @@ def make_application(
                 return resp
             pickcode = await get_pickcode_by_sha1(p115client, sha1, do_request)
         else:
-            value = path or path2
+            value = unquote(path) or path2
             if not value:
                 return json({"state": False, "message": "no query value"}, 400)
             if resp := check_sign(value):
                 return resp
-            pickcode = await get_pickcode_by_path(p115client, value, do_request, ppc)
-        if image:
-            return redirect(await get_image_url(p115client, pickcode, do_request))
-        user_agent = (request.get_first_header(b"User-agent") or b"").decode("latin-1")
-        return redirect(await get_url(p115client, pickcode, user_agent, do_request))
+            pickcode = await get_pickcode_by_path(p115client, value, do_request, cache)
+        match kind:
+            case "image":
+                return redirect(await get_image_url(p115client, pickcode, do_request))
+            case "subtitle":
+                return redirect(await get_subtitle_url(p115client, pickcode, do_request))
+            case _:
+                user_agent = (request.get_first_header(b"User-agent") or b"").decode("latin-1")
+                return redirect(await get_url(p115client, pickcode, user_agent, do_request))
 
     @app.router.route("/run", methods=["POST"])
     async def do_run(request: Request, cid: str = "0", type: int = 2, password: str = ""):
@@ -645,10 +705,11 @@ if __name__ == "__main__":
         import uvicorn
 
     app = make_application(
-        path_persistence_commitment=args.path_persistence_commitment, 
+        cookies_path=args.cookies_path, 
         password=args.password, 
         token=args.token, 
-        cookies_path=args.cookies_path, 
+        path_cache_size=args.path_cache_size, 
+        path_cache_ttl=args.path_cache_ttl, 
     )
     print(__doc__)
     uvicorn.run(
@@ -659,3 +720,5 @@ if __name__ == "__main__":
         forwarded_allow_ips="*", 
     )
 
+# TODO: 提供接口，可用于增删改查 PATH_TO_PICKCODE 的字典，支持使用正则表达式、通配符等，如果为 None，则报错（未开启路径缓存）
+# TODO: 提供接口，可以修改 path_cache_size 和 path_cache_ttl（修改后可能导致部分数据丢失）
