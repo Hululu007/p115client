@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
-from __future__ import annotations
-
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __all__ = [
     "ID_TO_DIRNODE_CACHE", "type_of_attr", "get_id_of_path", "iter_stared_dirs_raw", "iter_stared_dirs", 
@@ -32,13 +30,12 @@ from posixpatht import escape, splitext, splits
 D = TypeVar("D", bound=dict)
 K = TypeVar("K")
 
-#: 用于缓存每个用户（根据用户 id 区别）的每个目录 id 到所对应的 (名称, 父id) 的元组的字典的字典
-ID_TO_DIRNODE_CACHE: Final[defaultdict[int, dict[int, DirNode]]] = defaultdict(dict)
-
-
 class DirNode(NamedTuple):
     name: str
     parent_id: int = 0
+
+#: 用于缓存每个用户（根据用户 id 区别）的每个目录 id 到所对应的 (名称, 父id) 的元组的字典的字典
+ID_TO_DIRNODE_CACHE: Final[defaultdict[int, dict[int, DirNode]]] = defaultdict(dict)
 
 
 def type_of_attr(attr: Mapping, /) -> int:
@@ -153,7 +150,7 @@ def get_id_of_path(
             if not (resp["state"] and (cid := resp["id"])):
                 raise error
             if not ensure_file:
-                return cid
+                return int(cid)
         for name in patht[i:-1]:
             if async_:
                 async def request():

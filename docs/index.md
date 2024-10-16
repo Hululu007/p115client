@@ -23,6 +23,7 @@ reference/type
 
 reference/tool/iterdir
 reference/tool/export_dir
+reference/tool/xys
 ```
 
 ```{toctree}
