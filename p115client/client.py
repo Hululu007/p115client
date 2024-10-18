@@ -17,6 +17,7 @@ from functools import cached_property, partial
 from hashlib import sha1
 from http.cookiejar import Cookie, CookieJar
 from http.cookies import Morsel
+from inspect import isawaitable
 from os import fsdecode, fstat, isatty, stat, PathLike, path as ospath
 from pathlib import Path, PurePath
 from re import compile as re_compile, MULTILINE
@@ -1163,6 +1164,8 @@ class P115Client:
                             return await request(url=url, method=method, **request_kwargs)
                         except BaseException as e:
                             res = check_for_relogin(e)
+                            if isawaitable(res):
+                                res = await res
                             if not res if isinstance(res, bool) else res != 405:
                                 raise
                             cookies = self.cookies_str
@@ -2112,7 +2115,7 @@ class P115Client:
         return self.request(
             api, 
             "POST", 
-            data=urlencode(payload), 
+            data=urlencode(payload).encode("latin-1"), 
             async_=async_, 
             **request_kwargs, 
         )
@@ -2626,7 +2629,7 @@ class P115Client:
         return self.request(
             api, 
             "POST", 
-            data=urlencode(payload), 
+            data=urlencode(payload).encode("latin-1"), 
             async_=async_, 
             **request_kwargs, 
         )
@@ -3120,7 +3123,7 @@ class P115Client:
         return self.request(
             api, 
             "POST", 
-            data=urlencode(payload), 
+            data=urlencode(payload).encode("latin-1"), 
             async_=async_, 
             **request_kwargs, 
         )
@@ -4542,7 +4545,7 @@ class P115Client:
         return self.request(
             api, 
             "POST", 
-            data=urlencode(payload), 
+            data=urlencode(payload).encode("latin-1"), 
             async_=async_, 
             **request_kwargs, 
         )

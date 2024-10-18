@@ -32,7 +32,7 @@ if __name__ == "__main__":
     parser.add_argument("-cl", "--clean", action="store_true", help="任务完成后清理数据库，以节约空间")
     parser.add_argument("-st", "--auto-splitting-threshold", type=int, default=200_000, help="自动拆分的文件数阈值，大于此值时，自动进行拆分，如果 <= 0，则总是拆分，默认值 200,000（20 万）")
     parser.add_argument("-sst", "--auto-splitting-statistics-timeout", type=float, default=3, help="自动拆分前的执行文件数统计的超时时间（秒），大于此值时，视为文件数无穷大，如果 <= 0，视为永不超时，默认值 3")
-    parser.add_argument("-nd", "--no-dir-moved", action="store_true", help="声明没有目录被移动或改名（但可以有目录被新增或删除），这可以加快批量拉取时的速度")
+    parser.add_argument("-nm", "--no-dir-moved", action="store_true", help="声明没有目录被移动或改名（但可以有目录被新增或删除），这可以加快批量拉取时的速度")
     parser.add_argument("-nr", "--not-recursive", action="store_true", help="不遍历目录树：只拉取顶层目录，不递归子目录")
     parser.add_argument("-r", "--resume", action="store_true", help="""中断重试，判断依据（满足如下条件之一）：
     1. 顶层目录未被采集：命令行所指定的某个 dir_id 的文件列表未被采集
@@ -342,7 +342,7 @@ VALUES
 ON CONFLICT(id) DO UPDATE SET
     parent_id = excluded.parent_id,
     pickcode  = excluded.pickcode,
-    name      = CASE WHEN data.is_dir THEN data.name ELSE excluded.name END,
+    name      = CASE WHEN is_dir THEN name ELSE excluded.name END,
     ctime     = excluded.ctime,
     mtime     = excluded.mtime,
     path      = excluded.path
@@ -371,6 +371,7 @@ VALUES
 ON CONFLICT(id) DO UPDATE SET
     parent_id = excluded.parent_id,
     name      = excluded.name,
+    ctime     = excluded.ctime,
     mtime     = excluded.mtime
 WHERE
     mtime != excluded.mtime
@@ -464,7 +465,7 @@ WITH RECURSIVE t(id, parent_id, path) AS (
     FROM
         t JOIN data ON (t.parent_id=data.id)
 )
-SELECT id, path 
+SELECT id, parent_id, path 
 FROM t 
 WHERE parent_id = 0
 ORDER BY path DESC;
@@ -480,9 +481,9 @@ ORDER BY path DESC;
     else:
         cur = con
     change = 0
-    for cid, path in con.execute(sql):
+    for cid, parent_id, path in con.execute(sql):
         path_new = get_path(cid)
-        cur.execute("UPDATE data SET name=?, path=? WHERE id=?", (ID_TO_DIRNODE[cid][0], path_new, cid))
+        cur.execute("UPDATE data SET name=?, parent_id=?, path=? WHERE id=?", (ID_TO_DIRNODE[cid][0], parent_id, path_new, cid))
         cur.execute("UPDATE data SET path = ? || SUBSTR(path, ?) WHERE path LIKE ? || '/%'", (path_new, len(path) + 1, path))
         change += cur.rowcount + 1
     if commit:
@@ -651,7 +652,7 @@ def diff_dir(
     id: int = 0, 
     /, 
     tree: bool = False, 
-):
+) -> tuple[list[int], list[dict]]:
     n = 0
     saved: dict[int, set[int]] = {}
     for mtime, ls in select_mtime_groups(con, id, tree=tree):
@@ -768,24 +769,52 @@ def updatedb_tree(
             to_delete, to_replace = diff_dir(con, client, id, tree=True)
             if not no_dir_moved:
                 update_id_to_dirnode(con, client)
-            if to_replace:
-                all_pids: set[int] = set()
-                pids = {attr["parent_id"] for attr in to_replace if attr["parent_id"]}
-                while pids:
-                    all_pids.update(pids)
-                    if find_ids := pids - ID_TO_DIRNODE.keys():
-                        ids_it = iter(find_ids)
-                        while ids := ",".join(map(str, islice(ids_it, 10_000))):
-                            check_response(client.fs_star_set(ids, request=request))
-                            check_response(client.fs_desc_set(ids, request=request))
-                        update_id_to_dirnode(con, client)
-                    pids = {ppid for pid in pids if (ppid := ID_TO_DIRNODE[pid][1])}
-                fields = ("id", "parent_id", "pickcode", "name", "ctime", "mtime", "size", "sha1", "is_dir", "is_image")
-                sql = """\
-    SELECT id, parent_id, pickcode, name, ctime, mtime, 0 AS size, '' AS sha1, 1 AS is_dir, 0 AS is_image 
-    FROM dir WHERE id in (%s)""" % ",".join(map('%d'.__mod__, all_pids))
-                to_replace.extend(dict(zip(fields, row)) for row in con.execute(sql))
-                ensure_attr_path(client, to_replace, with_path=True, id_to_dirnode=ID_TO_DIRNODE)
+            if to_delete or to_replace:
+                # TODO: 如果上层目录存在但 parent_id 已经在当前的 id 之外，则对数据进行移动而不是删除
+                if to_delete:
+                    all_pids: set[int] = set()
+                    sql = "SELECT DISTINCT parent_id FROM data WHERE id IN (%s)" % ",".join(map(str, to_delete))
+                    pids = set(row[0] for row in con.execute(sql))
+                    while pids:
+                        all_pids.update(pids)
+                        ids_it = iter(pids)
+                        while t_ids := tuple(islice(ids_it, 10_000)):
+                            check_response(client.fs_desc_set(t_ids, request=request))
+                        pids = {ppid for pid in pids if pid in ID_TO_DIRNODE and (ppid := ID_TO_DIRNODE[pid][1]) and ppid not in all_pids}
+                    ids_it = iter(all_pids)
+                    while t_ids := tuple(ids_it):
+                        resp = client.fs_file_skim(t_ids, request=request)
+                        if resp.get("error") == "文件不存在":
+                            to_delete.extend(t_ids)
+                        else:
+                            check_response(resp)
+                            s = {int(a["file_id"]) for a in resp["data"]}
+                            to_delete.extend(set(t_ids) - s)
+                no_dir_moved = False
+                if to_replace:
+                    all_pids = set()
+                    pids = {attr["parent_id"] for attr in to_replace if attr["parent_id"]}
+                    while pids:
+                        all_pids.update(pids)
+                        ids_it = iter(pids)
+                        while t_ids := tuple(islice(ids_it, 10_000)):
+                            check_response(client.fs_desc_set(t_ids, request=request))
+                        if find_ids := pids - ID_TO_DIRNODE.keys():
+                            ids_it = iter(find_ids)
+                            while ids := ",".join(map(str, islice(ids_it, 10_000))):
+                                check_response(client.fs_star_set(ids, request=request))
+                            update_id_to_dirnode(con, client)
+                            no_dir_moved = True
+                        pids = {ppid for pid in pids if (ppid := ID_TO_DIRNODE[pid][1]) and ppid not in all_pids}
+                if not no_dir_moved:
+                    update_id_to_dirnode(con, client)
+                if to_replace:
+                    fields = ("id", "parent_id", "pickcode", "name", "ctime", "mtime", "size", "sha1", "is_dir", "is_image")
+                    sql = """\
+SELECT id, parent_id, pickcode, name, ctime, mtime, 0 AS size, '' AS sha1, 1 AS is_dir, 0 AS is_image 
+FROM dir WHERE id in (%s)""" % ",".join(map('%d'.__mod__, all_pids))
+                    to_replace.extend(dict(zip(fields, row)) for row in con.execute(sql))
+                    ensure_attr_path(client, to_replace, with_path=True, id_to_dirnode=ID_TO_DIRNODE)
         except BaseException as e:
             logger.exception("[\x1b[1;31mFAIL\x1b[0m] %s", id)
             if isinstance(e, (FileNotFoundError, NotADirectoryError)):
@@ -988,3 +1017,9 @@ if __name__ == "__main__":
 # TODO: 如果请求超时，则需要进行重试
 # TODO: sqlite 的数据库事务和写入会自动加锁，如果有多个程序在并发，则可以等待锁，需要一个超时时间和重试次数
 # TODO: iterdir 函数支持并发
+
+# TODO: 如果相同 parent_id 下，有同名的目录，则说明有冲突，需要删掉旧有的（但又由于可能是发生了移动，如果直接删除，可能会导致下次会重新拉取大量数据）
+# TODO: 增加子命令，可以删除目录树（通过根 id 或者根路径）
+
+# TODO: 如果一个文件夹被移动，那么它的更新时间不会变，只是它的上级 id 的更新时间会变，因此必要时，还是需要结合 115 更新事件
+

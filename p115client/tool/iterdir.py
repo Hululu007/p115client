@@ -630,11 +630,11 @@ def ensure_attr_path(
                             ), None)
                     else:
                         ids_it = iter(find_ids)
-                        while ids := ",".join(map(str, islice(ids_it, 10_000))):
-                            # NOTE: 批量给目录添加星标，这样便于把这些目录进行批量拉取
-                            yield client.fs_star_set(ids, async_=async_, **request_kwargs)
+                        while t_ids := tuple(islice(ids_it, 10_000)):
                             # NOTE: 批量给目录添加空备注，这样可以更新这些目录的更新时间
-                            yield client.fs_desc_set(ids, async_=async_, **request_kwargs)
+                            yield client.fs_desc_set(t_ids, async_=async_, **request_kwargs)
+                            # NOTE: 批量给目录添加星标，这样便于把这些目录进行批量拉取
+                            yield client.fs_star_set(",".join(map(str, t_ids)), async_=async_, **request_kwargs)
                         yield walk_through(iter_stared_dirs_raw(
                             client, 
                             page_size, 
