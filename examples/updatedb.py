@@ -2,10 +2,10 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 0, 4)
-__all__ = ["updatedb", "updatedb_one"]
+__version__ = (0, 0, 5)
+__all__ = ["updatedb", "updatedb_one", "updatedb_tree"]
 __doc__ = "遍历 115 网盘的目录信息导出到数据库"
-__requirements__ = ["orjson", "p115client", "posixpatht"]
+__requirements__ = ["orjson", "p115client", "posixpatht", "urllib3", "urllib3_request"]
 
 if __name__ == "__main__":
     from argparse import ArgumentParser, RawTextHelpFormatter
@@ -30,6 +30,9 @@ if __name__ == "__main__":
 如果都找不到，则默认使用 '2. 用户根目录，此时则需要扫码登录'""")
     parser.add_argument("-f", "--dbfile", default="", help="sqlite 数据库文件路径，默认为在当前工作目录下的 f'115-{user_id}.db'")
     parser.add_argument("-cl", "--clean", action="store_true", help="任务完成后清理数据库，以节约空间")
+    parser.add_argument("-st", "--auto-splitting-threshold", type=int, default=200_000, help="自动拆分的文件数阈值，大于此值时，自动进行拆分，如果 <= 0，则总是拆分，默认值 200,000（20 万）")
+    parser.add_argument("-sst", "--auto-splitting-statistics-timeout", type=float, default=3, help="自动拆分前的执行文件数统计的超时时间（秒），大于此值时，视为文件数无穷大，如果 <= 0，视为永不超时，默认值 3")
+    parser.add_argument("-nd", "--no-dir-moved", action="store_true", help="声明没有目录被移动或改名（但可以有目录被新增或删除），这可以加快批量拉取时的速度")
     parser.add_argument("-nr", "--not-recursive", action="store_true", help="不遍历目录树：只拉取顶层目录，不递归子目录")
     parser.add_argument("-r", "--resume", action="store_true", help="""中断重试，判断依据（满足如下条件之一）：
     1. 顶层目录未被采集：命令行所指定的某个 dir_id 的文件列表未被采集
@@ -46,28 +49,45 @@ if __name__ == "__main__":
 try:
     from orjson import dumps, loads
     from p115client import check_response, P115Client
+    from p115client.exception import BusyOSError
+    from p115client.tool.iterdir import ensure_attr_path, iter_stared_dirs, DirNode, DirNodeTuple
     from posixpatht import escape, joins, normpath
+    from urllib3.poolmanager import PoolManager
+    from urllib3.exceptions import ReadTimeoutError
+    from urllib3_request import request as urllib3_request
 except ImportError:
     from sys import executable
     from subprocess import run
     run([executable, "-m", "pip", "install", "-U", *__requirements__], check=True)
     from orjson import dumps, loads
     from p115client import check_response, P115Client
+    from p115client.exception import BusyOSError
+    from p115client.tool.iterdir import ensure_attr_path, iter_stared_dirs, DirNode, DirNodeTuple
     from posixpatht import escape, joins, normpath
+    from urllib3.poolmanager import PoolManager
+    from urllib3.exceptions import ReadTimeoutError
+    from urllib3_request import request as urllib3_request
 
 import logging
 
 from collections import deque, ChainMap
 from collections.abc import Callable, Collection, Iterator, Iterable, Mapping
 from errno import EBUSY, ENOENT, ENOTDIR
+from functools import partial
+from itertools import islice
+from math import isnan, isinf
 from os.path import splitext
 from sqlite3 import (
     connect, register_adapter, register_converter, Connection, Cursor, 
     Row, PARSE_COLNAMES, PARSE_DECLTYPES
 )
+from time import time
 from typing import cast
 
 
+ID_TO_DIRNODE: dict[int, DirNode | DirNodeTuple] = {}
+
+request = partial(urllib3_request, pool=PoolManager(50))
 register_adapter(list, dumps)
 register_adapter(dict, dumps)
 register_converter("JSON", loads)
@@ -79,12 +99,6 @@ handler.setFormatter(logging.Formatter(
     "\x1b[0m\x1b[1;35m%(name)s\x1b[0m \x1b[5;31m➜\x1b[0m %(message)s"
 ))
 logger.addHandler(handler)
-
-
-class OSBusyError(OSError):
-
-    def __init__(self, *args):
-        super().__init__(EBUSY, *args)
 
 
 def cut_iter(
@@ -176,25 +190,16 @@ CREATE TABLE IF NOT EXISTS data (
     ctime INTEGER NOT NULL DEFAULT 0,
     mtime INTEGER NOT NULL DEFAULT 0,
     path TEXT NOT NULL DEFAULT '',
-    ancestors JSON NOT NULL DEFAULT '',
     updated_at DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%S.%f+08:00', 'now', '+8 hours'))
 );
 
-CREATE TABLE IF NOT EXISTS trash (
-    _id INTEGER PRIMARY KEY AUTOINCREMENT,
-    id INTEGER NOT NULL,
+CREATE TABLE IF NOT EXISTS dir (
+    id INTEGER NOT NULL PRIMARY KEY,
     parent_id INTEGER NOT NULL,
     pickcode TEXT NOT NULL DEFAULT '',
     name TEXT NOT NULL,
-    size INTEGER NOT NULL DEFAULT 0,
-    sha1 TEXT NOT NULL DEFAULT '',
-    is_dir INTEGER NOT NULL CHECK(is_dir IN (0, 1)),
-    is_image INTEGER NOT NULL CHECK(is_image IN (0, 1)) DEFAULT 0,
     ctime INTEGER NOT NULL DEFAULT 0,
-    mtime INTEGER NOT NULL DEFAULT 0,
-    path TEXT NOT NULL DEFAULT '',
-    ancestors JSON NOT NULL DEFAULT '',
-    created_at DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%S.%f+08:00', 'now', '+8 hours'))
+    mtime INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TRIGGER IF NOT EXISTS trg_data_updated_at
@@ -206,7 +211,41 @@ END;
 
 CREATE INDEX IF NOT EXISTS idx_data_parent_id ON data(parent_id);
 CREATE INDEX IF NOT EXISTS idx_data_path ON data(path);
+CREATE INDEX IF NOT EXISTS idx_dir_mtime ON dir(mtime);
 """)
+
+
+def load_id_to_dirnode(
+    con: Connection | Cursor,
+    /, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+) -> dict[int, DirNode | DirNodeTuple]:
+    if id_to_dirnode is None:
+        id_to_dirnode = ID_TO_DIRNODE
+    sql = "SELECT id, name, parent_id FROM dir"
+    for row in con.execute(sql):
+        ID_TO_DIRNODE[row[0]] = cast(DirNodeTuple, (row[1], row[2]))
+    return ID_TO_DIRNODE
+
+
+def update_id_to_dirnode(
+    con: Connection | Cursor, 
+    /, 
+    client: P115Client, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+):
+    if id_to_dirnode is None:
+        id_to_dirnode = ID_TO_DIRNODE
+    sql = "SELECT MAX(mtime) FROM dir"
+    mtime = con.execute(sql).fetchone()[0] or 0
+    update_data = []
+    for attr in iter_stared_dirs(client, order="user_utime", asc=0, first_page_size=128, normalize_attr=normalize_dir_attr):
+        if attr["mtime"] < mtime:
+            break
+        ID_TO_DIRNODE[attr["id"]] = cast(DirNodeTuple, (attr["name"], attr["parent_id"]))
+        update_data.append(attr)
+    if update_data:
+        insert_dir_items(con, update_data)
 
 
 def select_ids_to_update(
@@ -259,8 +298,26 @@ def select_mtime_groups(
     con: Connection | Cursor, 
     parent_id: int = 0, 
     /, 
+    tree: bool = False, 
 ) -> Cursor:
-    sql = """\
+    if tree:
+        sql = """\
+WITH t AS (
+    SELECT id, mtime, is_dir
+    FROM data
+    WHERE parent_id=?
+    UNION ALL
+    SELECT data.id, data.mtime, data.is_dir
+    FROM t JOIN data ON (data.parent_id = t.id)
+)
+SELECT mtime, JSON_GROUP_ARRAY(id) AS "ids [JSON]"
+FROM t
+WHERE is_dir = 0
+GROUP BY mtime
+ORDER BY mtime DESC;
+"""
+    else:
+        sql = """\
 SELECT mtime, JSON_GROUP_ARRAY(id) AS "ids [JSON]"
 FROM data
 WHERE parent_id=? AND mtime != 0
@@ -270,134 +327,76 @@ ORDER BY mtime DESC;
     return con.execute(sql, (parent_id,))
 
 
-def update_dir_ancestors(
-    con: Connection | Cursor, 
-    ancestors: list[dict], 
-    to_replace: list[dict] = [], 
-    /, 
-    commit: bool = True, 
-) -> Cursor:
-    if isinstance(con, Cursor):
-        cur = con
-        con = cur.connection
-    else:
-        cur = con.cursor()
-    items1: dict[int, dict] = {}
-    items2: dict[int, dict] = {}
-    items = ChainMap(items1, items2)
-    path = ""
-    for i, a in enumerate(ancestors[1:], 2):
-        path += "/" + escape(a["name"])
-        items1[a["id"]] = {
-            "id": a["id"], 
-            "parent_id": a["parent_id"], 
-            "name": a["name"], 
-            "is_dir": 1, 
-            "path": path, 
-            "ancestors": ancestors[:i], 
-        }
-    for a in to_replace:
-        if a["is_dir"]:
-            items2[a["id"]] = {
-                "id": a["id"], 
-                "parent_id": a["parent_id"], 
-                "name": a["name"], 
-                "is_dir": 1, 
-                "path": path + "/" + escape(a["name"]), 
-                "ancestors": [*ancestors, {"id": a["id"], "parent_id": a["parent_id"], "name": a["name"]}], 
-            }
-    if not items:
-        return cur
-    sql = f"""\
-SELECT id, parent_id, name, path, JSON_ARRAY_LENGTH(ancestors) AS ancestors_length
-FROM data
-WHERE id IN ({','.join(map(str, items))})
-ORDER BY LENGTH(path) DESC;
-"""
-    changed = []
-    for row in cur.execute(sql):
-        cid = row["id"]
-        new = items[cid]
-        if row["name"] != new["name"] or row["parent_id"] != new["parent_id"]:
-            changed.append({
-                "path_old": row["path"], 
-                "path_old_stop": len(row["path"]) + 1, 
-                "path": new["path"], 
-                "ancestors_old_stop": row["ancestors_length"], 
-                "ancestors": new["ancestors"], 
-            })
-    try:
-        if changed:
-            sql = """\
-UPDATE data
-SET
-    path = :path || SUBSTR(path, :path_old_stop), 
-    ancestors = json_array_head_replace(ancestors, :ancestors, :ancestors_old_stop)
-WHERE
-    path LIKE :path_old || '/%'
-"""
-            cur.executemany(sql, changed)
-        sql = """\
-INSERT INTO
-    data(id, parent_id, name, is_dir, path, ancestors)
-VALUES
-    (:id, :parent_id, :name, :is_dir, :path, :ancestors)
-ON CONFLICT(id) DO UPDATE SET
-    parent_id = excluded.parent_id,
-    name      = excluded.name,
-    path      = excluded.path,
-    ancestors = excluded.ancestors
-WHERE
-    path != excluded.path;
-"""
-        cur.executemany(sql, items1.values())
-        if commit:
-            con.commit()
-        return cur
-    except BaseException:
-        if commit:
-            con.rollback()
-        raise
-
-
 def insert_items(
     con: Connection | Cursor, 
-    items: Mapping | Iterable[Mapping], 
+    items: dict | Iterable[dict], 
     /, 
     commit: bool = True, 
     with_path: bool = False, 
 ) -> Cursor:
-    if with_path:
-        sql = """\
+    sql = """\
 INSERT INTO
-    data(id, parent_id, pickcode, name, size, sha1, is_dir, is_image, ctime, path, ancestors, mtime)
+    data(id, parent_id, pickcode, name, size, sha1, is_dir, is_image, ctime, path, mtime)
 VALUES
-    (:id, :parent_id, :pickcode, :name, :size, :sha1, :is_dir, :is_image, :ctime, :path, :ancestors, :mtime)
+    (:id, :parent_id, :pickcode, :name, :size, :sha1, :is_dir, :is_image, :ctime, :path, :mtime)
 ON CONFLICT(id) DO UPDATE SET
     parent_id = excluded.parent_id,
     pickcode  = excluded.pickcode,
-    name      = excluded.name,
+    name      = CASE WHEN data.is_dir THEN data.name ELSE excluded.name END,
     ctime     = excluded.ctime,
     mtime     = excluded.mtime,
-    path      = excluded.path,
-    ancestors = excluded.ancestors
+    path      = excluded.path
 WHERE
     mtime != excluded.mtime
 """
+    if isinstance(items, dict):
+        items = items,
+    if commit:
+        return execute_commit(con, sql, items, executemany=True)
     else:
-        sql = """\
+        return con.executemany(sql, items)
+
+
+def insert_dir_items(
+    con: Connection | Cursor, 
+    items: Mapping | Iterable[Mapping], 
+    /, 
+    commit: bool = True, 
+) -> Cursor:
+    sql = """\
 INSERT INTO
-    data(id, parent_id, pickcode, name, size, sha1, is_dir, is_image, ctime, mtime)
+    dir(id, parent_id, pickcode, name, ctime, mtime)
 VALUES
-    (:id, :parent_id, :pickcode, :name, :size, :sha1, :is_dir, :is_image, :ctime, :mtime)
+    (:id, :parent_id, :pickcode, :name, :ctime, :mtime)
 ON CONFLICT(id) DO UPDATE SET
     parent_id = excluded.parent_id,
-    pickcode  = excluded.pickcode,
     name      = excluded.name,
-    ctime     = excluded.ctime,
     mtime     = excluded.mtime
 WHERE
     mtime != excluded.mtime
+"""
+    if isinstance(items, Mapping):
+        items = items,
+    if commit:
+        return execute_commit(con, sql, items, executemany=True)
+    else:
+        return con.executemany(sql, items)
+
+
+def insert_dir_items_without_mtime(
+    con: Connection | Cursor, 
+    items: Mapping | Iterable[Mapping], 
+    /, 
+    commit: bool = True, 
+) -> Cursor:
+    sql = """\
+INSERT INTO
+    dir(id, parent_id, name)
+VALUES
+    (:id, :parent_id, :name)
+ON CONFLICT(id) DO UPDATE SET
+    parent_id = excluded.parent_id,
+    name      = excluded.name
 """
     if isinstance(items, Mapping):
         items = items,
@@ -417,21 +416,11 @@ def delete_items(
         cond = f"id = {ids:d}"
     else:
         cond = "id IN (%s)" % (",".join(map(str, ids)) or "NULL")
-    sql = f"""\
-DELETE FROM data WHERE {cond}
-RETURNING id, parent_id, pickcode, name, size, sha1, is_dir, is_image, ctime, path, ancestors, mtime"""
-    cur = con.execute(sql)
-    sql = """\
-INSERT INTO
-    trash(id, parent_id, pickcode, name, size, sha1, is_dir, is_image, ctime, path, ancestors, mtime)
-VALUES
-    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-"""
-    items = list(cur)
+    sql = "DELETE FROM data WHERE " + cond
     if commit:
-        return execute_commit(cur, sql, items, executemany=True)
+        return execute_commit(con, sql)
     else:
-        return cur.executemany(sql, items)
+        return con.execute(sql)
 
 
 def update_files_time(
@@ -453,23 +442,52 @@ WHERE parent_id = ?;
 
 def update_path(
     con: Connection | Cursor, 
-    parent_id: int = 0, 
     /, 
-    ancestors: list[dict] = [], 
     commit: bool = True, 
-) -> Cursor:
+) -> tuple[Cursor, int]:
     sql = """\
-UPDATE data
-SET
-    ancestors = JSON_INSERT(?, '$[#]', JSON_OBJECT('id', id, 'parent_id', parent_id, 'name', name)), 
-    path = ? || escape_name(name)
-WHERE parent_id=?;
+WITH RECURSIVE t(id, parent_id, path) AS (
+    SELECT
+        id, 
+        data.parent_id, 
+        '/' || escape_name(data.name)
+    FROM
+        data JOIN dir USING (id)
+    WHERE
+        data.name != dir.name
+        OR data.parent_id != dir.parent_id
+    UNION ALL
+    SELECT
+        t.id, 
+        data.parent_id, 
+        '/' || escape_name(data.name) || t.path
+    FROM
+        t JOIN data ON (t.parent_id=data.id)
+)
+SELECT id, path 
+FROM t 
+WHERE parent_id = 0
+ORDER BY path DESC;
 """
-    dirname = "/".join(a["name"] for a in ancestors) + "/"
-    if commit:
-        return execute_commit(con, sql, (ancestors, dirname, parent_id))
+    def get_path(cid):
+        path = ""
+        while cid:
+            name, cid = ID_TO_DIRNODE[cid]
+            path = "/" + escape(name) + path
+        return path
+    if isinstance(con, Connection):
+        cur = con.cursor()
     else:
-        return con.execute(sql, (ancestors, dirname, parent_id))
+        cur = con
+    change = 0
+    for cid, path in con.execute(sql):
+        path_new = get_path(cid)
+        cur.execute("UPDATE data SET name=?, path=? WHERE id=?", (ID_TO_DIRNODE[cid][0], path_new, cid))
+        cur.execute("UPDATE data SET path = ? || SUBSTR(path, ?) WHERE path LIKE ? || '/%'", (path_new, len(path) + 1, path))
+        change += cur.rowcount + 1
+    if commit:
+        cur.connection.commit()
+    return cur, change
 
 
 def find_dangling_ids(
@@ -504,11 +522,43 @@ def find_dangling_ids(
     return na_ids
 
 
-def cleandb(
+def clear_invalid_dirs(
+    con, 
+    /, 
+    client: P115Client, 
+    commit: bool = True, 
+):
+    """删除无效的目录，也就是数据库中存在，但是网盘中不存在的目录
+    """
+    sql = """\
+SELECT
+    data.id
+FROM
+    data LEFT JOIN data AS data2 ON (data.id = data2.parent_id)
+WHERE
+    data.is_dir AND data2.id IS NULL;
+"""
+    ids = [row[0] for row in con.execute(sql)]
+    na_ids = []
+    for i in range(0, len(ids), 100_000):
+        part = ids[i:i+100_000]
+        resp = client.fs_file_skim(part, request=request)
+        if resp.get("error") == "文件不存在":
+            na_ids.extend(part)
+        else:
+            check_response(resp)
+            s = {int(a["file_id"]) for a in resp["data"]}
+            na_ids.extend(id for id in part if id not in s)
+    return delete_items(con, na_ids, commit=commit)
+
+
+def clear_dangling_items(
     con: Connection | Cursor, 
     /, 
     commit: bool = True, 
 ) -> Cursor:
+    """删除悬空的元素，所谓悬空，意指通过 paren_id 往上找寻，存在某个 paren_id != 0 且不在数据库中，然后这个 parent_id 之下的子树整个都要被移除
+    """
     return delete_items(con, find_dangling_ids(con), commit=commit)
 
 
@@ -529,30 +579,44 @@ def normalize_attr(info: dict, /) -> dict:
     return attr
 
 
+def normalize_dir_attr(info: dict, /) -> dict:
+    return {
+        "id": int(info["cid"]), 
+        "parent_id": int(info["pid"]), 
+        "pickcode": info["pc"], 
+        "name": info["n"], 
+        "ctime": int(info["tp"]), 
+        "mtime": int(info["te"]), 
+    }
+
+
+# TODO: 如果发生 id 重复，但 count 没变，则并不报错，会丢弃重复的 id，并增加计数器，等拉取完后，从头部再开始再取一次（每取出一个未见到过的元素，计数器减 1，直到计数器为 0）
+# TODO: 每次都要记录上一次的头部元素是哪个，因为可能反复要从头部开始，去追更，直到把所有更新都找全（如果找到上次的头部时，未遇到重复id，而计数器不为 0，则报错）
 def iterdir(
     client: P115Client, 
     id: int = 0, 
     /, 
-    page_size: int = 1024, 
-) -> tuple[int, list[dict], Iterator[dict]]:
+    page_size: int = 10_000, 
+    payload: dict = {}, 
+) -> tuple[int, list[dict], dict[int, dict], Iterator[dict]]:
     if page_size <= 0:
-        page_size = 1024
+        page_size = 10_000
     payload = {
         "asc": 0, "cid": id, "custom_order": 1, "fc_mix": 1, "limit": min(16, page_size), 
-        "show_dir": 1, "o": "user_utime", "offset": 0, 
+        "show_dir": 1, "o": "user_utime", "offset": 0, **payload, 
     }
     fs_files = client.fs_files
     count = -1
     ancestors = [{"id": 0, "parent_id": 0, "name": ""}]
-
+    seen: dict[int, dict] = {}
     def get_files():
         nonlocal count
-        resp = check_response(fs_files(payload))
+        resp = check_response(fs_files(payload, request=request))
         if int(resp["path"][-1]["cid"]) != id:
             if count < 0:
-                raise NotADirectoryError(ENOTDIR, f"not a dir or deleted: {id}")
+                raise NotADirectoryError(ENOTDIR, f"not a dir or deleted: cid={id}")
             else:
-                raise FileNotFoundError(ENOENT, f"no such dir: {id}")
+                raise FileNotFoundError(ENOENT, f"no such dir: cid={id}")
         ancestors[1:] = (
             {"id": int(info["cid"]), "parent_id": int(info["pid"]), "name": info["name"]} 
             for info in resp["path"][1:]
@@ -560,24 +624,25 @@ def iterdir(
         if count < 0:
             count = resp["count"]
         elif count != resp["count"]:
-            raise OSBusyError(f"detected count changes during iteration: {id}")
+            raise BusyOSError(EBUSY, f"detected count changes during iteration: cid={id}")
         return resp
-
     resp = get_files()
-
     def iter():
         nonlocal resp
         offset = 0
         payload["limit"] = page_size
         while True:
-            yield from map(normalize_attr, resp["data"])
+            for attr in map(normalize_attr, resp["data"]):
+                if attr["id"] in seen:
+                    raise BusyOSError(EBUSY, f"duplicate id found, means that some unpulled child elements have been updated: cid={id}")
+                seen[attr["id"]] = attr
+                yield attr
             offset += len(resp["data"])
             if offset >= count:
                 break
             payload["offset"] = offset
             resp = get_files()
-
-    return count, ancestors, iter()
+    return count, ancestors, seen, iter()
 
 
 def diff_dir(
@@ -585,55 +650,63 @@ def diff_dir(
     client: P115Client, 
     id: int = 0, 
     /, 
+    tree: bool = False, 
 ):
     n = 0
     saved: dict[int, set[int]] = {}
-    for mtime, ls in select_mtime_groups(con, id):
+    for mtime, ls in select_mtime_groups(con, id, tree=tree):
+        if isinstance(ls, (bytes, str)):
+            ls = loads(ls)
         saved[mtime] = set(ls)
         n += len(ls)
 
     replace_list: list[dict] = []
     delete_list: list[int] = []
-    count, ancestors, data_it = iterdir(client, id)
-    if not n:
-        replace_list.extend(data_it)
-        return ancestors, delete_list, replace_list
-
-    seen: set[int] = set()
-    seen_add = seen.add
-    it = iter(saved.items())
-    his_mtime, his_ids = next(it)
-    for attr in data_it:
-        cur_id = attr["id"]
-        if cur_id in seen:
-            raise OSBusyError(f"duplicate id found: {cur_id}")
-        seen_add(cur_id)
-        cur_mtime = attr["mtime"]
-        while his_mtime > cur_mtime:
-            delete_list.extend(his_ids - seen)
-            n -= len(his_ids)
-            if not n:
+    if tree:
+        count, ancestors, seen, data_it = iterdir(client, id, payload={"type": 99})
+    else:
+        count, ancestors, seen, data_it = iterdir(client, id)
+    dirs: list[dict] = ancestors[1:]
+    try:
+        if not n:
+            replace_list.extend(data_it)
+            return delete_list, replace_list
+        it = iter(saved.items())
+        his_mtime, his_ids = next(it)
+        for attr in data_it:
+            if attr["is_dir"]:
+                dirs.append(attr)
+            cur_id = attr["id"]
+            cur_mtime = attr["mtime"]
+            while his_mtime > cur_mtime:
+                delete_list.extend(his_ids - seen.keys())
+                n -= len(his_ids)
+                if not n:
+                    replace_list.append(attr)
+                    replace_list.extend(data_it)
+                    return delete_list, replace_list
+                his_mtime, his_ids = next(it)
+            if his_mtime == cur_mtime:
+                if cur_id in his_ids:
+                    n -= 1
+                    if count - len(seen) == n:
+                        return delete_list, replace_list
+                    his_ids.remove(cur_id)
+            else:
                 replace_list.append(attr)
-                replace_list.extend(data_it)
-                return ancestors, delete_list, replace_list
-            his_mtime, his_ids = next(it)
-        if his_mtime == cur_mtime:
-            if cur_id in his_ids:
-                n -= 1
-                if count - len(seen) == n:
-                    return ancestors, delete_list, replace_list
-                his_ids.remove(cur_id)
-        else:
-            replace_list.append(attr)
-    for _, his_ids in it:
-        delete_list.extend(his_ids - seen)
-    return ancestors, delete_list, replace_list
+        for _, his_ids in it:
+            delete_list.extend(his_ids - seen.keys())
+        return delete_list, replace_list
+    finally:
+        if dirs:
+            insert_dir_items_without_mtime(con, dirs)
 
 
 def updatedb_one(
     client: str | P115Client, 
     dbfile: None | str | Connection | Cursor = None, 
     id: int = 0, 
+    /, 
 ):
     if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
@@ -642,22 +715,30 @@ def updatedb_one(
     if isinstance(dbfile, (Connection, Cursor)):
         con = dbfile
         try:
-            ancestors, to_delete, to_replace = diff_dir(con, client, id)
-            logger.info("[\x1b[1;32mGOOD\x1b[0m] %s", id)
+            start = time()
+            to_delete, to_replace = diff_dir(con, client, id)
         except BaseException as e:
             logger.exception("[\x1b[1;31mFAIL\x1b[0m] %s", id)
             if isinstance(e, (FileNotFoundError, NotADirectoryError)):
                 delete_items(con, id)
             raise
         else:
-            update_dir_ancestors(con, ancestors, to_replace, commit=False)
             if to_delete:
                 delete_items(con, to_delete, commit=False)
             if to_replace:
+                ensure_attr_path(client, to_replace, with_path=True, id_to_dirnode=ID_TO_DIRNODE)
                 insert_items(con, to_replace, commit=False)
-                update_path(con, id, ancestors=ancestors, commit=False)
+            _, updated = update_path(con, commit=False)
             update_files_time(con, id, commit=False)
             do_commit(con)
+            logger.info(
+                "[\x1b[1;32mGOOD\x1b[0m] %s, upsert: %d, update_path: %d, delete: %d, cost: %.6f s", 
+                id, 
+                len(to_replace), 
+                updated, 
+                len(to_delete), 
+                time() - start, 
+            )
     else:
         with connect(
             dbfile, 
@@ -665,13 +746,85 @@ def updatedb_one(
             uri=dbfile.startswith("file:"), 
         ) as con:
             initdb(con)
+            load_id_to_dirnode(con)
             updatedb_one(client, con, id)
+
+
+def updatedb_tree(
+    client: str | P115Client, 
+    dbfile: None | str | Connection | Cursor = None, 
+    id: int = 0, 
+    /, 
+    no_dir_moved: bool = False, 
+):
+    if isinstance(client, str):
+        client = P115Client(client, check_for_relogin=True)
+    if not dbfile:
+        dbfile = f"115-{client.user_id}.db"
+    if isinstance(dbfile, (Connection, Cursor)):
+        con = dbfile
+        try:
+            start = time()
+            to_delete, to_replace = diff_dir(con, client, id, tree=True)
+            if not no_dir_moved:
+                update_id_to_dirnode(con, client)
+            if to_replace:
+                all_pids: set[int] = set()
+                pids = {attr["parent_id"] for attr in to_replace if attr["parent_id"]}
+                while pids:
+                    all_pids.update(pids)
+                    if find_ids := pids - ID_TO_DIRNODE.keys():
+                        ids_it = iter(find_ids)
+                        while ids := ",".join(map(str, islice(ids_it, 10_000))):
+                            check_response(client.fs_star_set(ids, request=request))
+                            check_response(client.fs_desc_set(ids, request=request))
+                        update_id_to_dirnode(con, client)
+                    pids = {ppid for pid in pids if (ppid := ID_TO_DIRNODE[pid][1])}
+                fields = ("id", "parent_id", "pickcode", "name", "ctime", "mtime", "size", "sha1", "is_dir", "is_image")
+                sql = """\
+    SELECT id, parent_id, pickcode, name, ctime, mtime, 0 AS size, '' AS sha1, 1 AS is_dir, 0 AS is_image 
+    FROM dir WHERE id in (%s)""" % ",".join(map('%d'.__mod__, all_pids))
+                to_replace.extend(dict(zip(fields, row)) for row in con.execute(sql))
+                ensure_attr_path(client, to_replace, with_path=True, id_to_dirnode=ID_TO_DIRNODE)
+        except BaseException as e:
+            logger.exception("[\x1b[1;31mFAIL\x1b[0m] %s", id)
+            if isinstance(e, (FileNotFoundError, NotADirectoryError)):
+                delete_items(con, id)
+            raise
+        else:
+            if to_delete:
+                delete_items(con, to_delete, commit=False)
+            if to_replace:
+                insert_items(con, to_replace, commit=False)
+            _, updated = update_path(con, commit=False)
+            update_files_time(con, id, commit=False)
+            do_commit(con)
+            logger.info(
+                "[\x1b[1;32mGOOD\x1b[0m] %s, upsert: %d, update_path: %d, delete: %d, cost: %.6f s", 
+                id, 
+                len(to_replace), 
+                updated, 
+                len(to_delete), 
+                time() - start, 
+            )
+    else:
+        with connect(
+            dbfile, 
+            detect_types=PARSE_DECLTYPES|PARSE_COLNAMES, 
+            uri=dbfile.startswith("file:"), 
+        ) as con:
+            initdb(con)
+            load_id_to_dirnode(con)
+            updatedb_tree(client, con, id, no_dir_moved=no_dir_moved)
 
 
 def updatedb(
     client: str | P115Client, 
     dbfile: None | str | Connection | Cursor = None, 
     top_dirs: int | str | Iterable[int | str] = 0, 
+    auto_splitting_threshold: int = 20_0000, 
+    auto_splitting_statistics_timeout: None | float = 3, 
+    no_dir_moved: bool = False, 
     recursive: bool = True, 
     resume: bool = False, 
     clean: bool = False, 
@@ -680,6 +833,12 @@ def updatedb(
         client = P115Client(client, check_for_relogin=True)
     if not dbfile:
         dbfile = f"115-{client.user_id}.db"
+    if (auto_splitting_statistics_timeout is None or 
+        isnan(auto_splitting_statistics_timeout) or 
+        isinf(auto_splitting_statistics_timeout) or 
+        auto_splitting_statistics_timeout <= 0
+    ):
+        auto_splitting_statistics_timeout = None
     if isinstance(dbfile, (Connection, Cursor)):
         con = dbfile
         seen: set[int] = set()
@@ -694,7 +853,7 @@ def updatedb(
                 top_ids = (top_dir,)
             else:
                 try:
-                    resp = client.fs_dir_getid(top_dir)
+                    resp = check_response(client.fs_dir_getid(top_dir, request=request))
                     if not resp["id"]:
                         return
                     top_ids = (int(resp["id"]),)
@@ -713,7 +872,7 @@ def updatedb(
                         add_id(top_dir)
                     else:
                         try:
-                            resp = client.fs_dir_getid(top_dir)
+                            resp = check_response(client.fs_dir_getid(top_dir, request=request))
                             if not resp["id"]:
                                 continue
                             add_id(int(resp["id"]))
@@ -731,19 +890,40 @@ def updatedb(
             if id in seen:
                 logger.warning("[\x1b[1;33mSKIP\x1b[0m]", id)
                 continue
+            if auto_splitting_threshold <= 0:
+                need_to_split_tasks = True
+            else:
+                if id == 0:
+                    resp = check_response(client.fs_space_summury(request=request))
+                    count = sum(v["count"] for k, v in resp["type_summury"].items() if k.isupper())
+                else:
+                    try:
+                        resp = client.fs_category_get(id, timeout=auto_splitting_statistics_timeout, request=request)
+                        if not resp:
+                            seen_add(id)
+                            continue
+                        check_response(resp)
+                        count = int(resp["count"])
+                    except ReadTimeoutError:
+                        count = float("inf")
+                need_to_split_tasks = count > auto_splitting_threshold
             try:
-                updatedb_one(client, con, id)
+                if not recursive or need_to_split_tasks:
+                    updatedb_one(client, con, id)
+                else:
+                    updatedb_tree(client, con, id, no_dir_moved=no_dir_moved)
             except (FileNotFoundError, NotADirectoryError):
                 pass
-            except OSBusyError:
+            except BusyOSError:
                 logger.warning("[\x1b[1;34mREDO\x1b[0m] %s", id)
                 push(id)
             else:
                 seen_add(id)
-                if recursive:
+                if recursive and need_to_split_tasks:
                     dq.extend(r[0] for r in select_subdir_ids(con, id))
         if clean and top_ids:
-            cleandb(con)
+            clear_invalid_dirs(con, client)
+            clear_dangling_items(con)
     else:
         with connect(
             dbfile, 
@@ -751,10 +931,14 @@ def updatedb(
             uri=dbfile.startswith("file:"), 
         ) as con:
             initdb(con)
+            load_id_to_dirnode(con)
             updatedb(
                 client, 
                 con, 
                 top_dirs=top_dirs, 
+                auto_splitting_threshold=auto_splitting_threshold, 
+                auto_splitting_statistics_timeout=auto_splitting_statistics_timeout, 
+                no_dir_moved=no_dir_moved, 
                 recursive=recursive, 
                 resume=resume, 
                 clean=clean, 
@@ -786,6 +970,9 @@ if __name__ == "__main__":
     updatedb(
         client, 
         dbfile=args.dbfile, 
+        auto_splitting_threshold=args.auto_splitting_threshold, 
+        auto_splitting_statistics_timeout=args.auto_splitting_statistics_timeout, 
+        no_dir_moved=args.no_dir_moved, 
         recursive=not args.not_recursive, 
         resume=args.resume, 
         top_dirs=args.top_dirs or 0, 
@@ -799,7 +986,5 @@ if __name__ == "__main__":
 # TODO: 支持同一个 cookies 并发因子，默认值 1
 # TODO: 使用协程进行并发，而非多线程
 # TODO: 如果请求超时，则需要进行重试
-# TODO: 使用 urllib3 替代 httpx，增加稳定性
-# TODO: 允许使用批量拉取方法，而避免递归
 # TODO: sqlite 的数据库事务和写入会自动加锁，如果有多个程序在并发，则可以等待锁，需要一个超时时间和重试次数
-
+# TODO: iterdir 函数支持并发

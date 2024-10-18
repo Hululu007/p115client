@@ -29,9 +29,8 @@ class P115OSError(OSError):
             if isinstance(message, Mapping):
                 return message[attr]
         except KeyError as e:
-            raise TypeError(attr) from e
-        else:
-            raise TypeError(attr)
+            raise AttributeError(attr) from e
+        raise AttributeError(attr)
 
     def __getitem__(self, key, /):
         message = self.message

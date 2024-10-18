@@ -51,7 +51,7 @@ CLASS_TO_TYPE: Final[dict[str, int]] = {
     "JG_BOOK": 7, 
     "BOOK": 7
 }
-#: 文件后缀对应的所属类型的整数代码
+#: 文件后缀对应的所属类型的整数代码（尚需补充）
 SUFFIX_TO_TYPE: Final[dict[str, int]] = {
     ".chm": 1, 
     ".doc": 1, 

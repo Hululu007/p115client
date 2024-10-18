@@ -6,7 +6,7 @@ __version__ = (0, 0, 3)
 __all__ = ["make_application"]
 __requirements__ = ["blacksheep", "blacksheep_client_request", "cachetools", "p115client", "posixpatht", "uvicorn"]
 __doc__ = """\
-        \x1b[5m🚀\x1b[0m 115 直链服务 \x1b[5m🍳\x1b[0m
+        \x1b[5m🚀\x1b[0m \x1b[1m115 直链服务\x1b[0m \x1b[5m🍳\x1b[0m
 
 链接格式（每个参数都是\x1b[1;31m可选的\x1b[0m）：\x1b[4m\x1b[34mhttp://localhost:8000{\x1b[1;36mpath2\x1b[0m\x1b[4m\x1b[34m}?pickcode={\x1b[1;36mpickcode\x1b[0m\x1b[4m\x1b[34m}&id={\x1b[1;36mid\x1b[0m\x1b[4m\x1b[34m}&sha1={\x1b[1;36msha1\x1b[0m\x1b[4m\x1b[34m}&path={\x1b[1;36mpath\x1b[0m\x1b[4m\x1b[34m}&kind={\x1b[1;36mkind\x1b[0m\x1b[4m\x1b[34m}&cache={\x1b[1;36mcache\x1b[0m\x1b[4m\x1b[34m}&sign={\x1b[1;36msign\x1b[0m\x1b[4m\x1b[34m}&t={\x1b[1;36mt\x1b[0m\x1b[4m\x1b[34m}\x1b[0m
 

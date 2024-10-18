@@ -4,20 +4,21 @@
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __version__ = (0, 0, 4)
 __all__ = ["make_application"]
-__doc__ = """115 302 服务（仅针对视频）
+__doc__ = """\
+        \x1b[5m🚄\x1b[0m \x1b[1m115 302 服务(仅针对视频)\x1b[0m \x1b[5m🌊\x1b[0m
 
-TIPS: 请在脚本同一目录下，创建一个 115-cookies.txt 文件，并写入 cookies
+\x1b[1mTIPS\x1b[0m: 请在脚本同一目录下，创建一个 \x1b[1;4m\x1b[34m115-cookies.txt\x1b[0m 文件，并写入 cookies
       如果没有，则会自动创建，并要求你扫码，默认自动绑定到 harmony 端（即 115 鸿蒙版）
 
 此程序用于请求视频文件的直链，支持两种调用方式
 
 1. 以视频的文件名（仅仅是文件名，而不是完整路径）获取直链
 
-    http://localhost:8000/video.mp4
+    \x1b[4m\x1b[34mhttp://localhost:8000/video.mp4\x1b[0m
 
 2. 以 pickcode 获取直链（这种方式可以获取任何文件的直链，不限于视频）
 
-    http://localhost:8000?pickcode=xxxxx
+    \x1b[4m\x1b[34mhttp://localhost:8000?pickcode=xxxxx\x1b[0m
 
 如果视频的文件名不在缓存中，则第 1 种调用方式会返回 404 响应。因此如果要用文件名来获取缓存，请先等缓存第一次构建完，再进行使用。
 🚨 请确保那些指定目录下的视频文件的名字各不相同。
@@ -34,15 +35,15 @@ TIPS: 请在脚本同一目录下，创建一个 115-cookies.txt 文件，并写
 
 另外提供了一些接口用于设置 cookies、添加增删查批量任务、添加队列任务等，具体请访问了解
 
-    http://localhost:8000/docs
+    \x1b[4m\x1b[34mhttp://localhost:8000/docs\x1b[0m
 
 或者
 
-    http://localhost:8000/redocs
+    \x1b[4m\x1b[34mhttp://localhost:8000/redocs\x1b[0m
 
-我推荐一个命令行使用，用于执行 HTTP 请求的工具，类似 wget
+再推荐一个命令行使用，用于执行 HTTP 请求的工具，类似 \x1b[1;3mwget\x1b[0m
 
-    https://pypi.org/project/httpie/
+    \x1b[4m\x1b[34mhttps://pypi.org/project/httpie/\x1b[0m
 """
 __requirements__ = ["blacksheep", "blacksheep_client_request", "p115client", "uvicorn"]
 

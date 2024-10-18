@@ -15,7 +15,7 @@ from collections import defaultdict, deque
 from collections.abc import AsyncIterator, Callable, Collection, Coroutine, Iterable, Iterator, Mapping
 from itertools import chain, islice
 from operator import itemgetter
-from typing import cast, overload, Any, Final, Literal, NamedTuple, TypeVar
+from typing import cast, overload, Any, Final, Literal, NamedTuple, NewType, TypeVar
 from warnings import warn
 
 from asynctools import async_filter, async_map, to_list
@@ -34,8 +34,10 @@ class DirNode(NamedTuple):
     name: str
     parent_id: int = 0
 
+DirNodeTuple = NewType("DirNodeTuple", tuple[str, int])
+
 #: 用于缓存每个用户（根据用户 id 区别）的每个目录 id 到所对应的 (名称, 父id) 的元组的字典的字典
-ID_TO_DIRNODE_CACHE: Final[defaultdict[int, dict[int, DirNode]]] = defaultdict(dict)
+ID_TO_DIRNODE_CACHE: Final[defaultdict[int, dict[int, DirNode | DirNodeTuple]]] = defaultdict(dict)
 
 
 def type_of_attr(attr: Mapping, /) -> int:
@@ -201,7 +203,8 @@ def get_id_of_path(
 def _iter_fs_files(
     client: str | P115Client, 
     payload: int | str | dict = 0, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    first_page_size: None | int = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     only_dirs: bool = False, 
     *, 
@@ -213,7 +216,8 @@ def _iter_fs_files(
 def _iter_fs_files(
     client: str | P115Client, 
     payload: int | str | dict = 0, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    first_page_size: None | int = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     only_dirs: bool = False, 
     *, 
@@ -224,7 +228,8 @@ def _iter_fs_files(
 def _iter_fs_files(
     client: str | P115Client, 
     payload: int | str | dict = 0, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    first_page_size: None | int = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     only_dirs: bool = False, 
     *, 
@@ -235,6 +240,7 @@ def _iter_fs_files(
 
     :param client: 115 客户端或 cookies
     :param payload: 请求参数，如果是 int 或 str，则视为 cid
+    :param first_page_size: 第一次拉取时的分页大小，如果为 None 或 <= 0，则自动确定
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param only_dirs: 仅罗列目录
@@ -250,6 +256,11 @@ def _iter_fs_files(
         payload = {"cid": payload, "offset": 0}
     else:
         cid = int(payload.setdefault("cid", 0))
+    page_size = payload.setdefault("limit", 10_000)
+    if not isinstance(page_size, int) or page_size <= 0:
+        page_size = payload["limit"] = 10_000
+    if first_page_size is not None and first_page_size > 0:
+        payload["limit"] = first_page_size
     if only_dirs:
         payload["fc_mix"] = 0
         payload["show_dir"] = 1
@@ -266,8 +277,9 @@ def _iter_fs_files(
         if offset < 0:
             offset = payload["offset"] = 0
         count = 0
+        resp = yield client.fs_files(payload, async_=async_, **request_kwargs)
+        payload["limit"] = page_size
         while True:
-            resp = yield client.fs_files(payload, async_=async_, **request_kwargs)
             check_response(resp)
             if int(resp["path"][-1]["cid"]) != cid:
                 raise FileNotFoundError(errno.ENOENT, cid)
@@ -299,6 +311,7 @@ def _iter_fs_files(
             if offset >= count:
                 return
             payload["offset"] = offset
+            resp = yield client.fs_files(payload, async_=async_, **request_kwargs)
     return run_gen_step_iter(gen_step, async_=async_)
 
 
@@ -306,9 +319,10 @@ def _iter_fs_files(
 def iter_stared_dirs_raw(
     client: str | P115Client, 
     page_size: int = 10_000, 
+    first_page_size: None | int = None, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False] = False, 
@@ -319,9 +333,10 @@ def iter_stared_dirs_raw(
 def iter_stared_dirs_raw(
     client: str | P115Client, 
     page_size: int = 10_000, 
+    first_page_size: None | int = None, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[True], 
@@ -331,9 +346,10 @@ def iter_stared_dirs_raw(
 def iter_stared_dirs_raw(
     client: str | P115Client, 
     page_size: int = 10_000, 
+    first_page_size: None | int = None, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False, True] = False, 
@@ -343,6 +359,7 @@ def iter_stared_dirs_raw(
 
     :param client: 115 客户端或 cookies
     :param page_size: 分页大小
+    :param first_page_size: 第一次拉取时的分页大小，如果为 None 或 <= 0，则自动确定
     :param order: 排序
 
         - "file_name": 文件名
@@ -371,6 +388,7 @@ def iter_stared_dirs_raw(
     return _iter_fs_files(
         client, 
         payload=payload, 
+        first_page_size=first_page_size, 
         id_to_dirnode=id_to_dirnode, 
         raise_for_changed_count=raise_for_changed_count, 
         only_dirs=True, 
@@ -383,10 +401,11 @@ def iter_stared_dirs_raw(
 def iter_stared_dirs(
     client: str | P115Client, 
     page_size: int = 10_000, 
+    first_page_size: None | int = None, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False] = False, 
@@ -397,10 +416,11 @@ def iter_stared_dirs(
 def iter_stared_dirs(
     client: str | P115Client, 
     page_size: int = 10_000, 
+    first_page_size: None | int = None, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[True], 
@@ -410,10 +430,11 @@ def iter_stared_dirs(
 def iter_stared_dirs(
     client: str | P115Client, 
     page_size: int = 10_000, 
+    first_page_size: None | int = None, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False, True] = False, 
@@ -423,6 +444,7 @@ def iter_stared_dirs(
 
     :param client: 115 客户端或 cookies
     :param page_size: 分页大小
+    :param first_page_size: 第一次拉取时的分页大小，如果为 None 或 <= 0，则自动确定
     :param order: 排序
 
         - "file_name": 文件名
@@ -445,6 +467,7 @@ def iter_stared_dirs(
     return do_map(normalize_attr, iter_stared_dirs_raw( # type: ignore
         client, 
         page_size=page_size, 
+        first_page_size=first_page_size, 
         order=order, 
         asc=asc, 
         id_to_dirnode=id_to_dirnode, 
@@ -462,7 +485,7 @@ def ensure_attr_path(
     with_ancestors: bool = False, 
     with_path: bool = True, 
     escape: None | Callable[[str], str] = escape, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     errors: Literal["ignore", "raise", "warn"] = "raise", 
     *, 
     async_: Literal[False] = False, 
@@ -477,7 +500,7 @@ def ensure_attr_path(
     with_ancestors: bool = False, 
     with_path: bool = True, 
     escape: None | Callable[[str], str] = escape, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     errors: Literal["ignore", "raise", "warn"] = "raise", 
     *, 
     async_: Literal[True], 
@@ -491,7 +514,7 @@ def ensure_attr_path(
     with_ancestors: bool = False, 
     with_path: bool = True, 
     escape: None | Callable[[str], str] = escape, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     errors: Literal["ignore", "raise", "warn"] = "raise", 
     *, 
     async_: Literal[False, True] = False, 
@@ -532,8 +555,8 @@ def ensure_attr_path(
     if with_ancestors:
         id_to_ancestors: dict[int, list[dict]] = {}
 
-        def get_ancestors(id: int, attr: dict | DirNode, /) -> list[dict]:
-            if isinstance(attr, DirNode):
+        def get_ancestors(id: int, attr: dict | DirNode | DirNodeTuple, /) -> list[dict]:
+            if isinstance(attr, (DirNode, tuple)):
                 name, pid = attr
             else:
                 pid = attr["parent_id"]
@@ -549,8 +572,8 @@ def ensure_attr_path(
     if with_path:
         id_to_path: dict[int, str] = {}
 
-        def get_path(attr: dict | DirNode, /) -> str:
-            if isinstance(attr, DirNode):
+        def get_path(attr: dict | DirNode | DirNodeTuple, /) -> str:
+            if isinstance(attr, (DirNode, tuple)):
                 name, pid = attr
             else:
                 pid = attr["parent_id"]
@@ -588,9 +611,10 @@ def ensure_attr_path(
                 id_to_dirnode[attr["id"]] = DirNode(attr["name"], pid)
             if pid:
                 pids.add(pid)
-        def take_while(v, /) -> bool:
-            find_ids.discard(v)
+        def take_while(info, /) -> bool:
+            find_ids.discard(int(info["cid"]))
             return bool(find_ids)
+        find_ids: set[int]
         while pids:
             if find_ids := pids - id_to_dirnode.keys():
                 try:
@@ -658,11 +682,12 @@ def iterdir_raw(
     client: str | P115Client, 
     cid: int = 0, 
     page_size: int = 10_000, 
+    first_page_size: None | int = None, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     show_dir: Literal[0, 1] = 1, 
     fc_mix: Literal[0, 1] = 1, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     only_dirs: bool = False, 
     *, 
@@ -675,11 +700,12 @@ def iterdir_raw(
     client: str | P115Client, 
     cid: int = 0, 
     page_size: int = 10_000, 
+    first_page_size: None | int = None, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     show_dir: Literal[0, 1] = 1, 
     fc_mix: Literal[0, 1] = 1, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     only_dirs: bool = False, 
     *, 
@@ -691,11 +717,12 @@ def iterdir_raw(
     client: str | P115Client, 
     cid: int = 0, 
     page_size: int = 10_000, 
+    first_page_size: None | int = None, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     show_dir: Literal[0, 1] = 1, 
     fc_mix: Literal[0, 1] = 1, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     only_dirs: bool = False, 
     *, 
@@ -707,6 +734,7 @@ def iterdir_raw(
     :param client: 115 客户端或 cookies
     :param cid: 目录 id
     :param page_size: 分页大小
+    :param first_page_size: 第一次拉取时的分页大小，如果为 None 或 <= 0，则自动确定
     :param order: 排序
 
         - "file_name": 文件名
@@ -735,6 +763,7 @@ def iterdir_raw(
             "asc": asc, "cid": cid, "cur": 1, "count_folders": 1, "fc_mix": fc_mix, 
             "limit": page_size, "show_dir": show_dir, "o": order, "offset": 0, 
         }, 
+        first_page_size=first_page_size, 
         id_to_dirnode=id_to_dirnode, 
         raise_for_changed_count=raise_for_changed_count, 
         only_dirs=only_dirs, 
@@ -748,6 +777,7 @@ def iterdir(
     client: str | P115Client, 
     cid: int = 0, 
     page_size: int = 10_000, 
+    first_page_size: None | int = None, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     show_dir: Literal[0, 1] = 1, 
@@ -756,7 +786,7 @@ def iterdir(
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     only_dirs: bool = False, 
     *, 
@@ -769,6 +799,7 @@ def iterdir(
     client: str | P115Client, 
     cid: int = 0, 
     page_size: int = 10_000, 
+    first_page_size: None | int = None, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     show_dir: Literal[0, 1] = 1, 
@@ -777,7 +808,7 @@ def iterdir(
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     only_dirs: bool = False, 
     *, 
@@ -789,6 +820,7 @@ def iterdir(
     client: str | P115Client, 
     cid: int = 0, 
     page_size: int = 10_000, 
+    first_page_size: None | int = None, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     show_dir: Literal[0, 1] = 1, 
@@ -797,7 +829,7 @@ def iterdir(
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     only_dirs: bool = False, 
     *, 
@@ -809,6 +841,7 @@ def iterdir(
     :param client: 115 客户端或 cookies
     :param cid: 目录 id
     :param page_size: 分页大小
+    :param first_page_size: 第一次拉取时的分页大小，如果为 None 或 <= 0，则自动确定
     :param order: 排序
 
         - "file_name": 文件名
@@ -842,6 +875,7 @@ def iterdir(
             client, 
             cid=cid, 
             page_size=page_size, 
+            first_page_size=first_page_size, 
             order=order, 
             asc=asc, 
             show_dir=show_dir, 
@@ -894,12 +928,13 @@ def iter_files_raw(
     client: str | P115Client, 
     cid: int = 0, 
     page_size: int = 10_000, 
+    first_page_size: None | int = None, 
     suffix: str = "", 
     type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     cur: Literal[0, 1] = 0, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False] = False, 
@@ -911,12 +946,13 @@ def iter_files_raw(
     client: str | P115Client, 
     cid: int = 0, 
     page_size: int = 10_000, 
+    first_page_size: None | int = None, 
     suffix: str = "", 
     type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     cur: Literal[0, 1] = 0, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[True], 
@@ -927,12 +963,13 @@ def iter_files_raw(
     client: str | P115Client, 
     cid: int = 0, 
     page_size: int = 10_000, 
+    first_page_size: None | int = None, 
     suffix: str = "", 
     type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     cur: Literal[0, 1] = 0, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False, True] = False, 
@@ -943,6 +980,7 @@ def iter_files_raw(
     :param client: 115 客户端或 cookies
     :param cid: 目录 id
     :param page_size: 分页大小
+    :param first_page_size: 第一次拉取时的分页大小，如果为 None 或 <= 0，则自动确定
     :param suffix: 后缀名（优先级高于 type）
     :param type: 文件类型
 
@@ -986,6 +1024,7 @@ def iter_files_raw(
             "asc": asc, "cid": cid, "count_folders": 0, "cur": cur, "limit": page_size, 
             "o": order, "offset": 0, "show_dir": 0, "suffix": suffix, "type": type, 
         }, 
+        first_page_size=first_page_size, 
         id_to_dirnode=id_to_dirnode, 
         raise_for_changed_count=raise_for_changed_count, 
         async_=async_, 
@@ -998,6 +1037,7 @@ def iter_files(
     client: str | P115Client, 
     cid: int = 0, 
     page_size: int = 10_000, 
+    first_page_size: None | int = None, 
     suffix: str = "", 
     type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
@@ -1007,7 +1047,7 @@ def iter_files(
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False] = False, 
@@ -1019,6 +1059,7 @@ def iter_files(
     client: str | P115Client, 
     cid: int = 0, 
     page_size: int = 10_000, 
+    first_page_size: None | int = None, 
     suffix: str = "", 
     type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
@@ -1028,7 +1069,7 @@ def iter_files(
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[True], 
@@ -1039,6 +1080,7 @@ def iter_files(
     client: str | P115Client, 
     cid: int = 0, 
     page_size: int = 10_000, 
+    first_page_size: None | int = None, 
     suffix: str = "", 
     type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
@@ -1048,7 +1090,7 @@ def iter_files(
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False, True] = False, 
@@ -1059,6 +1101,7 @@ def iter_files(
     :param client: 115 客户端或 cookies
     :param cid: 目录 id
     :param page_size: 分页大小
+    :param first_page_size: 第一次拉取时的分页大小，如果为 None 或 <= 0，则自动确定
     :param suffix: 后缀名（优先级高于 type）
     :param type: 文件类型
 
@@ -1103,8 +1146,8 @@ def iter_files(
     if with_ancestors:
         id_to_ancestors: dict[int, list[dict]] = {}
 
-        def get_ancestors(id: int, attr: dict | DirNode, /) -> list[dict]:
-            if isinstance(attr, DirNode):
+        def get_ancestors(id: int, attr: dict | DirNode | DirNodeTuple, /) -> list[dict]:
+            if isinstance(attr, (DirNode, tuple)):
                 name, pid = attr
             else:
                 pid = attr["parent_id"]
@@ -1120,8 +1163,8 @@ def iter_files(
     if with_path:
         id_to_path: dict[int, str] = {}
 
-        def get_path(attr: dict | DirNode, /) -> str:
-            if isinstance(attr, DirNode):
+        def get_path(attr: dict | DirNode | DirNodeTuple, /) -> str:
+            if isinstance(attr, (DirNode, tuple)):
                 name, pid = attr
             else:
                 pid = attr["parent_id"]
@@ -1140,6 +1183,7 @@ def iter_files(
             client, 
             cid=cid, 
             page_size=page_size, 
+            first_page_size=first_page_size, 
             suffix=suffix, 
             type=type, 
             order=order, 
@@ -1196,7 +1240,7 @@ def dict_files(
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False] = False, 
@@ -1217,7 +1261,7 @@ def dict_files(
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[True], 
@@ -1237,7 +1281,7 @@ def dict_files(
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False, True] = False, 
@@ -1336,7 +1380,7 @@ def traverse_files(
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False] = False, 
@@ -1357,7 +1401,7 @@ def traverse_files(
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[True], 
@@ -1377,7 +1421,7 @@ def traverse_files(
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False, True] = False, 
@@ -1547,7 +1591,7 @@ def iter_dupfiles(
     auto_splitting_threshold: int = 150_000, 
     auto_splitting_statistics_timeout: None | int | float = 5, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False] = False, 
@@ -1567,7 +1611,7 @@ def iter_dupfiles(
     auto_splitting_threshold: int = 150_000, 
     auto_splitting_statistics_timeout: None | int | float = 5, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[True], 
@@ -1586,7 +1630,7 @@ def iter_dupfiles(
     auto_splitting_threshold: int = 150_000, 
     auto_splitting_statistics_timeout: None | int | float = 5, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False, True] = False, 
@@ -1675,7 +1719,7 @@ def dict_dupfiles(
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False] = False, 
@@ -1698,7 +1742,7 @@ def dict_dupfiles(
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[True], 
@@ -1720,7 +1764,7 @@ def dict_dupfiles(
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False, True] = False, 
@@ -1921,7 +1965,7 @@ def dict_image_files(
     with_ancestors: bool = False, 
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False] = False, 
@@ -1939,7 +1983,7 @@ def dict_image_files(
     with_ancestors: bool = False, 
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[True], 
@@ -1956,7 +2000,7 @@ def dict_image_files(
     with_ancestors: bool = False, 
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
-    id_to_dirnode: None | dict[int, DirNode] = None, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False, True] = False, 

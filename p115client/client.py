@@ -63,6 +63,8 @@ T = TypeVar("T")
 CRE_SHARE_LINK_search: Final = re_compile(r"/s/(?P<share_code>\w+)(\?password=(?P<receive_code>\w+))?").search
 CRE_SET_COOKIE: Final = re_compile(r"[0-9a-f]{32}=[0-9a-f]{32}.*")
 CRE_CLIENT_API_search: Final = re_compile("^ +((?:GET|POST) .*)", MULTILINE).search
+CRE_SHARE_LINK_search1 = re_compile(r"(?:/s/|share\.115\.com/)(?P<share_code>[a-z0-9]+)\?password=(?P<receive_code>[a-z0-9]{4})").search
+CRE_SHARE_LINK_search2 = re_compile(r"(?P<share_code>[a-z0-9]+)-(?P<receive_code>[a-z0-9]{4})").search
 ED2K_NAME_TRANSTAB = dict(zip(b"/|", ("%2F", "%7C")))
 
 _httpx_request = None
@@ -198,6 +200,9 @@ def check_response(resp: dict | Awaitable[dict], /) -> dict | Coroutine[Any, Any
                 # {"state": false, "errno": 20009, "error": "父目录不存在。", "errtype": "war"}
                 case 20009:
                     raise FileNotFoundError(errno.ENOENT, resp)
+                # {"state": false, "errno": 50003, "msg": "很抱歉，该文件提取码不存在。", "data": ""}
+                case 50003:
+                    raise FileNotFoundError(errno.ENOENT, resp)
                 # {"state": false, "errno": 90008, "error": "文件（夹）不存在或已经删除。", "errtype": "war"}
                 case 90008:
                     raise FileNotFoundError(errno.ENOENT, resp)
@@ -216,6 +221,9 @@ def check_response(resp: dict | Awaitable[dict], /) -> dict | Coroutine[Any, Any
                 # {"state": false, "errno": 980006, "error": "404 Not Found", "request": "<api>", "data": []}
                 case 980006:
                     raise NotSupportedError(errno.ENOSYS, resp)
+                # {"state": false, "errno": 990005, "error": "你的账号有类似任务正在处理，请稍后再试！"}
+                case 990005:
+                    raise BusyOSError(errno.EBUSY, resp)
                 # {"state": false, "errno": 990009, "error": "删除[...]操作尚未执行完成，请稍后再试！", "errtype": "war"}
                 # {"state": false, "errno": 990009, "error": "还原[...]操作尚未执行完成，请稍后再试！", "errtype": "war"}
                 # {"state": false, "errno": 990009, "error": "复制[...]操作尚未执行完成，请稍后再试！", "errtype": "war"}
@@ -249,6 +257,12 @@ def check_response(resp: dict | Awaitable[dict], /) -> dict | Coroutine[Any, Any
             match resp["code"]:
                 case 99:
                     raise AuthenticationError(errno.EIO, resp)
+        elif "msg_code" in resp:
+            match resp["msg_code"]:
+                case 70004:
+                    raise IsADirectoryError(errno.EISDIR, resp)
+                case 70005:
+                    raise FileNotFoundError(errno.ENOENT, resp)
         raise P115OSError(errno.EIO, resp)
     if isinstance(resp, dict):
         return check(resp)
@@ -564,7 +578,7 @@ class P115Client:
 
     @cached_property
     def user_key(self, /) -> str:
-        return self.upload_key()["data"]["userkey"]
+        return check_response(self.upload_key())["data"]["userkey"]
 
     def _read_cookies_from_path(
         self, 
@@ -1869,6 +1883,14 @@ class P115Client:
         **request_kwargs, 
     ) -> P115URL | Coroutine[Any, Any, P115URL]:
         """获取文件的下载链接，此接口是对 `download_url_app` 的封装
+
+        :param pickcode: 提取码
+        :param strict: 如果为 True，当目标是目录时，会抛出 IsADirectoryError 异常
+        :param use_web_api: 是否使用网页版接口执行请求
+        :param async_: 是否异步
+        :param request_kwargs: 其它请求参数
+
+        :return: 下载链接
         """
         if use_web_api:
             resp = self.download_url_web(
@@ -1877,14 +1899,12 @@ class P115Client:
                 **request_kwargs, 
             )
             def get_url(resp: dict) -> P115URL:
-                if not resp["state"]:
-                    resp["pickcode"] = pickcode
-                    if resp["msg_code"] == 70005:
-                        raise FileNotFoundError(errno.ENOENT, resp)
-                    elif resp["msg_code"] == 70004 and strict:
-                        raise IsADirectoryError(errno.EISDIR, resp)
-                    else:
-                        raise OSError(errno.EIO, resp)
+                resp["pickcode"] = pickcode
+                try:
+                    check_response(resp)
+                except IsADirectoryError:
+                    if strict:
+                        raise
                 return P115URL(
                     resp.get("file_url", ""), 
                     id=int(resp["file_id"]), 
@@ -1901,11 +1921,8 @@ class P115Client:
                 **request_kwargs, 
             )
             def get_url(resp: dict) -> P115URL:
-                if not resp["state"]:
-                    resp["pickcode"] = pickcode
-                    if resp["errno"] == 50003:
-                        raise FileNotFoundError(errno.ENOENT, resp)
-                    raise OSError(errno.EIO, resp)
+                resp["pickcode"] = pickcode
+                check_response(resp)
                 for fid, info in resp["data"].items():
                     url = info["url"]
                     if strict and not url:
@@ -2130,11 +2147,12 @@ class P115Client:
     ) -> P115URL | Coroutine[Any, Any, P115URL]:
         """获取压缩包中文件的下载链接
 
-        GET https://webapi.115.com/files/extract_down_file
+        :param pickcode: 压缩包的提取码
+        :param path: 文件在压缩包中的路径
+        :param async_: 是否异步
+        :param request_kwargs: 其它请求参数
 
-        :payload:
-            - pick_code: str
-            - full_name: str
+        :return: 下载链接
         """
         path = path.rstrip("/")
         resp = self.extract_download_url_web(
@@ -2974,7 +2992,8 @@ class P115Client:
         self, 
         fids: int | str | Iterable[int | str], 
         /, 
-        file_desc: str,
+        file_desc: str = "", 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2984,7 +3003,8 @@ class P115Client:
         self, 
         fids: int | str | Iterable[int | str], 
         /, 
-        file_desc: str,
+        file_desc: str = "", 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2993,7 +3013,8 @@ class P115Client:
         self, 
         fids: int | str | Iterable[int | str], 
         /, 
-        file_desc: str = "",
+        file_desc: str = "", 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -5272,7 +5293,7 @@ class P115Client:
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
-        """获取数据报告
+        """获取数据报告（截至月末数据，分组聚合）
 
         GET https://webapi.115.com/user/report
 
@@ -5306,7 +5327,7 @@ class P115Client:
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
-        """获取数据报告（分组聚合）
+        """获取数据报告（当前数据，分组聚合）
 
         POST https://webapi.115.com/user/space_summury
         """
@@ -5573,6 +5594,7 @@ class P115Client:
               - "folder_label":      目录设置标签
               - "star_file":         设置星标
               - "move_file":         移动文件或目录
+              - "move_image_file":   移动图片
               - "delete_file":       删除文件或目录
               - "upload_file":       上传文件
               - "upload_image_file": 上传图片
@@ -7309,8 +7331,9 @@ class P115Client:
     @overload
     def share_download_url(
         self, 
-        payload: dict, 
+        payload: int | str | dict, 
         /, 
+        url: str = "", 
         strict: bool = True, 
         use_web_api: bool = False, 
         *, 
@@ -7321,8 +7344,9 @@ class P115Client:
     @overload
     def share_download_url(
         self, 
-        payload: dict, 
+        payload: int | str | dict, 
         /, 
+        url: str = "", 
         strict: bool = True, 
         use_web_api: bool = False, 
         *, 
@@ -7332,24 +7356,44 @@ class P115Client:
         ...
     def share_download_url(
         self, 
-        payload: dict, 
+        payload: int | str | dict, 
         /, 
+        url: str = "", 
         strict: bool = True, 
         use_web_api: bool = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> P115URL | Coroutine[Any, Any, P115URL]:
-        """获取分享链接中某个文件的下载链接，此接口是对 `share_download_url_app` 的封装
+        """获取分享链接中某个文件的下载链接
 
-        POST https://proapi.115.com/app/share/downurl
+        :param payload: 请求参数，如果为 int 或 str，则视为 `file_id`
 
-        :payload:
-            - file_id: int | str
-            - receive_code: str
-            - share_code: str
-            - user_id: int | str = <default>
+            - file_id: int | str 💡 文件 id
+            - receive_code: str  💡 接收码（也就是密码）
+            - share_code: str    💡 分享码
+            - user_id: int | str = <default> 💡 不需要传
+
+        :param url: 分享链接，如果提供的话，会被拆解并合并到 `payload` 中，优先级较高
+        :param strict: 如果为 True，当目标是目录时，会抛出 IsADirectoryError 异常
+        :param use_web_api: 是否使用网页版接口执行请求
+        :param async_: 是否异步
+        :param request_kwargs: 其它请求参数
+
+        :return: 下载链接
         """
+        if isinstance(payload, (int, str)):
+            payload = {"file_id": payload}
+        else:
+            payload = dict(payload)
+        if url:
+            m = CRE_SHARE_LINK_search1(url)
+            if m is None:
+                m = CRE_SHARE_LINK_search2(url)
+            if m is None:
+                raise ValueError("not a valid 115 share link")
+            payload["share_code"] = m["share_code"]
+            payload["receive_code"] = m["receive_code"] or ""
         if use_web_api:
             resp = self.share_download_url_web(payload, async_=async_, **request_kwargs)
         else:
