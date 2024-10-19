@@ -5,7 +5,7 @@ __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __version__ = (0, 0, 7)
 __all__ = ["updatedb", "updatedb_one", "updatedb_tree"]
 __doc__ = "遍历 115 网盘的目录信息导出到数据库"
-__requirements__ = ["p115client", "posixpatht", "urllib3", "urllib3_request"]
+__requirements__ = ["orjson", "p115client", "posixpatht", "urllib3", "urllib3_request"]
 
 if __name__ == "__main__":
     from argparse import ArgumentParser, RawTextHelpFormatter
@@ -42,6 +42,7 @@ if __name__ == "__main__":
         raise SystemExit(0)
 
 try:
+    from orjson import loads
     from p115client import check_response, P115Client
     from p115client.exception import BusyOSError
     from p115client.tool.iterdir import ensure_attr_path, iter_stared_dirs, DirNode, DirNodeTuple
@@ -53,6 +54,7 @@ except ImportError:
     from sys import executable
     from subprocess import run
     run([executable, "-m", "pip", "install", "-U", *__requirements__], check=True)
+    from orjson import loads
     from p115client import check_response, P115Client
     from p115client.exception import BusyOSError
     from p115client.tool.iterdir import ensure_attr_path, iter_stared_dirs, DirNode, DirNodeTuple
@@ -236,7 +238,7 @@ def update_star(
             check_response(set_star(idss, request=request))
     else:
         ids_it = iter(ids)
-        while idss := ",".join(map(str, islice(ids_it, 10_000))):
+        while idss := ",".join(map(str, islice(ids_it, batch_size))):
             check_response(set_star(idss, request=request))
 
 
@@ -769,14 +771,25 @@ def update_id_to_dirnode(
     :param con: 数据库连接或游标
     :param client: 115 网盘客户端对象
     """
-    sql = "SELECT COALESCE(MAX(mtime), 0) FROM dir"
-    mtime, = con.execute(sql).fetchone()
+    sql = """
+WITH t(mtime) AS (
+    SELECT COALESCE(MAX(mtime), 0) FROM dir
+)
+SELECT mtime, json_group_array(id)
+FROM dir JOIN t USING (mtime) 
+WHERE mtime 
+GROUP BY mtime
+"""
+    mtime, ids = con.execute(sql).fetchone()
+    ids = set(loads(ids))
     data: list[dict] = []
     add = data.append
     for attr in iter_stared_dirs(client, order="user_utime", asc=0, first_page_size=32, normalize_attr=normalize_dir_attr):
-        if attr["mtime"] <= mtime:
+        cur_id = attr["id"]
+        cur_mtime = attr["mtime"]
+        if cur_mtime < mtime or cur_mtime == mtime and cur_id in ids:
             break
-        ID_TO_DIRNODE[attr["id"]] = DirNodeTuple((attr["name"], attr["parent_id"]))
+        ID_TO_DIRNODE[cur_id] = DirNodeTuple((attr["name"], attr["parent_id"]))
         add(attr)
     if data:
         insert_dir_items(con, data)
