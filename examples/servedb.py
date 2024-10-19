@@ -464,9 +464,15 @@ CREATE TABLE IF NOT EXISTS data (
                 return FolderResource("/", environ, ROOT)
             path = path.removesuffix("/")
             sql = "SELECT id, name, path, ctime, mtime, size, pickcode, is_dir FROM data WHERE path = ? LIMIT 1"
-            cur = CON.execute(sql, (path,))
-            record = cur.fetchone()
+            record = CON.execute(sql, (path,)).fetchone()
             if not record:
+                if path.endswith(".strm"):
+                    sql = "SELECT id, name, path, ctime, mtime, size, pickcode, is_dir FROM data WHERE path LIKE ? || '.%' AND NOT is_dir LIMIT 1"
+                    record = CON.execute(sql, (path[:-5],)).fetchone()
+                    if record:
+                        attr = dict(zip(FIELDS, record))
+                        attr["path"] = path
+                        return FileResource(path, environ, attr, is_strm=True)
                 raise DAVError(404, path)
             attr = dict(zip(FIELDS, record))
             is_strm = False
