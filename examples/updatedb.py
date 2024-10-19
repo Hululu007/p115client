@@ -772,22 +772,23 @@ def update_id_to_dirnode(
     :param client: 115 网盘客户端对象
     """
     sql = """
-WITH t(mtime) AS (
-    SELECT COALESCE(MAX(mtime), 0) FROM dir
-)
 SELECT mtime, json_group_array(id)
-FROM dir JOIN t USING (mtime) 
+FROM dir JOIN (SELECT MAX(mtime) AS mtime FROM dir) USING (mtime) 
 WHERE mtime 
 GROUP BY mtime
 """
-    mtime, ids = con.execute(sql).fetchone()
-    ids = set(loads(ids))
+    record = con.execute(sql).fetchone()
+    if record:
+        mtime, ids = record
+        ids = set(loads(ids))
+    else:
+        mtime = 0
     data: list[dict] = []
     add = data.append
     for attr in iter_stared_dirs(client, order="user_utime", asc=0, first_page_size=32, normalize_attr=normalize_dir_attr):
         cur_id = attr["id"]
         cur_mtime = attr["mtime"]
-        if cur_mtime < mtime or cur_mtime == mtime and cur_id in ids:
+        if mtime and (cur_mtime < mtime or cur_mtime == mtime and cur_id in ids):
             break
         ID_TO_DIRNODE[cur_id] = DirNodeTuple((attr["name"], attr["parent_id"]))
         add(attr)
