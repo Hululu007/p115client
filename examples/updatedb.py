@@ -1008,12 +1008,14 @@ def updatedb_tree(
                 pids = {ppid for attr in to_replace if (ppid := attr["parent_id"])}
                 while pids:
                     all_pids |= pids
-                    update_desc(client, pids)
-                    no_dir_moved = False
                     if find_ids := pids - ID_TO_DIRNODE.keys():
                         update_star(client, find_ids)
+                        update_desc(client, pids)
                         update_id_to_dirnode(con, client)
                         no_dir_moved = True
+                    else:
+                        update_desc(client, pids)
+                        no_dir_moved = False
                     pids = {ppid for pid in pids if (ppid := ID_TO_DIRNODE[pid][1]) and ppid not in all_pids}
             if not no_dir_moved:
                 update_id_to_dirnode(con, client)
