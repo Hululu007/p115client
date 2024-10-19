@@ -2,7 +2,7 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 0, 6)
+__version__ = (0, 0, 7)
 __all__ = ["updatedb", "updatedb_one", "updatedb_tree"]
 __doc__ = "遍历 115 网盘的目录信息导出到数据库"
 __requirements__ = ["p115client", "posixpatht", "urllib3", "urllib3_request"]
@@ -700,36 +700,53 @@ WHERE data.is_dir AND data2.id IS NULL
 def update_path(
     con: Connection | Cursor, 
     /, 
+    root_id: int = 0, 
     commit: bool = True, 
-) -> tuple[Cursor, int]:
+) -> tuple[Cursor, int, int]:
     """以 `dir` 表为准，和 `data` 表比对，找出所有 "name" 或 "parent_id" 不同的目录，然后批量更新 `data` 表中的数据
 
     :param con: 数据库连接或游标
+    :param root_id: 根目录的 id，如果此 id > 0，则凡是之前在此目录中，将在更新后不在的，都要被删除
     :param commit: 是否提交
 
-    :return: 游标 和 更新的数据量
+    :return: 3 元组，游标、更新的数据量、删除的数据量
     """
+    if isinstance(con, Connection):
+        cur = con.cursor()
+    else:
+        cur = con
+        con = cur.connection
+    if root_id > 0:
+        sql = "SELECT path FROM data WHERE id=?"
+        row = cur.execute(sql, (root_id,)).fetchone()
+        if row is None:
+            root_id = 0
+        else:
+            root = row[0] + "/"
+            root_new = get_dir_path(root_id) + "/"
+    else:
+        root_id = 0
     sql = """\
 SELECT id, data.path, dir.mtime
 FROM data JOIN dir USING (id)
 WHERE data.name != dir.name OR data.parent_id != dir.parent_id
 ORDER BY path DESC
 """
-    if isinstance(con, Connection):
-        cur = con.cursor()
-    else:
-        cur = con
-        con = cur.connection
-    count = 0
+    updated = 0
+    deleted = 0
     for cid, path, mtime in cur.execute(sql):
         name, pid = ID_TO_DIRNODE[cid]
         path_new = get_dir_path(cid)
-        cur.execute("UPDATE data SET name=?, parent_id=?, path=?, mtime=? WHERE id=?", (name, pid, path_new, mtime, cid))
-        cur.execute("UPDATE data SET path = ? || SUBSTR(path, ?) WHERE path LIKE ? || '/%'", (path_new, len(path) + 1, path))
-        count += cur.rowcount + 1
+        if root_id and path.startswith(root) and not path_new.startswith(root_new):
+            cur.execute("DELETE FROM data WHERE id=? OR path LIKE ? || '/%'", (cid, path))
+            deleted += cur.rowcount
+        else:
+            cur.execute("UPDATE data SET name=?, parent_id=?, path=?, mtime=? WHERE id=?", (name, pid, path_new, mtime, cid))
+            cur.execute("UPDATE data SET path = ? || SUBSTR(path, ?) WHERE path LIKE ? || '/%'", (path_new, len(path) + 1, path))
+            updated += cur.rowcount + 1
     if commit:
         con.commit()
-    return cur, count
+    return cur, updated, deleted
 
 
 def load_id_to_dirnode(con: Connection | Cursor, /):
@@ -757,7 +774,7 @@ def update_id_to_dirnode(
     data: list[dict] = []
     add = data.append
     for attr in iter_stared_dirs(client, order="user_utime", asc=0, first_page_size=32, normalize_attr=normalize_dir_attr):
-        if attr["mtime"] < mtime:
+        if attr["mtime"] <= mtime:
             break
         ID_TO_DIRNODE[attr["id"]] = DirNodeTuple((attr["name"], attr["parent_id"]))
         add(attr)
@@ -862,27 +879,29 @@ def diff_dir(
     upsert_list: list[dict] = []
     delete_list: list[int] = []
     dirs: list[dict] = []
+    upsert_add = upsert_list.append
+    dirs_add = dirs.append
     if tree:
         count, ancestors, seen, data_it = iterdir(client, id, first_page_size=128 if n else 0, payload={"type": 99})
     else:
         count, ancestors, seen, data_it = iterdir(client, id, first_page_size=1 if n else 0)
     try:
         if not n:
-            upsert_list.extend(data_it)
+            upsert_list += data_it
             return delete_list, upsert_list
         it = iter(stored.items())
         his_mtime, his_ids = next(it)
         for attr in data_it:
             if attr["is_dir"]:
-                dirs.append(attr)
+                dirs_add(attr)
             cur_id = attr["id"]
             cur_mtime = attr["mtime"]
             while his_mtime > cur_mtime:
-                delete_list.extend(his_ids - seen.keys())
+                delete_list += his_ids - seen.keys()
                 n -= len(his_ids)
                 if not n:
-                    upsert_list.append(attr)
-                    upsert_list.extend(data_it)
+                    upsert_add(attr)
+                    upsert_list += data_it
                     return delete_list, upsert_list
                 his_mtime, his_ids = next(it)
             if his_mtime == cur_mtime:
@@ -891,10 +910,12 @@ def diff_dir(
                     if count - len(seen) == n:
                         return delete_list, upsert_list
                     his_ids.remove(cur_id)
+                else:
+                    upsert_add(attr)
             else:
-                upsert_list.append(attr)
+                upsert_add(attr)
         for _, his_ids in it:
-            delete_list.extend(his_ids - seen.keys())
+            delete_list += his_ids - seen.keys()
         return delete_list, upsert_list
     finally:
         if ancestors:
@@ -926,7 +947,7 @@ def updatedb_one(
                 if to_replace:
                     ensure_attr_path(client, to_replace, with_path=True, id_to_dirnode=ID_TO_DIRNODE)
                     insert_items(con, to_replace, commit=False)
-                _, updated = update_path(con, commit=False)
+                _, updated, deleted = update_path(con, commit=False)
         except BaseException as e:
             logger.exception("[\x1b[1;31mFAIL\x1b[0m] %s", id)
             if isinstance(e, (FileNotFoundError, NotADirectoryError)):
@@ -938,7 +959,7 @@ def updatedb_one(
                 id, 
                 len(to_replace), 
                 updated, 
-                len(to_delete), 
+                len(to_delete) + deleted, 
                 time() - start, 
             )
     else:
@@ -948,9 +969,7 @@ def updatedb_one(
             updatedb_one(client, con, id)
 
 
-# TODO: 文件如果被移动位置，它自己的 mtime 不变，这要怎么处理？
-# TODO: 如果文件或目录发生移动，它们的上层目录为空，之后再删除这个上层目录，这要怎么处理？
-# TODO: 要能正确处理文件是被移出目录而不是被删除
+# TODO: 文件如果被移动位置，并且还在一个根目录之下，由此它自己的 mtime 不变，这要怎么处理？或许需要结合 115 事件
 def updatedb_tree(
     client: str | P115Client, 
     dbfile: None | str | Connection | Cursor = None, 
@@ -990,6 +1009,7 @@ def updatedb_tree(
                 while pids:
                     all_pids |= pids
                     update_desc(client, pids)
+                    no_dir_moved = False
                     if find_ids := pids - ID_TO_DIRNODE.keys():
                         update_star(client, find_ids)
                         update_id_to_dirnode(con, client)
@@ -1006,7 +1026,7 @@ def updatedb_tree(
                     delete_items(con, to_delete, commit=False)
                 if to_replace:
                     insert_items(con, to_replace, commit=False)
-                _, updated = update_path(con, commit=False)
+                _, updated, deleted = update_path(con, root_id=id, commit=False)
         except BaseException as e:
             logger.exception("[\x1b[1;31mFAIL\x1b[0m] %s", id)
             if isinstance(e, (FileNotFoundError, NotADirectoryError)):
@@ -1018,7 +1038,7 @@ def updatedb_tree(
                 id, 
                 len(to_replace), 
                 updated, 
-                len(to_delete), 
+                len(to_delete) + deleted, 
                 time() - start, 
             )
     else:
@@ -1195,4 +1215,6 @@ if __name__ == "__main__":
 #       parent_id, name, is_dir=1
 # TODO: 增加子命令，可以删除目录树（通过根 id 或者根路径）
 # TODO: 如果一个文件夹被移动，那么它的更新时间不会变，只是它的上级 id 的更新时间会变，因此必要时，还是需要结合 115 更新事件
+
 # TODO: 增加一个选项，允许对数据进行全量而不是增量更新，这样可以避免一些问题
+# TODO: 如果查询的某个 id 不存在，就把这个 id 的在数据库的数据给删除
