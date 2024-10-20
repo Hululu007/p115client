@@ -2,7 +2,7 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__all = ["AVAILABLE_APPS", "APP_TO_SSOENT", "CLIENT_API_MAP"]
+__all = ["AVAILABLE_APPS", "APP_TO_SSOENT", "SSOENT_TO_APP", "CLIENT_API_MAP"]
 
 from typing import Final
 
@@ -14,10 +14,12 @@ AVAILABLE_APPS: Final[tuple[str, ...]] = (
 #: 目前已知的登录设备和对应的 ssoent
 APP_TO_SSOENT: Final[dict[str, str]] = {
     "web": "A1", 
-    "desktop": "A1", 
+    "desktop": "A1", # 临时
     "ios": "D1", 
+    "bios": "D1", # 临时
     "115ios": "D3", 
     "android": "F1", 
+    "bandroid": "F1", # 临时
     "115android": "F3", 
     "ipad": "H1", 
     "115ipad": "H3", 
@@ -30,6 +32,32 @@ APP_TO_SSOENT: Final[dict[str, str]] = {
     "wechatmini": "R1", 
     "alipaymini": "R2", 
     "harmony": "S1", 
+}
+#: 目前已知的 ssoent 和对应的登录设备，一部分因为不知道具体的设备名，所以使用目前可用的设备名，作为临时代替
+SSOENT_TO_APP: Final[dict[str, str]] = {
+    "A1": "web", 
+    "A2": "android", # 临时代替
+    "A3": "ios",     # 临时代替
+    "A4": "115ipad", # 临时代替
+    "B1": "android", # 临时代替
+    "D1": "ios", 
+    "D2": "ios",     # 临时代替
+    "D3": "115ios",  
+    "F1": "android", 
+    "F2": "android", # 临时代替
+    "F3": "115android", 
+    "H1": "115ipad", # 临时代替
+    "H2": "115ipad", # 临时代替
+    "H3": "115ipad", 
+    "I1": "tv", 
+    "M1": "qandroid", 
+    "N1": "ios",     # 临时代替
+    "P1": "windows", 
+    "P2": "mac", 
+    "P3": "linux", 
+    "R1": "wechatmini", 
+    "R2": "alipaymini", 
+    "S1": "harmony", 
 }
 #: 所有已封装的 115 接口以及对应的方法名
 CLIENT_API_MAP: Final[dict[str, str]] = {}

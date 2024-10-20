@@ -580,4 +580,3 @@ if __name__ == "__main__":
 # TODO: 文件可以被 append 写，这时打开时，会先把数据库的数据写到硬盘，然后打开这个临时文件
 # TODO: 目前是 demo 版，使用 flask 框架，之后可能改用 robyn 或 emmett 框架
 # TODO: 实现自动排除空目录而不展示
-

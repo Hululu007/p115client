@@ -68,7 +68,7 @@ from collections.abc import Collection, Iterator, Iterable, Mapping, Sequence, S
 from contextlib import contextmanager
 from errno import EBUSY, ENOENT, ENOTDIR
 from functools import partial
-from itertools import islice
+from itertools import islice, takewhile
 from math import isnan, isinf
 from sqlite3 import connect, Connection, Cursor
 from time import time
@@ -199,6 +199,7 @@ def update_desc(
     client: P115Client, 
     ids: Iterable[int], 
     /, 
+    desc: str = "", 
     batch_size: int = 10_000, 
 ):
     """设置文件或目录的备注为空，此举可更新此文件或目录的 mtime
@@ -210,17 +211,18 @@ def update_desc(
     set_desc = client.fs_desc_set
     if isinstance(ids, Sequence):
         for i in range(0, len(ids), batch_size):
-            check_response(set_desc(ids[i:i+batch_size], request=request))
+            check_response(set_desc(ids[i:i+batch_size], desc, request=request))
     else:
         ids_it = iter(ids)
         while t_ids := tuple(islice(ids_it, batch_size)):
-            check_response(set_desc(t_ids, request=request))
+            check_response(set_desc(t_ids, desc, request=request))
 
 
 def update_star(
     client: P115Client, 
     ids: Iterable[int], 
     /, 
+    star: bool = True, 
     batch_size: int = 10_000, 
 ):
     """给文件或目录加上星标，此举就目录而言，可以实现批量拉取
@@ -233,11 +235,11 @@ def update_star(
     if isinstance(ids, Sequence):
         for i in range(0, len(ids), batch_size):
             idss = ",".join(map(str, ids[i:i+batch_size]))
-            check_response(set_star(idss, request=request))
+            check_response(set_star(idss, star, request=request))
     else:
         ids_it = iter(ids)
         while idss := ",".join(map(str, islice(ids_it, batch_size))):
-            check_response(set_star(idss, request=request))
+            check_response(set_star(idss, star, request=request))
 
 
 def filter_na_ids(
@@ -771,13 +773,14 @@ def update_id_to_dirnode(
     """
     sql = "SELECT COALESCE(MAX(mtime), 0) FROM dir"
     mtime, = con.execute(sql).fetchone()
-    data: list[dict] = []
-    add = data.append
-    for attr in iter_stared_dirs(client, order="user_utime", asc=0, first_page_size=32, normalize_attr=normalize_dir_attr):
-        if attr["mtime"] < mtime:
-            break
-        ID_TO_DIRNODE[attr["id"]] = DirNodeTuple((attr["name"], attr["parent_id"]))
-        add(attr)
+    data: list[dict] = list(takewhile(lambda attr: attr["mtime"] > mtime, iter_stared_dirs(
+        client, 
+        order="user_utime", 
+        asc=0, 
+        first_page_size=32, 
+        id_to_dirnode=ID_TO_DIRNODE, 
+        normalize_attr=normalize_dir_attr, 
+    )))
     if data:
         insert_dir_items(con, data)
 
@@ -885,10 +888,11 @@ def diff_dir(
         count, ancestors, seen, data_it = iterdir(client, id, first_page_size=128 if n else 0, payload={"type": 99})
     else:
         count, ancestors, seen, data_it = iterdir(client, id, first_page_size=1 if n else 0)
+    result = delete_list, upsert_list
     try:
         if not n:
             upsert_list += data_it
-            return delete_list, upsert_list
+            return result
         it = iter(stored.items())
         his_mtime, his_ids = next(it)
         for attr in data_it:
@@ -902,13 +906,13 @@ def diff_dir(
                 if not n:
                     upsert_add(attr)
                     upsert_list += data_it
-                    return delete_list, upsert_list
+                    return result
                 his_mtime, his_ids = next(it)
             if his_mtime == cur_mtime:
                 if cur_id in his_ids:
                     n -= 1
                     if count - len(seen) == n:
-                        return delete_list, upsert_list
+                        return result
                     his_ids.remove(cur_id)
                 else:
                     upsert_add(attr)
@@ -916,7 +920,7 @@ def diff_dir(
                 upsert_add(attr)
         for _, his_ids in it:
             delete_list += his_ids - seen.keys()
-        return delete_list, upsert_list
+        return result
     finally:
         if ancestors:
             insert_dir_incomplete_items(con, ancestors)
@@ -955,11 +959,11 @@ def updatedb_one(
             raise
         else:
             logger.info(
-                "[\x1b[1;32mGOOD\x1b[0m] %s, upsert: %d, update_path: %d, delete: %d, cost: %.6f s", 
+                "[\x1b[1;32mGOOD\x1b[0m] %s, upsert: %d, delete: %d, update_path: %d, cost: %.6f s", 
                 id, 
                 len(to_replace), 
-                updated, 
                 len(to_delete) + deleted, 
+                updated, 
                 time() - start, 
             )
     else:
@@ -1036,11 +1040,11 @@ def updatedb_tree(
             raise
         else:
             logger.info(
-                "[\x1b[1;32mGOOD\x1b[0m] %s, upsert: %d, update_path: %d, delete: %d, cost: %.6f s", 
+                "[\x1b[1;32mGOOD\x1b[0m] %s, upsert: %d, delete: %d, update_path: %d, cost: %.6f s", 
                 id, 
                 len(to_replace), 
-                updated, 
                 len(to_delete) + deleted, 
+                updated, 
                 time() - start, 
             )
     else:
@@ -1191,7 +1195,11 @@ if __name__ == "__main__":
                     cookies = path
             else:
                 cookies = Path("~/115-cookies.txt").expanduser()
+
     client = P115Client(cookies, check_for_relogin=True)
+    if not client.login_status():
+        client.cookies = P115Client.login_with_qrcode("qandroid")["data"]["cookie"]
+
     updatedb(
         client, 
         dbfile=args.dbfile, 
@@ -1220,3 +1228,68 @@ if __name__ == "__main__":
 
 # TODO: 增加一个选项，允许对数据进行全量而不是增量更新，这样可以避免一些问题
 # TODO: 如果查询的某个 id 不存在，就把这个 id 的在数据库的数据给删除
+
+# 要处理下面这些事件，我认为可以并发拉取，先测试一下会不会风控，不行的话就用列表接口（经测试，确实会引发风控）
+# client.life_behavior_detail
+# 增：new_folder,upload_file,upload_image_file
+# 删：delete_file
+# 改：folder_rename,move_file,move_image_file
+# 复制：copy_folder
+# TODO 为 115 生活加上 app 版本（各种），到时看看，修改版本号，能不能规避风控
+# TODO 为罗列文件接口加上 anxia 版本
+# TODO: 一部分 app 接口是不被风控的
+# https://v.anxia.com/aps/natsort/files.php
+# https://v.anxia.com/aps/natsort/files.php
+# https://v.anxia.com/webapi/files/video
+
+
+# https://v.anxia.com/webapi/files
+# https://v.anxia.com/webapi/files/files
+# https://v.anxia.com/webapi/category/files
+# https://v.anxia.com/aps/natsort/files.php
+
+
+# from p115client import normalize_attr
+# from itertools import count, product
+
+# keywords = ("/category", "/files", "/history", "/label", "/movies", "/offine", "/photo", "/rb", "/share", "/user", "/usershare")
+# def iter_keywords():
+#     yield ""
+#     yield from keywords
+#     for i in count(2):
+#         for t in product(*((keywords,)*i)):
+#             yield "".join(t)
+
+# origin = "https://v.anxia.com/webapi"
+# keys = iter_keywords()
+
+# from concurrent.futures import ThreadPoolExecutor
+
+# from functools import partial
+# from urllib3 import PoolManager
+# from urllib3_request import request
+# request = partial(request, pool=PoolManager(1000))
+
+# def run(batch_size):
+#     ls = []
+#     with ThreadPoolExecutor(100) as e:
+#         results = e.map(lambda i: ls.extend(map(normalize_attr, client.request(
+#                 url=f'{origin}{next(keys)}/files', 
+#                 params={"cid": 2614100250469596984, "type": 99, "limit": batch_size, "offset": i}, 
+#                 headers={"Cookie": client.cookies_str}, 
+#             )["data"])), range(0, 109384, batch_size))
+#     print("loaded:", len(ls))
+
+# %time run(1000)
+
+# # anxia 接口不风控
+
+# https://webapi.115.com{next(keys)}/files
+# f"https://v.anxia.com/webapi{next(keys)}/files"
+
+# https://aps.115.com/natsort/files.php
+
+# https://proapi.115.com/android/2.0/ufile/files
+
+#     var WEB_API_URL = IS_115DOMAIN ? "//webapi.115.com" : "/webapi";
+#     var APS_URL = IS_115DOMAIN ? "//aps.115.com" : "/aps";

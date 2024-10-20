@@ -2,7 +2,7 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__all__ = ["check_response", "normalize_attr", "P115Client"]
+__all__ = ["check_response", "normalize_attr", "normalize_attr_app", "P115Client"]
 
 import errno
 
@@ -18,6 +18,8 @@ from hashlib import sha1
 from http.cookiejar import Cookie, CookieJar
 from http.cookies import Morsel
 from inspect import isawaitable
+from itertools import count
+from operator import itemgetter
 from os import fsdecode, fstat, isatty, stat, PathLike, path as ospath
 from pathlib import Path, PurePath
 from re import compile as re_compile, MULTILINE
@@ -51,7 +53,7 @@ from startfile import startfile, startfile_async # type: ignore
 from urlopen import urlopen
 from yarl import URL
 
-from .const import APP_TO_SSOENT, CLIENT_API_MAP
+from .const import CLIENT_API_MAP, SSOENT_TO_APP
 from .exception import (
     AuthenticationError, BusyOSError, DataError, LoginError, NotSupportedError, 
     P115OSError, OperationalError, P115Warning, 
@@ -219,6 +221,9 @@ def check_response(resp: dict | Awaitable[dict], /) -> dict | Coroutine[Any, Any
                 # {"state": false, "errno": 231011, "error": "文件已删除，请勿重复操作","errtype": "war"}
                 case 231011:
                     raise FileNotFoundError(errno.ENOENT, resp)
+                # {"state": false, "errno": 300104, "error": "文件超过200MB，暂不支持播放"}
+                case 300104:
+                    raise P115OSError(errno.EFBIG, resp)
                 # {"state": false, "errno": 980006, "error": "404 Not Found", "request": "<api>", "data": []}
                 case 980006:
                     raise NotSupportedError(errno.ENOSYS, resp)
@@ -260,6 +265,8 @@ def check_response(resp: dict | Awaitable[dict], /) -> dict | Coroutine[Any, Any
                     raise AuthenticationError(errno.EIO, resp)
         elif "msg_code" in resp:
             match resp["msg_code"]:
+                case 50028:
+                    raise P115OSError(errno.EFBIG, resp)
                 case 70004:
                     raise IsADirectoryError(errno.EISDIR, resp)
                 case 70005:
@@ -295,8 +302,7 @@ def normalize_attr(
         attr["parent_id"] = int(info["cid"])
     #attr["area_id"] = int(attr["aid"])
     if "pc" in info:
-        attr["pickcode"] = info["pc"]
-        attr["pick_code"] = info["pc"]
+        attr["pickcode"] = attr["pick_code"] = info["pc"]
     #attr["pick_time"] = int(info["pt"])
     #attr["pick_expire"] = info["e"]
     attr["name"] = info["n"]
@@ -351,6 +357,73 @@ def normalize_attr(
     return attr
 
 
+def normalize_attr_app(
+    info: Mapping, 
+    /, 
+    keep_raw: bool = False, 
+) -> AttrDict[str, Any]:
+    """翻译 `P115Client.fs_files_app` 等接口响应的文件信息数据，使之便于阅读
+
+    :param info: 原始数据
+    :param keep_raw: 是否保留原始数据，如果为 True，则保存到 "raw" 字段
+
+    :return: 翻译后的 dict 类型数据
+    """
+    attr: AttrDict[str, Any] = AttrDict()
+    attr["is_dir"] = attr["is_directory"] = info["fc"] == "0"
+    attr["id"] = int(info["fid"])        # fid => file_id
+    attr["parent_id"] = int(info["pid"]) # pid => parent_id
+    #attr["area_id"] = int(attr["aid"])
+    if "pc" in info:
+        attr["pickcode"] = attr["pick_code"] = info["pc"]
+    attr["name"] = info["fn"]
+    attr["size"] = int(info.get("fs") or 0)
+    attr["sha1"] = info.get("sha1")
+    attr["labels"] = info["fl"]
+    attr["ico"] = info.get("ico", "folder" if attr["is_dir"] else "")
+    if "ftype" in info:
+        attr["ftype"] = int(info["ftype"])
+    if "thumb" in info:
+        attr["thumb"] = f"https://imgjump.115.com?{info['thumb']}&size=0&sha1={info['sha1']}"
+    if "uppt" in info:
+        attr["ctime"] = attr["user_ptime"] = int(info["uppt"])
+    if "uet" in info:
+        attr["mtime"] = attr["user_utime"] = int(info["uet"])
+    if "upt" in info:
+        attr["time"] = int(info["upt"])
+    for key, name in (
+        ("ism", "star"), 
+        ("is_top", "is_top"), 
+        ("isp", "hidden"), 
+        ("ispl", "show_play_long"), 
+        ("iss", "is_share"), 
+        ("isv", "is_video"), 
+        ("issct", "is_shortcut"), 
+        ("ic", "violated"), 
+    ):
+        if key in info:
+            attr[name] = int(info[key] or 0) == 1
+    for key, name in (
+        ("def", "def"), 
+        ("def2", "def2"), 
+        ("fco", "cover"), 
+        ("fdesc", "desc"), 
+        ("flabel", "fflabel"), 
+        ("multitrack", "multitrack"), 
+        ("play_long", "play_long"), 
+        ("v_img", "v_img"), 
+        ("audio_play_long", "audio_play_long"), 
+        ("current_time", "current_time"), 
+        ("last_time", "last_time"), 
+        ("played_end", "played_end"), 
+    ):
+        if key in info:
+            attr[name] = info[key]
+    if keep_raw:
+        attr["raw"] = info
+    return attr
+
+
 class P115Client:
     """115 的客户端对象
 
@@ -368,10 +441,11 @@ class P115Client:
         - 如果为 True，则自动通过判断 HTTP 响应码为 405 时重新登录并重试
         - 如果为 collections.abc.Callable，则调用以判断，当返回值为 bool 类型且值为 True，或者值为 405 时重新登录，然后循环此流程，直到成功或不可重试
 
-    :param app: 人工扫二维码后绑定的 `app` （或者叫 `device`）
+    :param ensure_cookies: 检查以确保 cookies 是有效的，如果失效，就重新登录
+    :param app: 重新登录时人工扫二维码后绑定的 `app` （或者叫 `device`），如果不指定，则根据 cookies 的 UID 字段来确定，如果不能确定，则用 "qandroid"
     :param console_qrcode: 在命令行输出二维码，否则在浏览器中打开
 
-    ----
+    -----
 
     :设备列表如下:
 
@@ -432,7 +506,8 @@ class P115Client:
         /, 
         cookies: None | str | bytes | PathLike | Mapping[str, str] | Iterable[Mapping | Cookie | Morsel] = None, 
         check_for_relogin: bool | Callable[[BaseException], bool | int] = False, 
-        app: str = "qandroid", 
+        ensure_cookies: bool = False, 
+        app: None | str = None, 
         console_qrcode: bool = True, 
     ):
         if isinstance(cookies, (bytes, PathLike)):
@@ -444,8 +519,11 @@ class P115Client:
         if cookies is None:
             resp = self.login_with_qrcode(app, console_qrcode=console_qrcode)
             cookies = resp["data"]["cookie"]
+            ensure_cookies = False
         if cookies:
             setattr(self, "cookies", cookies)
+        if ensure_cookies:
+            self.login(app, console_qrcode=console_qrcode)
         if check_for_relogin is True:
             check_for_relogin = default_check_for_relogin
         self.check_for_relogin = check_for_relogin
@@ -628,8 +706,9 @@ class P115Client:
     def login(
         self, 
         /, 
-        app: str, 
-        console_qrcode: bool, 
+        app: None | str = None, 
+        console_qrcode: bool = True, 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> Self:
@@ -638,8 +717,9 @@ class P115Client:
     def login(
         self, 
         /, 
-        app: str, 
-        console_qrcode: bool,
+        app: None | str = None, 
+        console_qrcode: bool = True, 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, Self]:
@@ -647,12 +727,22 @@ class P115Client:
     def login(
         self, 
         /, 
-        app: str = "qandroid", 
-        console_qrcode: bool = True,
+        app: None | str = None, 
+        console_qrcode: bool = True, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> Self | Coroutine[Any, Any, Self]:
         """扫码二维码登录，如果已登录则忽略
+
+        :param app: 扫二维码后绑定的 `app` （或者叫 `device`），如果不指定，则根据 cookies 的 UID 字段来确定，如果不能确定，则用 "qandroid"
+        :param console_qrcode: 在命令行输出二维码，否则在浏览器中打开
+        :param async_: 是否异步
+        :param request_kwargs: 其它请求参数
+
+        :return: 返回对象本身
+
+        -----
+
         app 至少有 24 个可用值，目前找出 14 个：
 
         - web
@@ -733,11 +823,13 @@ class P115Client:
         +-------+----------+------------+-------------------------+
         """
         def gen_step():
-            status = yield self.login_status(
-                async_=async_, 
-                **request_kwargs
-            )
+            nonlocal app
+            status = yield self.login_status(async_=async_, **request_kwargs)
             if not status:
+                if not app:
+                    app = yield self.login_app(async_=async_, **request_kwargs)
+                if not app:
+                    app = "qandroid"
                 resp = yield self.login_with_qrcode(
                     app, 
                     console_qrcode=console_qrcode, 
@@ -745,6 +837,7 @@ class P115Client:
                     **request_kwargs, 
                 )
                 setattr(self, "cookies", resp["data"]["cookie"])
+            return self
         return run_gen_step(gen_step, async_=async_)
 
     @overload
@@ -752,8 +845,9 @@ class P115Client:
     def login_with_qrcode(
         cls, 
         /, 
-        app: str, 
-        console_qrcode: bool,
+        app: None | str = "", 
+        console_qrcode: bool = True, 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -763,8 +857,9 @@ class P115Client:
     def login_with_qrcode(
         cls, 
         /, 
-        app: str, 
-        console_qrcode: bool,
+        app: None | str = "", 
+        console_qrcode: bool = True, 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -773,12 +868,26 @@ class P115Client:
     def login_with_qrcode(
         cls, 
         /, 
-        app: str = "qandroid", 
-        console_qrcode: bool = True,
+        app: None | str = "", 
+        console_qrcode: bool = True, 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
-        """扫码二维码登录，获取响应（如果需要更新此 client 的 cookies，请直接用 login 方法）
+        """二维码扫码登录
+
+        .. hint::
+            仅获取响应，如果需要更新此 `client` 的 `cookies`，请直接用 `login` 方法
+
+        :param app: 扫二维码后绑定的 `app` （或者叫 `device`）
+        :param console_qrcode: 在命令行输出二维码，否则在浏览器中打开
+        :param async_: 是否异步
+        :param request_kwargs: 其它请求参数
+
+        :return: 响应信息，如果 `app` 为 None 或 ""，则返回二维码信息，否则返回绑定扫码后的信息（包含 cookies）
+
+        -----
+
         app 至少有 24 个可用值，目前找出 14 个：
 
         - web
@@ -899,11 +1008,56 @@ class P115Client:
                         raise LoginError(errno.EIO, "[status=-2] qrcode: canceled")
                     case _:
                         raise LoginError(errno.EIO, f"qrcode: aborted with {resp!r}")
-            return (yield cls.login_qrcode_scan_result(
-                {"account": qrcode_token["uid"], "app": app}, 
+            if app:
+                return (yield cls.login_qrcode_scan_result(
+                    {"account": qrcode_token["uid"], "app": app}, 
+                    async_=async_, 
+                    **request_kwargs, 
+                ))
+            else:
+                return qrcode_token
+        return run_gen_step(gen_step, async_=async_)
+
+    @overload
+    def login_without_app(
+        self, 
+        /, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> str:
+        ...
+    @overload
+    def login_without_app(
+        self, 
+        /, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, str]:
+        ...
+    def login_without_app(
+        self, 
+        /, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> str | Coroutine[Any, Any, str]:
+        """执行一次自动扫登录二维码，但不绑定设备，返回扫码的 uid，可用于之后绑定设备
+        """
+        def gen_step():
+            uid = check_response((yield self.login_qrcode_token(
                 async_=async_, 
                 **request_kwargs, 
-            ))
+            )))["data"]["uid"]
+            check_response((yield self.login_qrcode_scan(
+                uid, 
+                async_=async_, 
+                **request_kwargs, 
+            )))
+            check_response((yield self.login_qrcode_scan_confirm(
+                uid, 
+                async_=async_, 
+                **request_kwargs, 
+            )))
+            return uid
         return run_gen_step(gen_step, async_=async_)
 
     @overload
@@ -937,10 +1091,14 @@ class P115Client:
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> Self | Coroutine[Any, Any, Self]:
-        """登录某个设备（同一个设备最多同时一个在线，即最近登录的那个）
+        """自动登录某个设备（同一个设备最多同时一个在线，即最近登录的那个）
 
-        :param app: 要登录的 app，如果为 None，则用同一登录设备
+        :param app: 要登录的 app，如果为 None，则用当前登录设备，如果无当前登录设备，则报错
         :param replace: 替换当前 client 对象的 cookie，否则返回新的 client 对象
+        :param async_: 是否异步
+        :param request_kwargs: 其它请求参数
+
+        -----
 
         :设备列表如下:
 
@@ -998,24 +1156,11 @@ class P115Client:
         """
         def gen_step():
             nonlocal app
-            if app is None:
+            if not app:
                 app = yield self.login_app(async_=async_, **request_kwargs)
-                if app is None:
+                if not app:
                     raise LoginError(errno.EIO, "can't determine app")
-            uid = check_response((yield self.login_qrcode_token(
-                async_=async_, 
-                **request_kwargs, 
-            )))["data"]["uid"]
-            check_response((yield self.login_qrcode_scan(
-                uid, 
-                async_=async_, 
-                **request_kwargs, 
-            )))
-            check_response((yield self.login_qrcode_scan_confirm(
-                uid, 
-                async_=async_, 
-                **request_kwargs, 
-            )))
+            uid = yield self.login_without_app(async_=async_, **request_kwargs)
             cookies = check_response((yield self.login_qrcode_scan_result(
                 {"account": uid, "app": app}, 
                 async_=async_, 
@@ -1159,8 +1304,9 @@ class P115Client:
         if callable(check_for_relogin):
             if async_:
                 async def wrap():
-                    while True:
+                    for i in count(0):
                         try:
+                            cookies_old = self.cookies_str
                             return await request(url=url, method=method, **request_kwargs)
                         except BaseException as e:
                             res = check_for_relogin(e)
@@ -1171,18 +1317,27 @@ class P115Client:
                             cookies = self.cookies_str
                             cookies_mtime = getattr(self, "cookies_mtime", 0)
                             async with self._request_alock:
-                                cookies_new = self.cookies_str
+                                cookies_new: None | str = self.cookies_str
                                 cookies_mtime_new = getattr(self, "cookies_mtime", 0)
                                 if cookies == cookies_new:
                                     warn("relogin to refresh cookies", category=P115Warning)
                                     if not cookies_mtime_new or cookies_mtime == cookies_mtime_new:
+                                        if i and cookies_old == cookies_new:
+                                            raise
                                         await self.login_another_app(replace=True, async_=True)
                                     else:
-                                        setattr(self, "cookies", self._read_cookies_from_path())
+                                        cookies_new = self._read_cookies_from_path()
+                                        if i and cookies_old == cookies_new:
+                                            raise
+                                        if cookies_new:
+                                            setattr(self, "cookies", cookies_new)
+                                        else:
+                                            await self.login_another_app(replace=True, async_=True)
                 return wrap()
             else:
-                while True:
+                for i in count(0):
                     try:
+                        cookies_old = self.cookies_str
                         return request(url=url, method=method, **request_kwargs)
                     except BaseException as e:
                         res = check_for_relogin(e)
@@ -1191,14 +1346,22 @@ class P115Client:
                         cookies = self.cookies_str
                         cookies_mtime = getattr(self, "cookies_mtime", 0)
                         with self._request_lock:
-                            cookies_new = self.cookies_str
+                            cookies_new: None | str = self.cookies_str
                             cookies_mtime_new = getattr(self, "cookies_mtime", 0)
                             if cookies == cookies_new:
                                 warn("relogin to refresh cookies", category=P115Warning)
                                 if not cookies_mtime_new or cookies_mtime == cookies_mtime_new:
+                                    if i and cookies_old == cookies_new:
+                                        raise
                                     self.login_another_app(replace=True)
                                 else:
-                                    setattr(self, "cookies", self._read_cookies_from_path())
+                                    cookies_new = self._read_cookies_from_path()
+                                    if i and cookies_old == cookies_new:
+                                        raise
+                                    if cookies_new:
+                                        setattr(self, "cookies", cookies_new)
+                                    else:
+                                        self.login_another_app(replace=True)
         else:
             return request(url=url, method=method, **request_kwargs)
 
@@ -1912,8 +2075,8 @@ class P115Client:
                     resp.get("file_url", ""), 
                     id=int(resp["file_id"]), 
                     pickcode=resp["pickcode"], 
-                    file_name=resp["file_name"], 
-                    file_size=int(resp["file_size"]), 
+                    name=resp["file_name"], 
+                    size=int(resp["file_size"]), 
                     is_directory=not resp["state"], 
                     headers=resp["headers"], 
                 )
@@ -1937,9 +2100,10 @@ class P115Client:
                         url["url"] if url else "", 
                         id=int(fid), 
                         pickcode=info["pick_code"], 
-                        file_name=info["file_name"], 
-                        file_size=int(info["file_size"]), 
-                        is_directory=not url,
+                        name=info["file_name"], 
+                        size=int(info["file_size"]), 
+                        sha1=info["sha1"], 
+                        is_directory=not url, 
                         headers=resp["headers"], 
                     )
                 raise FileNotFoundError(
@@ -2169,8 +2333,8 @@ class P115Client:
             url = quote(data["url"], safe=":/?&=%#")
             return P115URL(
                 url, 
-                file_path=path, 
-                file_name=basename(path), 
+                name=basename(path), 
+                path=path, 
                 headers=resp["headers"], 
             )
         if async_:
@@ -3579,108 +3743,6 @@ class P115Client:
               - 99: 仅文件
         """
         api = "https://aps.115.com/natsort/files.php"
-        if isinstance(payload, (int, str)):
-            payload = {
-                "aid": 1, "count_folders": 1, "limit": 32, "offset": 0, 
-                "record_open_time": 1, "show_dir": 1, "cid": payload, 
-            }
-        else:
-            payload = {
-                "aid": 1, "count_folders": 1, "limit": 32, "offset": 0, 
-                "record_open_time": 1, "show_dir": 1, "cid": 0, **payload, 
-            }
-        if payload.keys() & frozenset(("asc", "fc_mix", "o")):
-            payload["custom_order"] = 1
-        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
-
-    @overload
-    def fs_files_category(
-        self, 
-        payload: int | str | dict = 0, 
-        /, 
-        *, 
-        async_: Literal[False] = False, 
-        **request_kwargs, 
-    ) -> dict:
-        ...
-    @overload
-    def fs_files_category(
-        self, 
-        payload: int | str | dict = 0, 
-        /, 
-        *, 
-        async_: Literal[True], 
-        **request_kwargs, 
-    ) -> Coroutine[Any, Any, dict]:
-        ...
-    def fs_files_category(
-        self, 
-        payload: int | str | dict = 0, 
-        /, 
-        *, 
-        async_: Literal[False, True] = False, 
-        **request_kwargs, 
-    ) -> dict | Coroutine[Any, Any, dict]:
-        """获取目录中的文件列表和基本信息
-
-        GET https://webapi.115.com/category/files
-
-        .. hint::
-            这个接口和 https://webapi.115.com/files 基本上完全相同
-
-        :payload:
-            - cid: int | str = 0 💡 目录 id
-            - limit: int = 32 💡 分页大小
-            - offset: int = 0 💡 分页开始的索引，索引从 0 开始计算
-
-            - aid: int | str = 1 💡 area_id，默认即可
-            - asc: 0 | 1 = <default> 💡 是否升序排列。0: 降序 1: 升序
-            - code: int | str = <default>
-            - count_folders: 0 | 1 = 1 💡 统计文件数和目录数
-            - cur: 0 | 1 = <default> 💡 是否只搜索当前目录
-            - custom_order: 0 | 1 = <default> 💡 启用自定义排序，如果指定了 "asc"、"fc_mix"、"o" 中其一，则此参数会被自动设置为 1 
-            - date: str = <default> 💡 筛选日期
-            - fc_mix: 0 | 1 = <default> 💡 是否目录和文件混合，如果为 0 则目录在前
-            - fields: str = <default>
-            - format: str = "json" 💡 返回格式，默认即可
-            - hide_data: str = <default>
-            - is_q: 0 | 1 = <default>
-            - is_share: 0 | 1 = <default>
-            - min_size: int = 0 💡 最小的文件大小
-            - max_size: int = 0 💡 最大的文件大小
-            - natsort: 0 | 1 = <default> 💡 是否执行自然排序(natural sorting) 💡 natural sorting
-            - o: str = <default> 💡 用某字段排序
-
-              - "file_name": 文件名
-              - "file_size": 文件大小
-              - "file_type": 文件种类
-              - "user_utime": 修改时间
-              - "user_ptime": 创建时间
-              - "user_otime": 上一次打开时间
-
-            - r_all: 0 | 1 = <default>
-            - record_open_time: 0 | 1 = 1 💡 是否要记录目录的打开时间
-            - scid: int | str = <default>
-            - show_dir: 0 | 1 = 1
-            - snap: 0 | 1 = <default>
-            - source: str = <default>
-            - sys_dir: int | str = <default>
-            - star: 0 | 1 = <default> 💡 是否星标文件
-            - stdir: 0 | 1 = <default>
-            - suffix: str = <default> 💡 后缀名（优先级高于 `type`）
-            - type: int = <default> 💡 文件类型
-
-              - 0: 全部
-              - 1: 文档
-              - 2: 图片
-              - 3: 音频
-              - 4: 视频
-              - 5: 压缩包
-              - 6: 应用
-              - 7: 书籍
-              - 99: 仅文件
-        """
-        api = "https://webapi.115.com/category/files"
         if isinstance(payload, (int, str)):
             payload = {
                 "aid": 1, "count_folders": 1, "limit": 32, "offset": 0, 
@@ -5553,7 +5615,7 @@ class P115Client:
     @overload
     def life_behavior_detail(
         self, 
-        payload: str | dict, 
+        payload: str | dict = "", 
         /, 
         app: str = "android", 
         *, 
@@ -5564,7 +5626,7 @@ class P115Client:
     @overload
     def life_behavior_detail(
         self, 
-        payload: str | dict, 
+        payload: str | dict = "", 
         /, 
         app: str = "android", 
         *, 
@@ -5574,7 +5636,7 @@ class P115Client:
         ...
     def life_behavior_detail(
         self, 
-        payload: str | dict, 
+        payload: str | dict = "", 
         /, 
         app: str = "android", 
         *,
@@ -5588,15 +5650,16 @@ class P115Client:
         :payload:
             - type: str 💡 操作类型
 
-              - "browser_image":     浏览图片
-              - "browser_video":     浏览视频
-              - "browser_document":  浏览文件
+              - "browse_document":   浏览文档
+              - "browse_image":      浏览图片
+              - "browse_audio":      浏览音频
+              - "browse_video":      浏览视频
               - "new_folder":        新增目录
               - "copy_folder":       复制目录
               - "folder_rename":     目录改名
               - "folder_label":      目录设置标签
               - "star_file":         设置星标
-              - "move_file":         移动文件或目录
+              - "move_file":         移动文件或目录（不包括图片）
               - "move_image_file":   移动图片
               - "delete_file":       删除文件或目录
               - "upload_file":       上传文件
@@ -5727,9 +5790,29 @@ class P115Client:
 
         GET https://life.115.com/api/1.0/web/1.0/life/life_list
 
+        .. note::
+            为了实现分页拉取，需要指定 last_data 参数。只要上次返回的数据不为空，就会有这个值，直接使用即可
+
         :payload:
             - start: int = 0
             - limit: int = 1000
+            - check_num: int = <default>
+            - end_time: int = <default> 💡 默认为次日零点前一秒
+            - file_behavior_type: int | str = <default>
+                💡 筛选类型，有多个则用逗号 ',' 隔开:
+                💡 0: 所有
+                💡 1: 上传
+                💡 2: 浏览
+                💡 3: 星标
+                💡 4: 移动
+                💡 5: 标签
+                💡 6: <UNKNOWN>
+                💡 7: 删除
+            - isPullData: 'true' | 'false' = <default>
+            - isShow: 0 | 1 = <default>
+            - last_data: str = <default> 💡 JSON object, e.g. {"last_time":1700000000,"last_count":1,"total_count":200}
+            - mode: str = <default> 💡 例如 "show"
+            - show_note_cal: 0 | 1 = <default>
             - show_type: int = 0
                 💡 筛选类型，有多个则用逗号 ',' 隔开:
                 💡 0: 所有
@@ -5737,18 +5820,10 @@ class P115Client:
                 💡 2: 浏览文件
                 💡 3: <UNKNOWN>
                 💡 4: account_security
-            - type: int = <default>
-            - tab_type: int = <default>
-            - file_behavior_type: int | str = <default>
-            - mode: str = <default>
-            - check_num: int = <default>
-            - total_count: int = <default>
             - start_time: int = <default>
-            - end_time: int = <default> 💡 默认为次日零点前一秒
-            - show_note_cal: 0 | 1 = <default>
-            - isShow: 0 | 1 = <default>
-            - isPullData: 'true' | 'false' = <default>
-            - last_data: str = <default> 💡 JSON object, e.g. {"last_time":1700000000,"last_count":1,"total_count":200}
+            - tab_type: int = <default>
+            - total_count: int = <default>
+            - type: int = <default>
         """
         api = "https://life.115.com/api/1.0/web/1.0/life/life_list"
         now = datetime.now()
@@ -5789,9 +5864,8 @@ class P115Client:
             ssoent = self.login_ssoent
             if ssoent is None:
                 return None
-            for app, v in APP_TO_SSOENT.items():
-                if v == ssoent:
-                    return app
+            if ssoent in SSOENT_TO_APP:
+                return SSOENT_TO_APP[ssoent]
             device = yield self.login_device(async_=async_, **request_kwargs)
             if device is None:
                 return None
@@ -5855,7 +5929,7 @@ class P115Client:
             login_devices = json_loads(content)
             if not login_devices["state"]:
                 return None
-            return next(d for d in login_devices["data"]["list"] if d["is_current"])
+            return next(filter(cast(Callable, itemgetter("is_current")), login_devices["data"]["list"]), None)
         request_kwargs.setdefault("parse", parse)
         return self.login_devices(async_=async_, **request_kwargs)
 
@@ -5912,9 +5986,9 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """获取登录信息
 
-        GET https://proapi.115.com/pc/user/login_info
+        GET https://proapi.115.com/android/2.0/user/login_info
         """
-        api = "https://proapi.115.com/pc/user/login_info"
+        api = "https://proapi.115.com/android/2.0/user/login_info"
         return self.request(url=api, async_=async_, **request_kwargs)
 
     @overload
@@ -6189,13 +6263,13 @@ class P115Client:
             - account: int | str
             - app: str = "qandroid"
         """
-        app = "qandroid"
         if isinstance(payload, (int, str)):
-            payload = {"account": payload}
+            payload = {"app": "qandroid", "account": payload}
         else:
             payload = {"app": "qandroid", **payload}
-            if payload["app"] == "desktop":
-                app = "web"
+        app = payload["app"]
+        if app == "desktop":
+            app = "web"
         api = f"https://passportapi.115.com/app/1.0/{app}/1.0/login/qrcode/"
         request_kwargs.setdefault("parse", default_parse)
         if request is None:
@@ -6364,6 +6438,8 @@ class P115Client:
 
         :param app: 退出登录的 app
 
+        -----
+
         :设备列表如下:
 
         +-------+----------+------------+-------------------------+
@@ -6467,6 +6543,8 @@ class P115Client:
 
         :payload:
             - ssoent: str
+
+        -----
 
         :设备列表如下:
 
@@ -7418,8 +7496,8 @@ class P115Client:
             return P115URL(
                 url["url"] if url else "", 
                 id=int(info["fid"]), 
-                file_name=info["fn"], 
-                file_size=int(info["fs"]), 
+                name=info["fn"], 
+                size=int(info["fs"]), 
                 is_directory=not url, 
             )
         if async_:

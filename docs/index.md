@@ -21,8 +21,9 @@ reference/type
 :caption: Tool
 :hidden:
 
-reference/tool/iterdir
+reference/tool/download
 reference/tool/export_dir
+reference/tool/iterdir
 reference/tool/xys
 ```
 

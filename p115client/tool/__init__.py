@@ -3,6 +3,7 @@
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 
+from .download import *
 from .export_dir import *
 from .iterdir import *
 from .xys import *
