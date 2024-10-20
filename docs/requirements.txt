@@ -1,3 +1,4 @@
 furo
 myst_parser
+p115client
 sphinx_copybutton
