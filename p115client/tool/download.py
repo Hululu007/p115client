@@ -2,13 +2,21 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__all__ = ["batch_get_url", "iter_images_with_url", "iter_subtitles_with_url"]
+__all__ = ["batch_get_url", "iter_images_with_url", "iter_subtitles_with_url", "make_strm"]
 __doc__ = "这个模块提供了一些和下载有关的函数"
 
+from asyncio import Semaphore, TaskGroup
 from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from functools import partial
+from inspect import isawaitable
 from itertools import chain
-from typing import overload, Any, Literal
+from os import fsdecode, makedirs, PathLike
+from os.path import dirname, join as joinpath, splitext
+from threading import Lock
+from time import perf_counter
+from typing import overload, Any, Final, Literal
+from urllib.parse import quote
 from uuid import uuid4
 from warnings import warn
 
@@ -18,7 +26,11 @@ from p115client import P115Client, P115URL, normalize_attr
 from p115client.exception import P115Warning
 from posixpatht import escape
 
-from .iterdir import iter_files, iter_files_raw, DirNode, DirNodeTuple
+from .iterdir import get_path_to_cid, iter_files, iter_files_raw, DirNode, DirNodeTuple, ID_TO_DIRNODE_CACHE
+
+
+TRANSTAB: Final = {c: f"%{c:02x}" for c in b"/%?#"}
+translate = str.translate
 
 
 @overload
@@ -399,4 +411,170 @@ def iter_subtitles_with_url(
                         )
                     yield Yield(attr, identity=True)
     return run_gen_step_iter(gen_step, async_=async_)
+
+
+def make_strm(
+    client: str | P115Client, 
+    cid: int = 0, 
+    save_dir: bytes | str | PathLike = ".", 
+    origin: str = "http://localhost:8000", 
+    use_abspath: None | bool = True, 
+    with_root: bool = True, 
+    without_suffix: bool = True, 
+    ensure_ascii: bool = False, 
+    log: None | Callable[[str], Any] = print, 
+    max_workers: None | int = None, 
+    *, 
+    async_: Literal[False, True] = False, 
+    **request_kwargs, 
+):
+    """生成 strm 保存到本地
+
+    .. hint::
+        只是做全量更新，因此可避免判断。如果想要实现增量的效果，有 2 种办法：
+
+        1. 你可以在执行前，把本地目录给删了。
+        2. 你可以在执行完成后，把更新时间早于脚本开始执行前的文件全删了，然后再批量删除空目录。
+
+    :param client: 115 客户端或 cookies
+    :param cid: 目录 id
+    :param save_dir: 本地的保存目录，默认是当前工作目录
+    :param origin: strm 文件的 `HTTP 源 <https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Origin>`_
+    :param use_abspath: 是否使用相对路径
+
+        - 如果为 True，则使用 115 的完整路径
+        - 如果为 False，则使用从 `cid` 的目录开始的相对路径
+        - 如果为 None，则所有文件保存在到同一个目录内
+
+    :param with_root: 如果为 True，则当 use_abspath 为 False 或 None 时，在 `save_dir` 下创建一个和 `cid` 目录名字相同的目录，作为实际的 `save_dir`
+    :param without_suffix: 是否去除原来的扩展名。如果为 False，则直接用 ".strm" 拼接到原来的路径后面；如果为 True，则去掉原来的扩展名后再拼接
+    :param ensure_ascii: strm 是否进行完全转码，确保 ascii 之外的字符都被 urlencode 转码
+    :param log: 调用以收集事件，如果为 None，则忽略
+    :param max_workers: 最大并发数，主要用于限制同时打开的文件数
+    :param async_: 是否异步
+    :param request_kwargs: 其它请求参数
+    """
+    save_dir = fsdecode(save_dir)
+    makedirs(save_dir, exist_ok=True)
+    if ensure_ascii:
+        encode = lambda attr: quote(attr["name"], safe="@[]:!$&'()*+,;=")
+    else:
+        encode = lambda attr: translate(attr["name"], TRANSTAB)
+    if isinstance(client, str):
+        client = P115Client(client, check_for_relogin=True)
+    id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
+    def normpath(attr: dict, /) -> str:
+        if use_abspath is None:
+            path = attr["name"]
+        elif use_abspath:
+            path = attr["path"][1:]
+        else:
+            dir_ = get_path_to_cid(id_to_dirnode, attr["parent_id"], cid, escape=None)
+            path = joinpath(dir_, attr["name"])
+        if without_suffix:
+            path = splitext(path)[0]
+        if with_root and not use_abspath:
+            return joinpath(save_dir, id_to_dirnode[cid][0], path + ".strm")
+        else:
+            return joinpath(save_dir, path + ".strm")
+    if async_:
+        try:
+            from aiofile import async_open
+        except ImportError:
+            from sys import executable
+            from subprocess import run
+            run([executable, "-m", "pip", "install", "-U", "aiofile"], check=True)
+            from aiofile import async_open
+        if max_workers is None or max_workers <= 0:
+            sema = None
+        else:
+            sema = Semaphore(max_workers)
+        async def request():
+            success = 0
+            failed = 0
+            async def save(attr, /, sema=None):
+                nonlocal success, failed
+                if sema is not None:
+                    async with sema:
+                        return await save(attr)
+                path = normpath(attr)
+                url = f"{origin}/{encode(attr)}?pickcode={attr['pickcode']}"
+                try:
+                    try:
+                        async with async_open(path, "w") as f:
+                            await f.write(url)
+                    except FileNotFoundError:
+                        makedirs(dirname(path), exist_ok=True)
+                        async with async_open(path, "w") as f:
+                            await f.write(url)
+                    if log is not None:
+                        ret = log(f"[OK] path={path!r} attr={attr!r}")
+                        if isawaitable(ret):
+                            await ret
+                    success += 1
+                except BaseException as e:
+                    failed += 1
+                    if log is not None:
+                        ret = log(f"[ERROR] path={path!r} attr={attr!r} error={e!r}")
+                        if isawaitable(ret):
+                            await ret
+                    if not isinstance(e, OSError):
+                        raise
+            start_t = perf_counter()
+            async with TaskGroup() as group:
+                create_task = group.create_task
+                async for attr in iter_files(
+                    client, 
+                    cid, 
+                    type=4, 
+                    with_path=use_abspath is not None, 
+                    escape=None, 
+                    async_=True, 
+                    **request_kwargs, 
+                ):
+                    create_task(save(attr, sema))
+            return {"total": success + failed, "success": success, "failed": failed, "elapsed": perf_counter() - start_t}
+        return request()
+    else:
+        success = 0
+        failed = 0
+        lock = Lock()
+        def save(attr: dict, /):
+            nonlocal success, failed
+            path = normpath(attr)
+            try:
+                try:
+                    f = open(path,  "w")
+                except FileNotFoundError:
+                    makedirs(dirname(path), exist_ok=True)
+                    f = open(path,  "w")
+                f.write(f"{origin}/{encode(attr)}?pickcode={attr['pickcode']}")
+                if log is not None:
+                    log(f"[OK] path={path!r} attr={attr!r}")
+                with lock:
+                    success += 1
+            except BaseException as e:
+                with lock:
+                    failed += 1
+                if log is not None:
+                    log(f"[ERROR] path={path!r} attr={attr!r} error={e!r}")
+                if not isinstance(e, OSError):
+                    raise
+        if max_workers and max_workers <= 0:
+            max_workers = None
+        start_t = perf_counter()
+        executor = ThreadPoolExecutor(max_workers)
+        try:
+            executor.map(save, iter_files(
+                client, 
+                cid, 
+                type=4, 
+                with_path=use_abspath is not None, 
+                escape=None, 
+                **request_kwargs, 
+            ))
+            executor.shutdown(wait=True)
+            return {"total": success + failed, "success": success, "failed": failed, "elapsed": perf_counter() - start_t}
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 

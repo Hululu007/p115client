@@ -20,7 +20,6 @@ from warnings import warn
 
 from asynctools import async_filter, async_map, to_list
 from iterutils import run_gen_step, run_gen_step_iter, through, async_through, Yield, YieldFrom
-from httpx import ReadTimeout
 from iter_collect import grouped_mapping, grouped_mapping_async, iter_keyed_dups, iter_keyed_dups_async, SupportsLT
 from p115client import check_response, normalize_attr, P115Client, P115OSError, P115Warning
 from p115client.const import CLASS_TO_TYPE, SUFFIX_TO_TYPE
@@ -69,6 +68,28 @@ def type_of_attr(attr: Mapping, /) -> int:
     if attr.get("thumb"):
         return 2
     return 99
+
+
+def get_path_to_cid(
+    id_to_dirnode: dict[int, DirNode | DirNodeTuple], 
+    cid: int, 
+    root_id: None | int = None, 
+    escape: None | Callable[[str], str] = escape, 
+) -> str:
+    parts: list[str] = []
+    while cid and (not root_id or cid != root_id):
+        name, cid = id_to_dirnode[cid]
+        parts.append(name)
+    if root_id is not None and cid != root_id:
+        return ""
+    if escape is None:
+        path = "/".join(parts)
+    else:
+        path = "/".join(map(escape, parts))
+    if root_id is None or root_id:
+        return path
+    else:
+        return path[1:]
 
 
 @overload
@@ -1458,6 +1479,8 @@ def traverse_files(
 
     :return: 迭代器，返回此目录内的（仅文件）文件信息
     """
+    from httpx import ReadTimeout
+
     if not auto_splitting_tasks:
         return iter_files(
             client, 
@@ -1510,7 +1533,7 @@ def traverse_files(
                             continue
                         for info in resp["path"][1:]:
                             id_to_dirnode[int(info["cid"])] = DirNode(info["name"], int(info["pid"]))
-                    except ReadTimeout:
+                    except (ReadTimeout, TimeoutError):
                         file_count = float("inf")
                     else:
                         file_count = int(resp.get("count") or 0)

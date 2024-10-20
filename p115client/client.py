@@ -8,8 +8,8 @@ import errno
 
 from asyncio import create_task, to_thread, Lock as AsyncLock
 from collections.abc import (
-    AsyncGenerator, AsyncIterable, Awaitable, Callable, Coroutine, 
-    Generator, ItemsView, Iterable, Mapping, MutableMapping, Sequence, 
+    AsyncGenerator, AsyncIterable, Awaitable, Callable, Coroutine, Generator, 
+    ItemsView, Iterable, Iterator, Mapping, MutableMapping, Sequence, 
 )
 from contextlib import closing, asynccontextmanager
 from datetime import date, datetime
@@ -18,7 +18,7 @@ from hashlib import sha1
 from http.cookiejar import Cookie, CookieJar
 from http.cookies import Morsel
 from inspect import isawaitable
-from itertools import count
+from itertools import count, cycle, product
 from operator import itemgetter
 from os import fsdecode, fstat, isatty, stat, PathLike, path as ospath
 from pathlib import Path, PurePath
@@ -66,11 +66,28 @@ T = TypeVar("T")
 CRE_SHARE_LINK_search: Final = re_compile(r"/s/(?P<share_code>\w+)(\?password=(?P<receive_code>\w+))?").search
 CRE_SET_COOKIE: Final = re_compile(r"[0-9a-f]{32}=[0-9a-f]{32}.*")
 CRE_CLIENT_API_search: Final = re_compile("^ +((?:GET|POST) .*)", MULTILINE).search
-CRE_SHARE_LINK_search1 = re_compile(r"(?:/s/|share\.115\.com/)(?P<share_code>[a-z0-9]+)\?password=(?P<receive_code>[a-z0-9]{4})").search
-CRE_SHARE_LINK_search2 = re_compile(r"(?P<share_code>[a-z0-9]+)-(?P<receive_code>[a-z0-9]{4})").search
-ED2K_NAME_TRANSTAB = dict(zip(b"/|", ("%2F", "%7C")))
+CRE_SHARE_LINK_search1: Final = re_compile(r"(?:/s/|share\.115\.com/)(?P<share_code>[a-z0-9]+)\?password=(?P<receive_code>[a-z0-9]{4})").search
+CRE_SHARE_LINK_search2: Final = re_compile(r"(?P<share_code>[a-z0-9]+)-(?P<receive_code>[a-z0-9]{4})").search
+ED2K_NAME_TRANSTAB: Final = dict(zip(b"/|", ("%2F", "%7C")))
+WEBAPI_SUB_ROUTERS: Final = ("/category", "/files", "/history", "/label", "/movies", "/offine", "/photo", "/rb", "/share", "/user", "/usershare")
 
 _httpx_request = None
+
+
+def make_webapi_prefix_generator(multi: bool = False) -> Callable[[], str]:
+    if multi:
+        def gen():
+            yield ""
+            yield from WEBAPI_SUB_ROUTERS
+            for i in count(2):
+                for t in product(*((WEBAPI_SUB_ROUTERS,)*i)):
+                    yield "".join(t)
+        return gen().__next__
+    else:
+        return cycle(("", *WEBAPI_SUB_ROUTERS)).__next__
+
+get_prefix = make_webapi_prefix_generator()
+get_prefixes = make_webapi_prefix_generator(True)
 
 
 def json_loads(content: bytes, /):
@@ -3541,7 +3558,7 @@ class P115Client:
               - 7: 书籍
               - 99: 仅文件
         """
-        api = "https://webapi.115.com/files"
+        api = f"https://webapi.115.com{get_prefix()}/files"
         if isinstance(payload, (int, str)):
             payload = {
                 "aid": 1, "count_folders": 1, "limit": 32, "offset": 0, 
