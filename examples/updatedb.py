@@ -697,6 +697,7 @@ def update_path(
     con: Connection | Cursor, 
     /, 
     root_id: int = 0, 
+    ids: None | Iterable[int] = None, 
     commit: bool = True, 
 ) -> tuple[Cursor, int, int]:
     """以 `dir` 表为准，和 `data` 表比对，找出所有 "name" 或 "parent_id" 不同的目录，然后批量更新 `data` 表中的数据
@@ -722,12 +723,20 @@ def update_path(
             root_new = get_dir_path(root_id) + "/"
     else:
         root_id = 0
-    sql = """\
+    if ids is None:
+        sql = """\
 SELECT id, data.path, dir.mtime
 FROM data JOIN dir USING (id)
 WHERE data.name != dir.name OR data.parent_id != dir.parent_id
 ORDER BY path DESC
 """
+    else:
+        sql = """\
+SELECT data.id, data.path, dir.mtime
+FROM data JOIN dir ON (data.id IN (%s) AND data.id = dir.id)
+WHERE data.name != dir.name OR data.parent_id != dir.parent_id
+ORDER BY path DESC
+""" % (",".join(map(str, ids)) or "NULL")
     updated = 0
     deleted = 0
     for cid, path, mtime in cur.execute(sql):
@@ -759,7 +768,7 @@ def update_id_to_dirnode(
     con: Connection | Cursor, 
     /, 
     client: P115Client, 
-):
+) -> list[dict]:
     """从网上增量拉取目录数据，并更新到 `dir` 表和全局变量 `ID_TO_DIRNODE` 中
 
     :param con: 数据库连接或游标
@@ -777,6 +786,7 @@ def update_id_to_dirnode(
     )))
     if data:
         insert_dir_items(con, data)
+    return data
 
 
 # TODO: 如果发生 id 重复，但 count 没变，则并不报错，会丢弃重复的 id 的数据，然后跳过而不返回，并增加计数器，等拉取完后，从头部开始再取一次（每取出一个未见到过的元素，计数器减 1，直到计数器为 0）
@@ -861,6 +871,7 @@ def diff_dir(
     id: int = 0, 
     /, 
     tree: bool = False, 
+    dir_ids: None | list[int] = None, 
 ) -> tuple[list[int], list[dict]]:
     """拉取数据，确定哪些记录需要删除或更替
 
@@ -868,6 +879,7 @@ def diff_dir(
     :param client: 115 网盘客户端对象
     :param id: 目录的 id
     :param tree: 如果为 True，则比对目录树，但仅对文件，即叶子节点，如果为 False，则比对所有直接子节点，包括文件和目录
+    :param dir_ids: 用来收集那些更新过的目录 id
 
     :return: 2 元组，1) 待删除的 id 列表，2) 待更替的数据列表
     """
@@ -922,11 +934,14 @@ def diff_dir(
             insert_dir_incomplete_items(con, ancestors)
             for a in ancestors:
                 ID_TO_DIRNODE[a["id"]] = DirNodeTuple((a["name"], a["parent_id"]))
+            if dir_ids is not None:
+                dir_ids.extend(a["id"] for a in ancestors)
         if dirs:
             insert_dir_items(con, dirs)
             for a in dirs:
                 ID_TO_DIRNODE[a["id"]] = DirNodeTuple((a["name"], a["parent_id"]))
-
+            if dir_ids is not None:
+                dir_ids.extend(a["id"] for a in ancestors)
 
 def updatedb_one(
     client: str | P115Client, 
@@ -944,7 +959,8 @@ def updatedb_one(
         con = dbfile
         start = perf_counter()
         try:
-            to_delete, to_replace = diff_dir(con, client, id)
+            dir_ids: list[int] = []
+            to_delete, to_replace = diff_dir(con, client, id, dir_ids=dir_ids)
             with transaction(con):
                 if to_delete:
                     delete_items(con, to_delete, commit=False)
@@ -955,7 +971,10 @@ def updatedb_one(
                     for attr in to_replace:
                         attr["path"] = dirname + escape(attr["name"])
                     insert_items(con, to_replace, commit=False)
-                _, updated, deleted = update_path(con, commit=False)
+                if dir_ids:
+                    _, updated, deleted = update_path(con, ids=dir_ids, commit=False)
+                else:
+                    updated = deleted = 0
         except BaseException as e:
             logger.exception("[\x1b[1;31mFAIL\x1b[0m] %s", id)
             if isinstance(e, (FileNotFoundError, NotADirectoryError)):
@@ -997,6 +1016,7 @@ def updatedb_tree(
         try:
             to_delete, to_replace = diff_dir(con, client, id, tree=True)
             custom_no_dir_moved = no_dir_moved
+            dir_ids: list[int] = []
             if to_delete:
                 # 找出所有待删除记录的祖先节点 id，并更新它们的 mtime
                 all_pids: set[int] = set()
@@ -1020,14 +1040,14 @@ def updatedb_tree(
                             update_desc(client, find_ids)
                         else:
                             update_desc(client, pids)
-                        update_id_to_dirnode(con, client)
+                        dir_ids += (a["id"] for a in update_id_to_dirnode(con, client))
                         no_dir_moved = True
                     elif not custom_no_dir_moved:
                         update_desc(client, pids)
                         no_dir_moved = False
                     pids = {ppid for pid in pids if (ppid := ID_TO_DIRNODE[pid][1]) and ppid not in all_pids}
             if not no_dir_moved:
-                update_id_to_dirnode(con, client)
+                dir_ids += (a["id"] for a in update_id_to_dirnode(con, client))
             if to_replace and all_pids:
                 # 把所有相关的目录 id 添加到待更替列表
                 to_replace += select_items_from_dir(con, all_pids)
@@ -1037,7 +1057,10 @@ def updatedb_tree(
                     delete_items(con, to_delete, commit=False)
                 if to_replace:
                     insert_items(con, to_replace, commit=False)
-                _, updated, deleted = update_path(con, root_id=id, commit=False)
+                if dir_ids:
+                    _, updated, deleted = update_path(con, root_id=id, ids=dir_ids, commit=False)
+                else:
+                    updated = deleted = 0
         except BaseException as e:
             logger.exception("[\x1b[1;31mFAIL\x1b[0m] %s", id)
             if isinstance(e, (FileNotFoundError, NotADirectoryError)):

@@ -6120,7 +6120,7 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """罗列登录和增删改操作记录（最新几条）
 
-        GET https://life.115.com/api/1.0/web/1.0/life/life_list
+        GET https://life.115.com/api/1.0/android/1.0/life/life_list
 
         .. note::
             为了实现分页拉取，需要指定 last_data 参数。只要上次返回的数据不为空，就会有这个值，直接使用即可
