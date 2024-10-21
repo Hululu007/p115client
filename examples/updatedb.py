@@ -2,7 +2,7 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 0, 7)
+__version__ = (0, 0, 9)
 __all__ = ["updatedb", "updatedb_one", "updatedb_tree"]
 __doc__ = "遍历 115 网盘的目录信息导出到数据库"
 __requirements__ = ["p115client", "posixpatht", "urllib3", "urllib3_request>=0.0.3"]
@@ -887,7 +887,7 @@ def diff_dir(
     if tree:
         count, ancestors, seen, data_it = iterdir(client, id, first_page_size=128 if n else 0, payload={"type": 99})
     else:
-        count, ancestors, seen, data_it = iterdir(client, id, first_page_size=1 if n else 0)
+        count, ancestors, seen, data_it = iterdir(client, id, first_page_size=16 if n else 0)
     result = delete_list, upsert_list
     try:
         if not n:
@@ -1134,11 +1134,11 @@ def updatedb(
             if auto_splitting_threshold <= 0:
                 need_to_split_tasks = True
             elif recursive:
+                start = perf_counter()
                 if id == 0:
                     resp = check_response(client.fs_space_summury(request=request))
                     count = sum(v["count"] for k, v in resp["type_summury"].items() if k.isupper())
                 else:
-                    start = perf_counter()
                     try:
                         resp = client.fs_category_get(
                             id, 
@@ -1156,9 +1156,9 @@ def updatedb(
                         count = float("inf")
                 need_to_split_tasks = count > auto_splitting_threshold
                 if need_to_split_tasks:
-                    logger.info("[\x1b[1;37;41mTELL\x1b[0m] \x1b[1m%d\x1b[0m, \x1b[1;31mbig\x1b[0m (%s > %d), will be pulled in \x1b[1;4;5;31mmulti batches\x1b[0m, cost: %.6f s", id, count, auto_splitting_threshold, perf_counter() - start)
+                    logger.info(f"[\x1b[1;37;41mTELL\x1b[0m] \x1b[1m{id}\x1b[0m, \x1b[1;31mbig\x1b[0m ({count:,.0f} > {auto_splitting_threshold:,d}), will be pulled in \x1b[1;4;5;31mmulti batches\x1b[0m, cost: {perf_counter() - start:,.6f} s")
                 else:
-                    logger.info("[\x1b[1;37;42mTELL\x1b[0m] \x1b[1m%d\x1b[0m, \x1b[1;32mfit\x1b[0m (%s <= %d), will be pulled in \x1b[1;4;5;32mone batch\x1b[0m, cost: %.6f s", id, count, auto_splitting_threshold, perf_counter() - start)
+                    logger.info(f"[\x1b[1;37;42mTELL\x1b[0m] \x1b[1m{id}\x1b[0m, \x1b[1;32mfit\x1b[0m ({count:,.0f} <= {auto_splitting_threshold:,d}), will be pulled in \x1b[1;4;5;32mone batch\x1b[0m, cost: {perf_counter() - start:,.6f} s")
             try:
                 if not recursive or need_to_split_tasks:
                     updatedb_one(client, con, id)
@@ -1248,5 +1248,5 @@ if __name__ == "__main__":
 # TODO: 如果一个文件夹被移动，那么它的更新时间不会变，只是它的上级 id 的更新时间会变，因此必要时，还是需要结合 115 更新事件
 
 # TODO: 增加一个选项，允许对数据进行全量而不是增量更新，这样可以避免一些问题
-# TODO: 如果查询的某个 id 不存在，就把这个 id 的在数据库的数据给删除
+# TODO: 增加一个选项，如果查询的某个 id 不存在，就把这个 id 的在数据库的数据给删除
 # TODO: 检测目录大小应该后台运行，并且进行一定量的并发，这个操作太耗时了
