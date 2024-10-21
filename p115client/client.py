@@ -375,9 +375,9 @@ def normalize_attr(
         if key in info:
             attr[name] = int(info[key] or 0) == 1
     for key, name in (
-        #("dp", "dir_path"), 
-        #("style", "style"), 
-        #("ns", "name_show"), 
+        ("dp", "dir_path"), 
+        ("style", "style"), 
+        ("ns", "name_show"), 
         ("cc", "category_cover"), 
         ("sta", "status"), 
         ("class", "class"), 
@@ -424,11 +424,11 @@ def normalize_attr_app(
         attr["ftype"] = int(info["ftype"])
     if "thumb" in info:
         attr["thumb"] = f"https://imgjump.115.com?{info['thumb']}&size=0&sha1={info['sha1']}"
-    if "uppt" in info:
+    if "uppt" in info: # pptime
         attr["ctime"] = attr["user_ptime"] = int(info["uppt"])
-    if "uet" in info:
+    if "uet" in info: # utime
         attr["mtime"] = attr["user_utime"] = int(info["uet"])
-    if "upt" in info:
+    if "upt" in info: # ptime
         attr["time"] = int(info["upt"])
     for key, name in (
         ("ism", "star"), 
@@ -3656,12 +3656,16 @@ class P115Client:
         .. hint::
             如果仅指定 cid 和 natsort=1 和 o="file_name"，则可仅统计当前目录的总数，而不返回具体的文件信息
 
+        .. hint::
+            当 7 < type < 99 或 type > 99 时，效果都一样，相当于 type = 1 再额外包含一些其它的文件
+            当 type < 0 时，相当于 type = 0
+
         :payload:
             - cid: int | str = 0 💡 目录 id
             - limit: int = 32 💡 分页大小
             - offset: int = 0 💡 分页开始的索引，索引从 0 开始计算
 
-            - aid: int | str = 1 💡 area_id，默认即可
+            - aid: int | str = 1 💡 area_id，默认即可。如果 aid > 1 或 aid < 0，则只罗列系统文件或目录，比如 "云下载"、"我的接收" 等
             - asc: 0 | 1 = <default> 💡 是否升序排列。0: 降序 1: 升序
             - code: int | str = <default>
             - count_folders: 0 | 1 = 1 💡 统计文件数和目录数
@@ -4934,7 +4938,7 @@ class P115Client:
     @overload
     def fs_label_list(
         self, 
-        payload: dict, 
+        payload: str | dict = "", 
         /, 
         *, 
         base_url: bool | str = False, 
@@ -4945,7 +4949,7 @@ class P115Client:
     @overload
     def fs_label_list(
         self, 
-        payload: dict, 
+        payload: str | dict = "", 
         /, 
         *, 
         base_url: bool | str = False, 
@@ -4955,7 +4959,7 @@ class P115Client:
         ...
     def fs_label_list(
         self, 
-        payload: dict = {}, 
+        payload: str | dict = "", 
         /, 
         *, 
         base_url: bool | str = False, 
@@ -4979,7 +4983,10 @@ class P115Client:
             - order: "asc" | "desc" = <default> 💡 排序顺序："asc"(升序), "desc"(降序)
         """
         api = complete_webapi(base_url, "/label/list")
-        payload = {"offset": 0, "limit": 11500, **payload}
+        if isinstance(payload, str):
+            payload = {"offset": 0, "limit": 11500, "keyword": payload}
+        else:
+            payload = {"offset": 0, "limit": 11500, **payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -5011,6 +5018,9 @@ class P115Client:
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
         """为文件或目录设置标签，此接口是对 `fs_edit` 的封装
+        
+        .. attention::
+            这个接口会把标签列表进行替换，而不是追加
 
         :param fids: 单个或多个文件或目录 id
         :param file_label: 标签 id，多个用逗号 "," 隔开
@@ -5228,6 +5238,7 @@ class P115Client:
             - file_id: int | str = 0 💡 目录 id
             - user_asc: 0 | 1 = <default> 💡 是否升序排列
             - fc_mix: 0 | 1 = <default>   💡 是否目录和文件混合，如果为 0 则目录在前
+            - module: str = <default> 💡 "label_search" 表示用于搜索的排序
         """
         api = complete_webapi(base_url, "/files/order")
         if isinstance(payload, str):
@@ -5409,16 +5420,27 @@ class P115Client:
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
-        """搜索文件或目录（提示：好像最多只能罗列前 10,000 条数据，也就是 limit + offset <= 10_000）
+        """搜索文件或目录
 
         GET https://webapi.115.com/files/search
+
+        .. attention::
+            最多只能取回前 10,000 条数据，也就是 limit + offset <= 10_000
+            这个接口实际上不支持在查询中直接设置排序，只能由 `P115Client.fs_order_set` 设置
+
+        .. note::
+            搜索接口甚至可以把上级 id 关联错误的文件或目录都搜索出来。一般是因为把文件或目录移动到了一个不存在的 id 下，你可以用某些关键词把他们搜索出来，然后移动到一个存在的目录中，就可以恢复他们了，或者使用 `P115Client.tool_space` 接口来批量恢复
+
+        .. important::
+            一般使用的话，要提供 "search_value" 或 "file_label"，不然返回数据里面看不到任何一条数据，即使你指定了其它参数
+            下面指定的很多参数其实是一点效果都没有的，具体可以实际验证
 
         :payload:
             - aid: int | str = 1 💡 area_id，不知道的话，设置为 1
             - asc: 0 | 1 = <default> 💡 是否升序排列
             - cid: int | str = 0 💡 目录 id
-            - count_folders: 0 | 1 = <default>
-            - date: str = <default> 💡 筛选日期
+            - count_folders: 0 | 1 = <default> 💡 是否统计目录数，这样就会增加 "folder_count" 和 "file_count" 字段作为统计
+            - date: str = <default> 💡 筛选日期，格式为 YYYY-MM-DD（或者 YYYY-MM 或 YYYY），具体可以看文件信息中的 "t" 字段的值
             - fc_mix: 0 | 1 = <default> 💡 是否目录和文件混合，如果为 0 则目录在前
             - file_label: int | str = <default> 💡 标签 id
             - format: str = "json" 💡 输出格式（不用管）
@@ -5433,13 +5455,13 @@ class P115Client:
               - "user_otime": 上一次打开时间
 
             - offset: int = 0  💡 索引偏移，索引从 0 开始计算
-            - pick_code: str = <default>
-            - search_value: str = <default>
-            - show_dir: 0 | 1 = 1
-            - source: str = <default>
-            - star: 0 | 1 = <default>
-            - suffix: str = <default>
-            - type: int = <default> 💡 文件类型
+            - pick_code: str = <default> 💡 提取码
+            - search_value: str = <default> 💡 搜索文本，可以是 sha1
+            - show_dir: 0 | 1 = 1     💡 是否显示目录
+            - source: str = <default> 💡 来源
+            - star: 0 | 1 = <default> 💡 是否打星标
+            - suffix: str = <default> 💡 文件后缀（扩展名），优先级高于 `type`
+            - type: int = <default>   💡 文件类型
 
               - 0: 全部
               - 1: 文档
@@ -5498,6 +5520,9 @@ class P115Client:
         """搜索文件或目录（提示：好像最多只能罗列前 10,000 条数据，也就是 limit + offset <= 10_000）
 
         GET https://proapi.115.com/{app}/files/search
+
+        .. attention::
+            最多只能取回前 10,000 条数据，也就是 limit + offset <= 10_000
 
         :payload:
             - aid: int | str = 1 💡 area_id，不知道的话，设置为 1

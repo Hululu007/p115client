@@ -2,20 +2,21 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__all__ = ["batch_get_url", "iter_images_with_url", "iter_subtitles_with_url", "make_strm"]
+__all__ = ["batch_get_url", "iter_images_with_url", "iter_subtitles_with_url", "make_strm", "MakeStrmLog"]
 __doc__ = "这个模块提供了一些和下载有关的函数"
 
 from asyncio import Semaphore, TaskGroup
 from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
+from glob import iglob
 from inspect import isawaitable
 from itertools import chain
-from os import fsdecode, makedirs, PathLike
-from os.path import dirname, join as joinpath, splitext
+from os import fsdecode, makedirs, remove, PathLike
+from os.path import dirname, join as joinpath, normpath, splitext
 from threading import Lock
 from time import perf_counter
-from typing import overload, Any, Final, Literal
+from typing import overload, Any, Final, Literal, TypedDict
 from urllib.parse import quote
 from uuid import uuid4
 from warnings import warn
@@ -31,6 +32,62 @@ from .iterdir import get_path_to_cid, iter_files, iter_files_raw, DirNode, DirNo
 
 TRANSTAB: Final = {c: f"%{c:02x}" for c in b"/%?#"}
 translate = str.translate
+
+
+class MakeStrmResult(TypedDict):
+    """用来展示 `make_strm` 函数的执行结果
+    """
+    total: int
+    success: int
+    failed: int
+    skipped: int
+    removed: int
+    elapsed: float
+
+
+class MakeStrmLog(str):
+    """用来表示 `make_strm` 增删 strm 后的消息
+    """
+    def __new__(cls, msg: str = "", /, *args, **kwds):
+        return super().__new__(cls, msg)
+
+    def __init__(self, msg: str = "", /, *args, **kwds):
+        self.__dict__.update(*args, **kwds)
+
+    def __getattr__(self, attr: str, /):
+        try:
+            return self.__dict__[attr]
+        except KeyError as e:
+            raise AttributeError(attr) from e
+
+    def __getitem__(self, key: str, /): # type: ignore
+        if isinstance(key, str):
+            return self.__dict__[key]
+        return super().__getitem__(key)
+
+    def __repr__(self, /) -> str:
+        cls = type(self)
+        if (module := cls.__module__) == "__main__":
+            name = cls.__qualname__
+        else:
+            name = f"{module}.{cls.__qualname__}"
+        return f"{name}({str(self)!r}, {self.__dict__!r})"
+
+    @property
+    def mapping(self, /) -> dict[str, Any]:
+        return self.__dict__
+
+    def get(self, key, /, default=None):
+        return self.__dict__.get(key, default)
+
+    def items(self, /):
+        return self.__dict__.items()
+
+    def keys(self, /):
+        return self.__dict__.keys()
+
+    def values(self, /):
+        return self.__dict__.values()
 
 
 @overload
@@ -413,6 +470,7 @@ def iter_subtitles_with_url(
     return run_gen_step_iter(gen_step, async_=async_)
 
 
+@overload
 def make_strm(
     client: str | P115Client, 
     cid: int = 0, 
@@ -422,19 +480,61 @@ def make_strm(
     with_root: bool = True, 
     without_suffix: bool = True, 
     ensure_ascii: bool = False, 
-    log: None | Callable[[str], Any] = print, 
+    log: None | Callable[[MakeStrmLog], Any] = print, 
     max_workers: None | int = None, 
+    update: bool = True, 
+    discard: bool = True, 
+    *, 
+    async_: Literal[False] = False, 
+    **request_kwargs, 
+) -> MakeStrmResult:
+    ...
+@overload
+def make_strm(
+    client: str | P115Client, 
+    cid: int = 0, 
+    save_dir: bytes | str | PathLike = ".", 
+    origin: str = "http://localhost:8000", 
+    use_abspath: None | bool = True, 
+    with_root: bool = True, 
+    without_suffix: bool = True, 
+    ensure_ascii: bool = False, 
+    log: None | Callable[[MakeStrmLog], Any] = print, 
+    max_workers: None | int = None, 
+    update: bool = True, 
+    discard: bool = True, 
+    *, 
+    async_: Literal[True], 
+    **request_kwargs, 
+) -> Coroutine[Any, Any, MakeStrmResult]:
+    ...
+def make_strm(
+    client: str | P115Client, 
+    cid: int = 0, 
+    save_dir: bytes | str | PathLike = ".", 
+    origin: str = "http://localhost:8000", 
+    use_abspath: None | bool = True, 
+    with_root: bool = True, 
+    without_suffix: bool = True, 
+    ensure_ascii: bool = False, 
+    log: None | Callable[[MakeStrmLog], Any] = print, 
+    max_workers: None | int = None, 
+    update: bool = True, 
+    discard: bool = True, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
-):
+) -> MakeStrmResult | Coroutine[Any, Any, MakeStrmResult]:
     """生成 strm 保存到本地
 
-    .. hint::
+    .. note::
         只是做全量更新，因此可避免判断。如果想要实现增量的效果，有 2 种办法：
 
         1. 你可以在执行前，把本地目录给删了。
         2. 你可以在执行完成后，把更新时间早于脚本开始执行前的文件全删了，然后再批量删除空目录。
+
+    .. hint::
+        函数在第 2 次处理同一个 id 时，速度会快一些，因为第 1 次时候需要全量拉取构建路径所需的数据
 
     :param client: 115 客户端或 cookies
     :param cid: 目录 id
@@ -451,6 +551,8 @@ def make_strm(
     :param ensure_ascii: strm 是否进行完全转码，确保 ascii 之外的字符都被 urlencode 转码
     :param log: 调用以收集事件，如果为 None，则忽略
     :param max_workers: 最大并发数，主要用于限制同时打开的文件数
+    :param update: 是否更新 strm 文件，如果为 False，则跳过已存在的路径
+    :param discard: 是否清理 strm 文件，如果为 True，则删除未取得的路径
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
     """
@@ -463,7 +565,28 @@ def make_strm(
     if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
-    def normpath(attr: dict, /) -> str:
+    mode = "w" if update else "x"
+    if discard:
+        seen: set[str] = set()
+        seen_add = seen.add
+        def do_discard():
+            removed = 0
+            for path in iglob("**/*.strm", root_dir=save_dir, recursive=True):
+                if path not in seen:
+                    path = joinpath(save_dir, path)
+                    try:
+                        remove(path)
+                        if log is not None:
+                            log(MakeStrmLog(
+                                f"[DEL] path={path!r}", 
+                                type="remove", 
+                                path=path, 
+                            ))
+                        removed += 1
+                    except OSError:
+                        pass
+            return removed
+    def normalize_path(attr: dict, /) -> str:
         if use_abspath is None:
             path = attr["name"]
         elif use_abspath:
@@ -474,9 +597,12 @@ def make_strm(
         if without_suffix:
             path = splitext(path)[0]
         if with_root and not use_abspath:
-            return joinpath(save_dir, id_to_dirnode[cid][0], path + ".strm")
+            relpath = normpath(joinpath(id_to_dirnode[cid][0], path + ".strm"))
         else:
-            return joinpath(save_dir, path + ".strm")
+            relpath = path + ".strm"
+        if discard:
+            seen_add(relpath)
+        return joinpath(save_dir, relpath)
     if async_:
         try:
             from aiofile import async_open
@@ -492,30 +618,54 @@ def make_strm(
         async def request():
             success = 0
             failed = 0
+            skipped = 0
+            removed = 0
             async def save(attr, /, sema=None):
-                nonlocal success, failed
+                nonlocal success, failed, skipped
                 if sema is not None:
                     async with sema:
                         return await save(attr)
-                path = normpath(attr)
+                path = normalize_path(attr)
                 url = f"{origin}/{encode(attr)}?pickcode={attr['pickcode']}"
                 try:
                     try:
-                        async with async_open(path, "w") as f:
+                        async with async_open(path, mode) as f:
                             await f.write(url)
+                    except FileExistsError:
+                        if log is not None:
+                            ret = log(MakeStrmLog(
+                                f"[SKIP] path={path!r} attr={attr!r}", 
+                                type="ignore", 
+                                path=path, 
+                                attr=attr, 
+                            ))
+                            if isawaitable(ret):
+                                await ret
+                        skipped += 1
+                        return
                     except FileNotFoundError:
                         makedirs(dirname(path), exist_ok=True)
                         async with async_open(path, "w") as f:
                             await f.write(url)
                     if log is not None:
-                        ret = log(f"[OK] path={path!r} attr={attr!r}")
+                        ret = log(MakeStrmLog(
+                            f"[OK] path={path!r} attr={attr!r}", 
+                            type="write", 
+                            path=path, 
+                            attr=attr, 
+                        ))
                         if isawaitable(ret):
                             await ret
                     success += 1
                 except BaseException as e:
                     failed += 1
                     if log is not None:
-                        ret = log(f"[ERROR] path={path!r} attr={attr!r} error={e!r}")
+                        ret =log(MakeStrmLog(
+                            f"[ERROR] path={path!r} attr={attr!r} error={e!r}", 
+                            type="error", 
+                            path=path, 
+                            attr=attr, 
+                        ))
                         if isawaitable(ret):
                             await ret
                     if not isinstance(e, OSError):
@@ -533,31 +683,62 @@ def make_strm(
                     **request_kwargs, 
                 ):
                     create_task(save(attr, sema))
-            return {"total": success + failed, "success": success, "failed": failed, "elapsed": perf_counter() - start_t}
+            if discard:
+                removed = do_discard()
+            return {
+                "total": success + failed + skipped, 
+                "success": success, 
+                "failed": failed, 
+                "skipped": skipped, 
+                "removed": removed, 
+                "elapsed": perf_counter() - start_t, 
+            }
         return request()
     else:
         success = 0
         failed = 0
+        skipped = 0
+        removed = 0
         lock = Lock()
         def save(attr: dict, /):
-            nonlocal success, failed
-            path = normpath(attr)
+            nonlocal success, failed, skipped
+            path = normalize_path(attr)
             try:
                 try:
-                    f = open(path,  "w")
+                    f = open(path,  mode)
+                except FileExistsError:
+                    if log is not None:
+                        log(MakeStrmLog(
+                            f"[SKIP] path={path!r} attr={attr!r}", 
+                            type="ignore", 
+                            path=path, 
+                            attr=attr, 
+                        ))
+                    skipped += 1
+                    return
                 except FileNotFoundError:
                     makedirs(dirname(path), exist_ok=True)
                     f = open(path,  "w")
                 f.write(f"{origin}/{encode(attr)}?pickcode={attr['pickcode']}")
                 if log is not None:
-                    log(f"[OK] path={path!r} attr={attr!r}")
+                    log(MakeStrmLog(
+                        f"[OK] path={path!r} attr={attr!r}", 
+                        type="write", 
+                        path=path, 
+                        attr=attr, 
+                    ))
                 with lock:
                     success += 1
             except BaseException as e:
                 with lock:
                     failed += 1
                 if log is not None:
-                    log(f"[ERROR] path={path!r} attr={attr!r} error={e!r}")
+                    log(MakeStrmLog(
+                        f"[ERROR] path={path!r} attr={attr!r} error={e!r}", 
+                        type="error", 
+                        path=path, 
+                        attr=attr, 
+                    ))
                 if not isinstance(e, OSError):
                     raise
         if max_workers and max_workers <= 0:
@@ -574,7 +755,16 @@ def make_strm(
                 **request_kwargs, 
             ))
             executor.shutdown(wait=True)
-            return {"total": success + failed, "success": success, "failed": failed, "elapsed": perf_counter() - start_t}
+            if discard:
+                removed = do_discard()
+            return {
+                "total": success + failed + skipped, 
+                "success": success, 
+                "failed": failed, 
+                "skipped": skipped, 
+                "removed": removed, 
+                "elapsed": perf_counter() - start_t, 
+            }
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
 

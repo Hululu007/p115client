@@ -15,6 +15,7 @@ from collections import defaultdict, deque
 from collections.abc import AsyncIterator, Callable, Collection, Coroutine, Iterable, Iterator, Mapping
 from itertools import chain, islice
 from operator import itemgetter
+from time import time
 from typing import cast, overload, Any, Final, Literal, NamedTuple, NewType, TypeVar
 from warnings import warn
 
@@ -83,20 +84,15 @@ def get_path_to_cid(
     if root_id is not None and cid != root_id:
         return ""
     if escape is None:
-        path = "/".join(parts)
+        path = "/".join(reversed(parts))
     else:
-        path = "/".join(map(escape, parts))
+        path = "/".join(map(escape, reversed(parts)))
     if root_id is None or root_id:
-        return path
+        return "/" + path
     else:
-        return path[1:]
+        return path
 
 
-# TODO 支持 refresh
-# def get_path_to_id(client, refresh: bool = True)
-
-
-# TODO 支持 refresh
 @overload
 def get_id_of_path(
     client: str | P115Client, 
@@ -639,39 +635,74 @@ def ensure_attr_path(
                 pids.add(pid)
         def take_while(info, /) -> bool:
             find_ids.discard(int(info["cid"]))
+            if int(info["te"]) < start:
+                return False
             return bool(find_ids)
+        start: float
         find_ids: set[int]
         while pids:
             if find_ids := pids - id_to_dirnode.keys():
                 try:
-                    if len(find_ids) <= len(id_to_dirnode) // page_size:
-                        for pid in find_ids:
-                            yield walk_next(iterdir_raw(
+                    while find_ids:
+                        if len(find_ids) <= len(id_to_dirnode) // page_size:
+                            for pid in find_ids:
+                                yield walk_next(iterdir_raw(
+                                    client, 
+                                    pid, 
+                                    page_size=1, 
+                                    id_to_dirnode=id_to_dirnode, 
+                                    async_=async_, 
+                                    **request_kwargs, 
+                                ), None)
+                        else:
+                            start = time()
+                            ids_it = iter(find_ids)
+                            while t_ids := tuple(islice(ids_it, 10_000)):
+                                # NOTE: 批量给目录添加星标，这样便于把这些目录进行批量拉取
+                                check_response((yield client.fs_star_set(
+                                    t_ids, 
+                                    async_=async_, 
+                                    **request_kwargs, 
+                                )))
+                                # NOTE: 批量给目录添加空备注，这样可以更新这些目录的更新时间
+                                check_response((yield client.fs_desc_set(
+                                    t_ids, 
+                                    async_=async_, 
+                                    **request_kwargs, 
+                                )))
+                            yield walk_through(iter_stared_dirs_raw(
                                 client, 
-                                pid, 
-                                page_size=1, 
+                                page_size, 
+                                order="user_utime", 
+                                asc=0, 
                                 id_to_dirnode=id_to_dirnode, 
                                 async_=async_, 
                                 **request_kwargs, 
-                            ), None)
-                    else:
-                        ids_it = iter(find_ids)
-                        while t_ids := tuple(islice(ids_it, 10_000)):
-                            # NOTE: 批量给目录添加空备注，这样可以更新这些目录的更新时间
-                            yield client.fs_desc_set(t_ids, async_=async_, **request_kwargs)
-                            # NOTE: 批量给目录添加星标，这样便于把这些目录进行批量拉取
-                            yield client.fs_star_set(",".join(map(str, t_ids)), async_=async_, **request_kwargs)
-                        yield walk_through(iter_stared_dirs_raw(
-                            client, 
-                            page_size, 
-                            order="user_utime", 
-                            asc=0, 
-                            id_to_dirnode=id_to_dirnode, 
-                            async_=async_, 
-                            **request_kwargs, 
-                        ), take_while=take_while)
-                        if find_ids:
-                            raise P115OSError(errno.EIO, f"unable to find these ids: {find_ids}")
+                            ), take_while=take_while)
+                            if find_ids:
+                                # NOTE: 首先检查一下，这些 id 中如果有已经被删除的 id，则报错
+                                ids_it = iter(find_ids)
+                                while s_ids := set(islice(ids_it, 10_000)):
+                                    resp = yield client.fs_file_skim(
+                                        s_ids, 
+                                        async_=async_, 
+                                        **request_kwargs, 
+                                    )
+                                    if resp.get("error") == "文件不存在":
+                                        raise P115OSError(
+                                            errno.EIO, 
+                                            f"at least these ids have been deleted: {s_ids} (from {find_ids})", 
+                                        )
+                                    else:
+                                        check_response(resp)
+                                        s_ids -= {int(a["file_id"]) for a in resp["data"]}
+                                        if s_ids:
+                                            raise P115OSError(
+                                                errno.EIO, 
+                                                f"at least these ids have been deleted: {s_ids} (from {find_ids})", 
+                                            )
+                                continue
+                        break
                 except Exception as e:
                     match errors:
                         case "raise":

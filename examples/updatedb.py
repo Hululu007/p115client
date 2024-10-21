@@ -190,6 +190,7 @@ def transaction(con: Connection | Cursor, /):
         con.commit()
 
 
+# TODO: 这些函数都移动到 p115client.tool.edit
 def update_desc(
     client: P115Client, 
     ids: Iterable[int], 
@@ -1160,7 +1161,6 @@ def updatedb(
                     try:
                         resp = client.fs_category_get(cid, base_url=True, timeout=auto_splitting_statistics_timeout)
                         if not resp:
-                            seen_add(cid)
                             return 0
                         check_response(resp)
                         return int(resp["count"])
@@ -1184,15 +1184,15 @@ def updatedb(
                 elif auto_splitting_threshold < 0:
                     need_to_split_tasks = False
                 elif recursive:
-                    start = perf_counter()
                     count = cache_futures[id].result()
                     if count <= 0:
+                        seen_add(id)
                         continue
                     need_to_split_tasks = count > auto_splitting_threshold
                     if need_to_split_tasks:
-                        logger.info(f"[\x1b[1;37;41mTELL\x1b[0m] \x1b[1m{id}\x1b[0m, \x1b[1;31mbig\x1b[0m ({count:,.0f} > {auto_splitting_threshold:,d}), will be pulled in \x1b[1;4;5;31mmulti batches\x1b[0m, cost: {perf_counter() - start:,.6f} s")
+                        logger.info(f"[\x1b[1;37;41mTELL\x1b[0m] \x1b[1m{id}\x1b[0m, \x1b[1;31mbig\x1b[0m ({count:,.0f} > {auto_splitting_threshold:,d}), will be pulled in \x1b[1;4;5;31mmulti batches\x1b[0m")
                     else:
-                        logger.info(f"[\x1b[1;37;42mTELL\x1b[0m] \x1b[1m{id}\x1b[0m, \x1b[1;32mfit\x1b[0m ({count:,.0f} <= {auto_splitting_threshold:,d}), will be pulled in \x1b[1;4;5;32mone batch\x1b[0m, cost: {perf_counter() - start:,.6f} s")
+                        logger.info(f"[\x1b[1;37;42mTELL\x1b[0m] \x1b[1m{id}\x1b[0m, \x1b[1;32mfit\x1b[0m ({count:,.0f} <= {auto_splitting_threshold:,d}), will be pulled in \x1b[1;4;5;32mone batch\x1b[0m")
                 try:
                     if need_to_split_tasks or not recursive:
                         updatedb_one(client, con, id)
@@ -1290,3 +1290,6 @@ if __name__ == "__main__":
 # TODO: 增加一个选项，允许对数据进行全量而不是增量更新，这样可以避免一些问题
 # TODO: 增加一个选项，如果查询的某个 id 不存在，就把这个 id 的在数据库的数据给删除
 # TODO: 检测目录大小应该后台运行，并且进行一定量的并发，这个操作太耗时了
+# TODO: 如果 no_dir_moved 为 False，可以提前拉一次数据，更新一下目录，作为预处理，以后尽量少地去调用拉取星标目录的函数，越少调用速度越快
+# TODO: 如果上一个任务已经更新过一次星标目录，下一个任务非必要无需再拉取，即使 no_dir_moved 为 False
+# TODO: 为数据库插入弄单独一个线程，就不需要等待数据库插入完成，就可以开始下一批数据拉取
