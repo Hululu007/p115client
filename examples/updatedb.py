@@ -61,6 +61,7 @@ import logging
 
 from collections import deque
 from collections.abc import Collection, Iterator, Iterable, Mapping, Sequence, Set
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from errno import EBUSY, ENOENT, ENOTDIR
 from functools import partial
@@ -1082,6 +1083,7 @@ def updatedb_tree(
             updatedb_tree(client, con, id, no_dir_moved=no_dir_moved)
 
 
+# TODO: 在单独线程中统计目录大小
 def updatedb(
     client: str | P115Client, 
     dbfile: None | str | Connection | Cursor = None, 
@@ -1146,54 +1148,77 @@ def updatedb(
                             continue
             if not top_ids:
                 return
-        dq.extend(top_ids)
-        while dq:
-            id = pop()
-            if id in seen:
-                logger.warning("[\x1b[1;33mSKIP\x1b[0m]", id)
-                continue
-            if auto_splitting_threshold == 0:
-                need_to_split_tasks = True
-            elif auto_splitting_threshold < 0:
-                need_to_split_tasks = False
-            elif recursive:
-                start = perf_counter()
-                if id == 0:
+        if auto_splitting_threshold > 0:
+            executor = ThreadPoolExecutor()
+            submit = executor.submit
+            cache_futures: dict[int, Future] = {}
+            def get_dir_size(cid: int = 0, /) -> int | float:
+                if cid == 0:
                     resp = check_response(client.fs_space_summury())
-                    count = sum(v["count"] for k, v in resp["type_summury"].items() if k.isupper())
+                    return sum(v["count"] for k, v in resp["type_summury"].items() if k.isupper())
                 else:
                     try:
-                        resp = client.fs_category_get(id, timeout=auto_splitting_statistics_timeout)
+                        resp = client.fs_category_get(cid, base_url=True, timeout=auto_splitting_statistics_timeout)
                         if not resp:
-                            seen_add(id)
-                            continue
+                            seen_add(cid)
+                            return 0
                         check_response(resp)
-                        count = int(resp["count"])
+                        return int(resp["count"])
                     except ReadTimeout:
                         logger.info("[\x1b[1;37;43mSTAT\x1b[0m] \x1b[1m%d\x1b[0m, too big, since statistics timeout, consider the size as \x1b[1;3minf\x1b[0m", id)
-                        count = float("inf")
-                need_to_split_tasks = count > auto_splitting_threshold
-                if need_to_split_tasks:
-                    logger.info(f"[\x1b[1;37;41mTELL\x1b[0m] \x1b[1m{id}\x1b[0m, \x1b[1;31mbig\x1b[0m ({count:,.0f} > {auto_splitting_threshold:,d}), will be pulled in \x1b[1;4;5;31mmulti batches\x1b[0m, cost: {perf_counter() - start:,.6f} s")
+                        return float("inf")
+        try:
+            dq.extend(top_ids)
+            need_calc_size = recursive and auto_splitting_threshold > 0
+            if need_calc_size:
+                for cid in top_ids:
+                    if cid not in cache_futures:
+                        cache_futures[cid] = submit(get_dir_size, cid)
+            while dq:
+                id = pop()
+                if id in seen:
+                    logger.warning("[\x1b[1;33mSKIP\x1b[0m]", id)
+                    continue
+                if auto_splitting_threshold == 0:
+                    need_to_split_tasks = True
+                elif auto_splitting_threshold < 0:
+                    need_to_split_tasks = False
+                elif recursive:
+                    start = perf_counter()
+                    count = cache_futures[id].result()
+                    if count <= 0:
+                        continue
+                    need_to_split_tasks = count > auto_splitting_threshold
+                    if need_to_split_tasks:
+                        logger.info(f"[\x1b[1;37;41mTELL\x1b[0m] \x1b[1m{id}\x1b[0m, \x1b[1;31mbig\x1b[0m ({count:,.0f} > {auto_splitting_threshold:,d}), will be pulled in \x1b[1;4;5;31mmulti batches\x1b[0m, cost: {perf_counter() - start:,.6f} s")
+                    else:
+                        logger.info(f"[\x1b[1;37;42mTELL\x1b[0m] \x1b[1m{id}\x1b[0m, \x1b[1;32mfit\x1b[0m ({count:,.0f} <= {auto_splitting_threshold:,d}), will be pulled in \x1b[1;4;5;32mone batch\x1b[0m, cost: {perf_counter() - start:,.6f} s")
+                try:
+                    if need_to_split_tasks or not recursive:
+                        updatedb_one(client, con, id)
+                    else:
+                        updatedb_tree(client, con, id, no_dir_moved=no_dir_moved)
+                except (FileNotFoundError, NotADirectoryError):
+                    pass
+                except BusyOSError:
+                    logger.warning("[\x1b[1;34mREDO\x1b[0m] %s", id)
+                    push(id)
                 else:
-                    logger.info(f"[\x1b[1;37;42mTELL\x1b[0m] \x1b[1m{id}\x1b[0m, \x1b[1;32mfit\x1b[0m ({count:,.0f} <= {auto_splitting_threshold:,d}), will be pulled in \x1b[1;4;5;32mone batch\x1b[0m, cost: {perf_counter() - start:,.6f} s")
-            try:
-                if need_to_split_tasks or not recursive:
-                    updatedb_one(client, con, id)
-                else:
-                    updatedb_tree(client, con, id, no_dir_moved=no_dir_moved)
-            except (FileNotFoundError, NotADirectoryError):
-                pass
-            except BusyOSError:
-                logger.warning("[\x1b[1;34mREDO\x1b[0m] %s", id)
-                push(id)
-            else:
-                seen_add(id)
-                if recursive and need_to_split_tasks:
-                    dq.extend(select_subdir_ids(con, id))
-        if clean and top_ids:
-            delete_na_dirs(con, client)
-            delete_dangling_items(con)
+                    seen_add(id)
+                    if recursive and need_to_split_tasks:
+                        ids = select_subdir_ids(con, id)
+                        if ids:
+                            dq.extend(ids)
+                            if need_calc_size:
+                                for cid in ids:
+                                    if cid not in cache_futures:
+                                        cache_futures[cid] = submit(get_dir_size, cid)
+            if clean and top_ids:
+                delete_na_dirs(con, client)
+                delete_dangling_items(con)
+        finally:
+            if need_calc_size:
+                executor.shutdown(wait=False, cancel_futures=True)
     else:
         with connect(dbfile, uri=dbfile.startswith("file:")) as con:
             initdb(con)
