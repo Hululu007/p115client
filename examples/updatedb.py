@@ -5,7 +5,7 @@ __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __version__ = (0, 0, 9)
 __all__ = ["updatedb", "updatedb_one", "updatedb_tree"]
 __doc__ = "遍历 115 网盘的目录信息导出到数据库"
-__requirements__ = ["p115client", "posixpatht", "urllib3", "urllib3_request>=0.0.3"]
+__requirements__ = ["p115client", "posixpatht"]
 
 if __name__ == "__main__":
     from argparse import ArgumentParser, RawTextHelpFormatter
@@ -30,7 +30,7 @@ if __name__ == "__main__":
 如果都找不到，则默认使用 '2. 用户根目录，此时则需要扫码登录'""")
     parser.add_argument("-f", "--dbfile", default="", help="sqlite 数据库文件路径，默认为在当前工作目录下的 f'115-{user_id}.db'")
     parser.add_argument("-cl", "--clean", action="store_true", help="任务完成后清理数据库，以节约空间")
-    parser.add_argument("-st", "--auto-splitting-threshold", type=int, default=100_000, help="自动拆分的文件数阈值，大于此值时，自动进行拆分，如果 <= 0，则总是拆分，默认值 100,000（10 万）")
+    parser.add_argument("-st", "--auto-splitting-threshold", type=int, default=100_000, help="自动拆分的文件数阈值，大于此值时，自动进行拆分，如果 = 0，则总是拆分，如果 < 0，则总是不拆分，默认值 100,000（10 万）")
     parser.add_argument("-sst", "--auto-splitting-statistics-timeout", type=float, default=3, help="自动拆分前的执行文件数统计的超时时间（秒），大于此值时，视为文件数无穷大，如果 <= 0，视为永不超时，默认值 3")
     parser.add_argument("-nm", "--no-dir-moved", action="store_true", help="声明没有目录被移动或改名（但可以有目录被新增或删除），这可以加快批量拉取时的速度")
     parser.add_argument("-nr", "--not-recursive", action="store_true", help="不遍历目录树：只拉取顶层目录，不递归子目录")
@@ -42,24 +42,20 @@ if __name__ == "__main__":
         raise SystemExit(0)
 
 try:
+    from httpx import ReadTimeout
     from p115client import check_response, P115Client
     from p115client.exception import BusyOSError
     from p115client.tool.iterdir import ensure_attr_path, get_path_to_cid, iter_stared_dirs, DirNode, DirNodeTuple
     from posixpatht import escape, joins, normpath
-    from urllib3.poolmanager import PoolManager
-    from urllib3.exceptions import ReadTimeoutError
-    from urllib3_request import request as urllib3_request
 except ImportError:
     from sys import executable
     from subprocess import run
     run([executable, "-m", "pip", "install", "-U", *__requirements__], check=True)
+    from httpx import ReadTimeout
     from p115client import check_response, P115Client
     from p115client.exception import BusyOSError
     from p115client.tool.iterdir import ensure_attr_path, get_path_to_cid, iter_stared_dirs, DirNode, DirNodeTuple
     from posixpatht import escape, joins, normpath
-    from urllib3.poolmanager import PoolManager
-    from urllib3.exceptions import ReadTimeoutError
-    from urllib3_request import request as urllib3_request
 
 import logging
 
@@ -77,8 +73,6 @@ from typing import cast, Final
 
 # NOTE: 目录的 id 到它的 名字 和 上级目录 id 的映射
 ID_TO_DIRNODE: Final[dict[int, DirNode | DirNodeTuple]] = {}
-# NOTE: 创建一个使用 urllib3 的请求函数，连接池容量为 50
-request = partial(urllib3_request, pool=PoolManager(50))
 # NOTE: 初始化日志对象
 logger = logging.Logger("115-updatedb", level=logging.INFO)
 handler = logging.StreamHandler()
@@ -211,11 +205,11 @@ def update_desc(
     set_desc = client.fs_desc_set
     if isinstance(ids, Sequence):
         for i in range(0, len(ids), batch_size):
-            check_response(set_desc(ids[i:i+batch_size], desc, request=request))
+            check_response(set_desc(ids[i:i+batch_size], desc))
     else:
         ids_it = iter(ids)
         while t_ids := tuple(islice(ids_it, batch_size)):
-            check_response(set_desc(t_ids, desc, request=request))
+            check_response(set_desc(t_ids, desc))
 
 
 def update_star(
@@ -235,11 +229,11 @@ def update_star(
     if isinstance(ids, Sequence):
         for i in range(0, len(ids), batch_size):
             idss = ",".join(map(str, ids[i:i+batch_size]))
-            check_response(set_star(idss, star, request=request))
+            check_response(set_star(idss, star))
     else:
         ids_it = iter(ids)
         while idss := ",".join(map(str, islice(ids_it, batch_size))):
-            check_response(set_star(idss, star, request=request))
+            check_response(set_star(idss, star))
 
 
 def filter_na_ids(
@@ -257,7 +251,7 @@ def filter_na_ids(
     :return: 迭代器，筛选出所有无效的 id
     """
     def check_part(ids: Iterable[int], /) -> Iterable[int]:
-        resp = client.fs_file_skim(ids, request=request)
+        resp = client.fs_file_skim(ids)
         if resp.get("error") == "文件不存在":
             return ids
         else:
@@ -824,7 +818,7 @@ def iterdir(
     seen: dict[int, dict] = {}
     def get_files():
         nonlocal count
-        resp = check_response(fs_files(payload, request=request))
+        resp = check_response(fs_files(payload))
         if int(resp["path"][-1]["cid"]) != id:
             if count < 0:
                 raise NotADirectoryError(ENOTDIR, f"not a dir or deleted: cid={id}")
@@ -1002,6 +996,7 @@ def updatedb_tree(
         start = perf_counter()
         try:
             to_delete, to_replace = diff_dir(con, client, id, tree=True)
+            custom_no_dir_moved = no_dir_moved
             if to_delete:
                 # 找出所有待删除记录的祖先节点 id，并更新它们的 mtime
                 all_pids: set[int] = set()
@@ -1021,10 +1016,13 @@ def updatedb_tree(
                     all_pids |= pids
                     if find_ids := pids - ID_TO_DIRNODE.keys():
                         update_star(client, find_ids)
-                        update_desc(client, pids)
+                        if custom_no_dir_moved:
+                            update_desc(client, find_ids)
+                        else:
+                            update_desc(client, pids)
                         update_id_to_dirnode(con, client)
                         no_dir_moved = True
-                    else:
+                    elif not custom_no_dir_moved:
                         update_desc(client, pids)
                         no_dir_moved = False
                     pids = {ppid for pid in pids if (ppid := ID_TO_DIRNODE[pid][1]) and ppid not in all_pids}
@@ -1097,7 +1095,7 @@ def updatedb(
                 top_ids = (top_dir,)
             else:
                 try:
-                    resp = check_response(client.fs_dir_getid(top_dir, request=request))
+                    resp = check_response(client.fs_dir_getid(top_dir))
                     if not resp["id"]:
                         return
                     top_ids = (int(resp["id"]),)
@@ -1116,7 +1114,7 @@ def updatedb(
                         add_id(top_dir)
                     else:
                         try:
-                            resp = check_response(client.fs_dir_getid(top_dir, request=request))
+                            resp = check_response(client.fs_dir_getid(top_dir))
                             if not resp["id"]:
                                 continue
                             add_id(int(resp["id"]))
@@ -1131,27 +1129,24 @@ def updatedb(
             if id in seen:
                 logger.warning("[\x1b[1;33mSKIP\x1b[0m]", id)
                 continue
-            if auto_splitting_threshold <= 0:
+            if auto_splitting_threshold == 0:
                 need_to_split_tasks = True
+            elif auto_splitting_threshold < 0:
+                need_to_split_tasks = False
             elif recursive:
                 start = perf_counter()
                 if id == 0:
-                    resp = check_response(client.fs_space_summury(request=request))
+                    resp = check_response(client.fs_space_summury())
                     count = sum(v["count"] for k, v in resp["type_summury"].items() if k.isupper())
                 else:
                     try:
-                        resp = client.fs_category_get(
-                            id, 
-                            timeout=auto_splitting_statistics_timeout, 
-                            request=request, 
-                            retries=False, 
-                        )
+                        resp = client.fs_category_get(id, timeout=auto_splitting_statistics_timeout)
                         if not resp:
                             seen_add(id)
                             continue
                         check_response(resp)
                         count = int(resp["count"])
-                    except ReadTimeoutError:
+                    except ReadTimeout:
                         logger.info("[\x1b[1;37;43mSTAT\x1b[0m] \x1b[1m%d\x1b[0m, too big, since statistics timeout, consider the size as \x1b[1;3minf\x1b[0m", id)
                         count = float("inf")
                 need_to_split_tasks = count > auto_splitting_threshold
@@ -1160,13 +1155,10 @@ def updatedb(
                 else:
                     logger.info(f"[\x1b[1;37;42mTELL\x1b[0m] \x1b[1m{id}\x1b[0m, \x1b[1;32mfit\x1b[0m ({count:,.0f} <= {auto_splitting_threshold:,d}), will be pulled in \x1b[1;4;5;32mone batch\x1b[0m, cost: {perf_counter() - start:,.6f} s")
             try:
-                if not recursive or need_to_split_tasks:
+                if need_to_split_tasks or not recursive:
                     updatedb_one(client, con, id)
                 else:
-                    if not no_dir_moved:
-                        update_id_to_dirnode(con, client)
-                        no_dir_moved = True
-                    updatedb_tree(client, con, id)
+                    updatedb_tree(client, con, id, no_dir_moved=no_dir_moved)
             except (FileNotFoundError, NotADirectoryError):
                 pass
             except BusyOSError:
