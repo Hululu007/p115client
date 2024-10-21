@@ -74,20 +74,42 @@ WEBAPI_SUB_ROUTERS: Final = ("/category", "/files", "/history", "/label", "/movi
 _httpx_request = None
 
 
-def make_webapi_prefix_generator(multi: bool = False) -> Callable[[], str]:
-    if multi:
-        def gen():
-            yield ""
+def make_webapi_prefix_generator(n: int = 1, /) -> Callable[[], str]:
+    if n == 0:
+        return cycle(("",)).__next__
+    def gen(n: int = 1, /):
+        yield ""
+        if n:
             yield from WEBAPI_SUB_ROUTERS
-            for i in count(2):
+            if n == 1:
+                return
+            if n >= 2:
+                it: Iterable[int] = range(2, n+1)
+            else:
+                it = count(2)
+            for i in it:
                 for t in product(*((WEBAPI_SUB_ROUTERS,)*i)):
                     yield "".join(t)
+    if n < 0:
         return gen().__next__
-    else:
-        return cycle(("", *WEBAPI_SUB_ROUTERS)).__next__
+    elif n <= 4:
+        return cycle(gen(n)).__next__
+    def loop():
+        while True:
+            yield from gen(n)
+    return loop().__next__
 
-get_prefix = make_webapi_prefix_generator()
-get_prefixes = make_webapi_prefix_generator(True)
+get_prefix = make_webapi_prefix_generator(4)
+
+
+def complete_webapi(base_url: bool | str, path: str, /) -> str:
+    if base_url:
+        if base_url is True:
+            return f"https://v.anxia.com/webapi{get_prefix()}{path}"
+        else:
+            return base_url + path
+    else:
+        return f"https://webapi.115.com{get_prefix()}{path}"
 
 
 def json_loads(content: bytes, /):
@@ -1311,13 +1333,12 @@ class P115Client:
             request_kwargs["session"] = self.async_session if async_ else self.session
             request_kwargs["async_"] = async_
             request = get_default_request()
-        else:
-            if (headers := request_kwargs.get("headers")):
-                headers = request_kwargs["headers"] = {**self.headers, **headers}
-            else:
-                headers = request_kwargs["headers"] = dict(self.headers)
-            if "Cookie" not in headers:
+        if (headers := request_kwargs.get("headers")):
+            headers = request_kwargs["headers"] = {**self.headers, **headers}
+            if "Cookie" not in headers and "cookie" not in headers:
                 headers["Cookie"] = self.cookies_str
+        else:
+            request_kwargs["headers"] = {**self.headers, "Cookie": self.cookies_str}
         if callable(check_for_relogin):
             if async_:
                 async def wrap():
@@ -1817,23 +1838,26 @@ class P115Client:
     @overload
     @staticmethod
     def app_version_list(
-        async_: Literal[False] = False, 
         request: None | Callable = None, 
+        *, 
+        async_: Literal[False] = False, 
         **request_kwargs
     ) -> dict:
         ...
     @overload
     @staticmethod
     def app_version_list(
-        async_: Literal[True], 
         request: None | Callable = None, 
+        *, 
+        async_: Literal[True], 
         **request_kwargs
     ) -> Coroutine[Any, Any, dict]:
         ...
     @staticmethod
     def app_version_list(
-        async_: Literal[False, True] = False, 
         request: None | Callable = None, 
+        *, 
+        async_: Literal[False, True] = False, 
         **request_kwargs
     ) -> dict | Coroutine[Any, Any, dict]:
         """获取当前各平台最新版 115 app 下载链接
@@ -1978,6 +2002,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -1987,6 +2013,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -1995,6 +2023,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -2010,6 +2040,7 @@ class P115Client:
             - ctype: str = "web"        💡 需要和 type 相同
             - client: str = "web"       💡 需要和 type 相同
         """
+        api = complete_webapi(base_url, "/user/captcha")
         if isinstance(payload, (int, str)):
             payload = {"code": payload, "ac": "security_code", "type": "web", "ctype": "web", "client": "web"}
         else:
@@ -2018,7 +2049,6 @@ class P115Client:
             if "sign" not in payload:
                 resp = yield self.captcha_sign(async_=async_)
                 payload["sign"] = resp["sign"]
-            api = "https://webapi.115.com/user/captcha"
             return (yield partial(
                 self.request, 
                 url=api, 
@@ -2193,6 +2223,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2202,6 +2234,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2210,6 +2244,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -2220,7 +2256,7 @@ class P115Client:
         :payload:
             - pickcode: str
         """
-        api = "https://webapi.115.com/files/download"
+        api = complete_webapi(base_url, "/files/download")
         if isinstance(payload, str):
             payload = {"pickcode": payload}
         headers = request_kwargs.get("headers")
@@ -2255,6 +2291,8 @@ class P115Client:
         self, 
         payload: list | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2264,6 +2302,8 @@ class P115Client:
         self, 
         payload: list | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2272,6 +2312,8 @@ class P115Client:
         self, 
         payload: list | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -2287,7 +2329,7 @@ class P115Client:
             - to_pid: int | str = 0
             - paths: str = "文件"
         """
-        api = "https://webapi.115.com/files/add_extract_file"
+        api = complete_webapi(base_url, "/files/add_extract_file")
         if (headers := request_kwargs.get("headers")):
             headers = request_kwargs["headers"] = dict(headers)
         else:
@@ -2366,6 +2408,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2375,6 +2419,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2383,6 +2429,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -2394,7 +2442,7 @@ class P115Client:
             - pick_code: str
             - full_name: str
         """
-        api = "https://webapi.115.com/files/extract_down_file"
+        api = complete_webapi(base_url, "/files/extract_down_file")
         request_headers = request_kwargs.get("headers")
         headers = request_kwargs.get("headers")
         if headers:
@@ -2526,6 +2574,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2535,6 +2585,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2543,6 +2595,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -2557,7 +2611,7 @@ class P115Client:
             - page_count: int | str = 999 💡 分页大小，介于 1-999
             - paths: str = "文件" 💡 省略即可
         """
-        api = "https://webapi.115.com/files/extract_info"
+        api = complete_webapi(base_url, "/files/extract_info")
         if isinstance(payload, str):
             payload = {"paths": "文件", "page_count": 999, "next_marker": "", "file_name": "", "pick_code": payload}
         else:
@@ -2616,6 +2670,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2625,6 +2681,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2633,6 +2691,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -2643,7 +2703,7 @@ class P115Client:
         :payload:
             - extract_id: str
         """
-        api = "https://webapi.115.com/files/add_extract_file"
+        api = complete_webapi(base_url, "/files/add_extract_file")
         if isinstance(payload, (int, str)):
             payload = {"extract_id": payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
@@ -2653,6 +2713,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2662,6 +2724,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2670,6 +2734,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -2681,7 +2747,7 @@ class P115Client:
             - pick_code: str
             - secret: str = "" 💡 解压密码
         """
-        api = "https://webapi.115.com/files/push_extract"
+        api = complete_webapi(base_url, "/files/push_extract")
         if isinstance(payload, str):
             payload = {"pick_code": payload}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
@@ -2691,6 +2757,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2700,6 +2768,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2708,6 +2778,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -2718,7 +2790,7 @@ class P115Client:
         :payload:
             - pick_code: str
         """
-        api = "https://webapi.115.com/files/push_extract"
+        api = complete_webapi(base_url, "/files/push_extract")
         if isinstance(payload, str):
             payload = {"pick_code": payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
@@ -2731,6 +2803,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2741,6 +2814,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2750,6 +2824,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -2762,7 +2837,7 @@ class P115Client:
             - limit: int = 1150
             - album_type: int = 1
         """
-        api = "https://webapi.115.com/photo/albumlist"
+        api = complete_webapi(base_url, "/photo/albumlist")
         if isinstance(payload, (int, str)):
             payload = {"album_type": 1, "limit": 1150, "offset": payload}
         else:
@@ -2774,6 +2849,8 @@ class P115Client:
         self, 
         payload: list | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2783,6 +2860,8 @@ class P115Client:
         self, 
         payload: list | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2791,6 +2870,8 @@ class P115Client:
         self, 
         payload: list | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -2801,7 +2882,7 @@ class P115Client:
         :payload:
             - show_play_long[{fid}]: 0 | 1 = 1 💡 设置或取消显示时长
         """
-        api = "https://webapi.115.com/files/batch_edit"
+        api = complete_webapi(base_url, "/files/batch_edit")
         if (headers := request_kwargs.get("headers")):
             headers = request_kwargs["headers"] = dict(headers)
         else:
@@ -2820,6 +2901,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2829,6 +2912,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2837,6 +2922,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -2848,7 +2935,7 @@ class P115Client:
             - cid: int | str
             - aid: int | str = 1
         """
-        api = "https://webapi.115.com/category/get"
+        api = complete_webapi(base_url, "/category/get")
         if isinstance(payload, (int, str)):
             payload = {"cid": payload}
         else:
@@ -2907,6 +2994,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2917,6 +3005,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2926,6 +3015,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -2941,7 +3031,7 @@ class P115Client:
             payload = {"limit": 1150, "offset": payload}
         else:
             payload = {"limit": 1150, "offset": 0, **payload}
-        api = "https://webapi.115.com/category/shortcut"
+        api = complete_webapi(base_url, "/category/shortcut")
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -2949,6 +3039,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2958,6 +3050,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2966,6 +3060,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -2981,7 +3077,7 @@ class P115Client:
               - "delete": 删除
               - "top":    置顶
         """
-        api = "https://webapi.115.com/category/shortcut"
+        api = complete_webapi(base_url, "/category/shortcut")
         if isinstance(payload, (int, str)):
             payload = {"file_id": payload}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
@@ -2993,6 +3089,7 @@ class P115Client:
         /, 
         pid: int = 0, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -3004,6 +3101,7 @@ class P115Client:
         /, 
         pid: int = 0, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -3014,6 +3112,7 @@ class P115Client:
         /, 
         pid: int = 0, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -3032,7 +3131,7 @@ class P115Client:
 
               目录 id，把 fid[{no}] 全都移动到此目录中
         """
-        api = "https://webapi.115.com/files/copy"
+        api = complete_webapi(base_url, "/files/copy")
         if isinstance(payload, (int, str)):
             payload = {"fid[0]": payload}
         elif isinstance(payload, dict):
@@ -3091,6 +3190,8 @@ class P115Client:
         self, 
         payload: int | str | dict | Iterable[int | str], 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -3100,6 +3201,8 @@ class P115Client:
         self, 
         payload: int | str | dict | Iterable[int | str], 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -3108,6 +3211,8 @@ class P115Client:
         self, 
         payload: int | str | dict | Iterable[int | str], 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -3120,7 +3225,7 @@ class P115Client:
             - fid[1]: int | str
             - ...
         """
-        api = "https://webapi.115.com/rb/delete"
+        api = complete_webapi(base_url, "/rb/delete")
         if isinstance(payload, (int, str)):
             payload = {"fid[0]": payload}
         elif not isinstance(payload, dict):
@@ -3134,6 +3239,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -3143,6 +3250,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -3151,6 +3260,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -3164,7 +3275,7 @@ class P115Client:
             - compat: 0 | 1 = 1
             - new_html: 0 | 1 = <default>
         """
-        api = "https://webapi.115.com/files/desc"
+        api = complete_webapi(base_url, "/files/desc")
         if isinstance(payload, (int, str)):
             payload = {"format": "json", "compat": 1, "file_id": payload}
         else:
@@ -3224,6 +3335,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -3233,6 +3346,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -3241,6 +3356,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -3251,7 +3368,7 @@ class P115Client:
         :payload:
             - path: str
         """
-        api = "https://webapi.115.com/files/getid"
+        api = complete_webapi(base_url, "/files/getid")
         if isinstance(payload, str):
             payload = {"path": payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
@@ -3261,6 +3378,8 @@ class P115Client:
         self, 
         payload: list | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -3270,6 +3389,8 @@ class P115Client:
         self, 
         payload: list | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -3278,6 +3399,8 @@ class P115Client:
         self, 
         payload: list | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -3295,7 +3418,7 @@ class P115Client:
             - fid_cover: int | str = <default> 💡 封面图片的文件 id，多个用逗号 "," 隔开，如果要删除，值设为 0 即可
             - show_play_long: 0 | 1 = <default> 💡 文件名称显示时长
         """
-        api = "https://webapi.115.com/files/edit"
+        api = complete_webapi(base_url, "/files/edit")
         if (headers := request_kwargs.get("headers")):
             headers = request_kwargs["headers"] = dict(headers)
         else:
@@ -3314,6 +3437,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -3323,6 +3448,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -3331,6 +3458,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -3343,7 +3472,7 @@ class P115Client:
             - target: str = "U_1_0" 💡 导出目录树到这个目录
             - layer_limit: int = <default> 💡 层级深度，自然数
         """
-        api = "https://webapi.115.com/files/export_dir"
+        api = complete_webapi(base_url, "/files/export_dir")
         if isinstance(payload, (int, str)):
             payload = {"target": "U_1_0", "file_ids": payload}
         else:
@@ -3355,6 +3484,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -3364,6 +3495,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -3372,6 +3505,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -3382,7 +3517,7 @@ class P115Client:
         :payload:
             - export_id: int | str
         """
-        api = "https://webapi.115.com/files/export_dir"
+        api = complete_webapi(base_url, "/files/export_dir")
         if isinstance(payload, (int, str)):
             payload = {"export_id": payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
@@ -3392,6 +3527,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -3401,6 +3538,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -3409,6 +3548,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -3419,7 +3560,7 @@ class P115Client:
         :payload:
             - file_id: int | str 💡 文件或目录的 id，不能为 0，只能传 1 个 id，如果有多个只采用第一个
         """
-        api = "https://webapi.115.com/files/get_info"
+        api = complete_webapi(base_url, "/files/get_info")
         if isinstance(payload, (int, str)):
             payload = {"file_id": payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
@@ -3429,6 +3570,8 @@ class P115Client:
         self, 
         payload: int | str | Iterable[int | str] | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -3438,6 +3581,8 @@ class P115Client:
         self, 
         payload: int | str | Iterable[int | str] | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -3446,6 +3591,8 @@ class P115Client:
         self, 
         payload: int | str | Iterable[int | str] | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -3456,7 +3603,7 @@ class P115Client:
         :payload:
             - file_id: int | str 💡 文件或目录的 id，不能为 0，多个用逗号 "," 隔开
         """
-        api = "https://webapi.115.com/files/file"
+        api = complete_webapi(base_url, "/files/file")
         if isinstance(payload, (int, str)):
             payload = {"file_id": payload}
         elif not isinstance(payload, dict):
@@ -3469,6 +3616,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -3479,6 +3627,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -3488,6 +3637,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -3558,7 +3708,7 @@ class P115Client:
               - 7: 书籍
               - 99: 仅文件
         """
-        api = f"https://webapi.115.com{get_prefix()}/files"
+        api = complete_webapi(base_url, "/files")
         if isinstance(payload, (int, str)):
             payload = {
                 "aid": 1, "count_folders": 1, "limit": 32, "offset": 0, 
@@ -3779,6 +3929,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -3788,6 +3940,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -3796,6 +3950,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -3809,7 +3965,7 @@ class P115Client:
             - category: int = <default>
             - share_id: int | str = <default>
         """
-        api = "https://webapi.115.com/files/history"
+        api = complete_webapi(base_url, "/files/history")
         if isinstance(payload, str):
             payload = {"fetch": "one", "pick_code": payload}
         else:
@@ -3821,6 +3977,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -3830,6 +3988,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -3838,6 +3998,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -3854,7 +4016,7 @@ class P115Client:
             - time: int = <default>
             - ...（其它未找全的参数）
         """
-        api = "https://webapi.115.com/files/history"
+        api = complete_webapi(base_url, "/files/history")
         if isinstance(payload, str):
             payload = {"op": "update", "pick_code": payload}
         else:
@@ -3864,8 +4026,10 @@ class P115Client:
     @overload
     def fs_files_second_type(
         self, 
-        payload: Literal[1,2,3,4,5,6,7] | dict, 
+        payload: Literal[1,2,3,4,5,6,7] | dict = 1, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -3873,8 +4037,10 @@ class P115Client:
     @overload
     def fs_files_second_type(
         self, 
-        payload: Literal[1,2,3,4,5,6,7] | dict, 
+        payload: Literal[1,2,3,4,5,6,7] | dict = 1, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -3883,6 +4049,8 @@ class P115Client:
         self, 
         payload: Literal[1,2,3,4,5,6,7] | dict = 1, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -3892,7 +4060,7 @@ class P115Client:
 
         :payload:
             - cid: int | str = 0 💡 目录 id
-            - type: int = <default> 💡 文件类型
+            - type: int = 1 💡 文件类型
 
               - 1: 文档
               - 2: 图片
@@ -3904,9 +4072,11 @@ class P115Client:
 
             - file_label: int | str = <default> 💡 标签 id，多个用逗号 "," 隔开
         """
-        api = "https://webapi.115.com/files/get_second_type"
+        api = complete_webapi(base_url, "/files/get_second_type")
         if isinstance(payload, int):
             payload = {"cid": 0, "type": payload}
+        else:
+            payload = {"cid": 0, "type": 1, **payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -3995,6 +4165,8 @@ class P115Client:
         self, 
         payload: int | str | Iterable[int | str] | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4004,6 +4176,8 @@ class P115Client:
         self, 
         payload: int | str | Iterable[int | str] | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -4012,6 +4186,8 @@ class P115Client:
         self, 
         payload: int | str | Iterable[int | str] | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -4025,7 +4201,7 @@ class P115Client:
             - ...
             - hidden: 0 | 1 = 1
         """
-        api = "https://webapi.115.com/files/hiddenfiles"
+        api = complete_webapi(base_url, "/files/hiddenfiles")
         if isinstance(payload, (int, str)):
             payload = {"hidden": 1, "fid[0]": payload}
         elif isinstance(payload, dict):
@@ -4083,6 +4259,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4092,6 +4270,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -4100,6 +4280,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -4111,7 +4293,7 @@ class P115Client:
             - pick_code: str
             - action: str = "get_one"
         """
-        api = "https://webapi.115.com/history"
+        api = complete_webapi(base_url, "/history")
         if isinstance(payload, dict):
             payload = {"action": "get_one", **payload}
         else:
@@ -4167,8 +4349,10 @@ class P115Client:
     @overload
     def fs_history_clean(
         self, 
-        payload: int | str | dict, 
+        payload: int | str | dict = 0, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4176,16 +4360,20 @@ class P115Client:
     @overload
     def fs_history_clean(
         self, 
-        payload: int | str | dict, 
+        payload: int | str | dict = 0, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
         ...
     def fs_history_clean(
         self, 
-        payload: int | str | dict, 
+        payload: int | str | dict = 0, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -4194,7 +4382,7 @@ class P115Client:
         POST https://webapi.115.com/history/clean
 
         :payload:
-            - type: int | str 💡 类型（？？表示还未搞清楚），多个用逗号 "," 隔开
+            - type: int | str = 0 💡 类型（？？表示还未搞清楚），多个用逗号 "," 隔开
 
               - 全部: 0
               - 接收文件: 1
@@ -4208,11 +4396,11 @@ class P115Client:
 
             - with_file: 0 | 1 = 0
         """
-        api = "https://webapi.115.com/history/clean"
+        api = complete_webapi(base_url, "/history/clean")
         if isinstance(payload, (int, str)):
             payload = {"with_file": 0, "type": payload}
         else:
-            payload = {"with_file": 0, **payload}
+            payload = {"with_file": 0, "type": 0, **payload}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -4221,6 +4409,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4231,6 +4420,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -4240,6 +4430,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -4263,7 +4454,7 @@ class P115Client:
               - 接收目录: 7
               - ？？: 8
         """
-        api = "https://webapi.115.com/history/list"
+        api = complete_webapi(base_url, "/history/list")
         if isinstance(payload, (int, str)):
             payload = {"limit": 1150, "offset": payload}
         else:
@@ -4276,6 +4467,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4286,6 +4478,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -4295,6 +4488,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -4306,7 +4500,7 @@ class P115Client:
             - offset: int = 0
             - limit: int = 1150
         """
-        api = "https://webapi.115.com/history/move_target_list"
+        api = complete_webapi(base_url, "/history/move_target_list")
         if isinstance(payload, (int, str)):
             payload = {"limit": 1150, "offset": payload}
         else:
@@ -4319,6 +4513,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4329,6 +4524,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -4338,6 +4534,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -4349,7 +4546,7 @@ class P115Client:
             - offset: int = 0
             - limit: int = 1150
         """
-        api = "https://webapi.115.com/history/receive_list"
+        api = complete_webapi(base_url, "/history/receive_list")
         if isinstance(payload, (int, str)):
             payload = {"limit": 1150, "offset": payload}
         else:
@@ -4361,6 +4558,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4370,6 +4569,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -4378,6 +4579,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -4388,7 +4591,7 @@ class P115Client:
         :payload:
             - pickcode: str
         """
-        api = "https://webapi.115.com/files/image"
+        api = complete_webapi(base_url, "/files/image")
         if isinstance(payload, str):
             payload = {"pickcode": payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
@@ -4436,6 +4639,7 @@ class P115Client:
         payload: dict, 
         /, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4446,6 +4650,7 @@ class P115Client:
         payload: dict, 
         /, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -4455,6 +4660,7 @@ class P115Client:
         payload: dict, 
         /, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -4482,7 +4688,7 @@ class P115Client:
               - 创建时间："user_ptime"
               - 上一次打开时间："user_otime"
         """
-        api = "https://webapi.115.com/files/imglist"
+        api = complete_webapi(base_url, "/files/imglist")
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -4549,6 +4755,8 @@ class P115Client:
         self, 
         payload: Literal[0, 1] | bool | dict = 0, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4558,6 +4766,8 @@ class P115Client:
         self, 
         payload: Literal[0, 1] | bool | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -4566,6 +4776,8 @@ class P115Client:
         self, 
         payload: Literal[0, 1] | bool | dict = 0, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -4576,7 +4788,7 @@ class P115Client:
         :payload:
             - count_space_nums: 0 | 1 = 0 💡 如果为 0，包含各种类型文件的数量统计；如果为 1，包含登录设备列表
         """
-        api = "https://webapi.115.com/files/index_info"
+        api = complete_webapi(base_url, "/files/index_info")
         if not isinstance(payload, dict):
             payload = {"count_space_nums": int(payload)}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
@@ -4585,7 +4797,8 @@ class P115Client:
     def fs_label_add(
         self, 
         /, 
-        *lables: str,
+        *lables: str, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4594,7 +4807,8 @@ class P115Client:
     def fs_label_add(
         self, 
         /, 
-        *lables: str,
+        *lables: str, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -4602,7 +4816,8 @@ class P115Client:
     def fs_label_add(
         self, 
         /, 
-        *lables: str,
+        *lables: str, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -4612,7 +4827,7 @@ class P115Client:
 
         :param lables: 可传入多个 label 描述，每个 label 的格式都是 "{label_name}" 或 "{label_name}\x07{color}"，例如 "tag\x07#FF0000"（中间有个 "\\x07"）
         """
-        api = "https://webapi.115.com/label/add_multi"
+        api = complete_webapi(base_url, "/label/add_multi")
         payload = [("name[]", label) for label in lables if label]
         if not payload:
             return {"state": False, "message": "no op"}
@@ -4634,6 +4849,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4643,6 +4860,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -4651,6 +4870,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -4661,7 +4882,7 @@ class P115Client:
         :payload:
             - id: int | str 💡 标签 id，多个用逗号 "," 隔开
         """
-        api = "https://webapi.115.com/label/delete"
+        api = complete_webapi(base_url, "/label/delete")
         if isinstance(payload, (int, str)):
             payload = {"id": payload}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
@@ -4671,6 +4892,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4680,6 +4903,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -4688,6 +4913,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -4701,7 +4928,7 @@ class P115Client:
             - color: str = <default> 💡 标签颜色，支持 css 颜色语法
             - sort: int = <default>  💡 序号
         """
-        api = "https://webapi.115.com/label/edit"
+        api = complete_webapi(base_url, "/label/edit")
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -4709,6 +4936,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4718,6 +4947,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -4726,6 +4957,8 @@ class P115Client:
         self, 
         payload: dict = {}, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -4745,7 +4978,7 @@ class P115Client:
 
             - order: "asc" | "desc" = <default> 💡 排序顺序："asc"(升序), "desc"(降序)
         """
-        api = "https://webapi.115.com/label/list"
+        api = complete_webapi(base_url, "/label/list")
         payload = {"offset": 0, "limit": 11500, **payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
@@ -4796,6 +5029,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4805,6 +5040,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -4813,6 +5050,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -4832,7 +5071,7 @@ class P115Client:
             - file_label: int | str = <default> 💡 标签 id，多个用逗号 "," 隔开
             - file_label[{file_label}]: int | str = <default> 💡 action 为 replace 时使用此参数，file_label[{原标签id}]: {目标标签id}，例如 file_label[123]: 456，就是把 id 是 123 的标签替换为 id 是 456 的标签
         """
-        api = "https://webapi.115.com/files/batch_label"
+        api = complete_webapi(base_url, "/files/batch_label")
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -4842,6 +5081,7 @@ class P115Client:
         /, 
         pid: int = 0, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4853,6 +5093,7 @@ class P115Client:
         /, 
         pid: int = 0, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -4863,6 +5104,7 @@ class P115Client:
         /, 
         pid: int = 0, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -4874,7 +5116,7 @@ class P115Client:
             - cname: str
             - pid: int | str = 0
         """
-        api = "https://webapi.115.com/files/add"
+        api = complete_webapi(base_url, "/files/add")
         if isinstance(payload, str):
             payload = {"pid": pid, "cname": payload}
         else:
@@ -4888,6 +5130,7 @@ class P115Client:
         /, 
         pid: int = 0, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4899,6 +5142,7 @@ class P115Client:
         /, 
         pid: int = 0, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -4909,6 +5153,7 @@ class P115Client:
         /, 
         pid: int = 0, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -4923,7 +5168,7 @@ class P115Client:
             - ...
             - move_proid: str = <default> 💡 任务 id
         """
-        api = "https://webapi.115.com/files/move"
+        api = complete_webapi(base_url, "/files/move")
         if isinstance(payload, (int, str)):
             payload = {"fid[0]": payload}
         elif isinstance(payload, dict):
@@ -4940,6 +5185,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4949,6 +5196,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -4957,6 +5206,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -4978,7 +5229,7 @@ class P115Client:
             - user_asc: 0 | 1 = <default> 💡 是否升序排列
             - fc_mix: 0 | 1 = <default>   💡 是否目录和文件混合，如果为 0 则目录在前
         """
-        api = "https://webapi.115.com/files/order"
+        api = complete_webapi(base_url, "/files/order")
         if isinstance(payload, str):
             payload = {"file_id": 0, "user_order": payload}
         else:
@@ -4990,6 +5241,8 @@ class P115Client:
         self, 
         payload: tuple[int | str, str] | dict | Iterable[tuple[int | str, str]], 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4999,6 +5252,8 @@ class P115Client:
         self, 
         payload: tuple[int | str, str] | dict | Iterable[tuple[int | str, str]], 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -5007,6 +5262,8 @@ class P115Client:
         self, 
         payload: tuple[int | str, str] | dict | Iterable[tuple[int | str, str]], 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -5017,7 +5274,7 @@ class P115Client:
         :payload:
             - files_new_name[{file_id}]: str 💡 值为新的文件名（basename）
         """
-        api = "https://webapi.115.com/files/batch_rename"
+        api = complete_webapi(base_url, "/files/batch_rename")
         if isinstance(payload, tuple) and len(payload) == 2 and isinstance(payload[0], (int, str)):
             payload = {f"files_new_name[{payload[0]}]": payload[1]}
         elif not isinstance(payload, dict):
@@ -5031,6 +5288,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -5040,6 +5299,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -5048,6 +5309,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -5062,7 +5325,7 @@ class P115Client:
             - source: str = ""
             - format: str = "json"
         """
-        api = "https://webapi.115.com/files/get_repeat_sha"
+        api = complete_webapi(base_url, "/files/get_repeat_sha")
         if isinstance(payload, (int, str)):
             payload = {"offset": 0, "limit": 1150, "format": "json", "file_id": payload}
         else:
@@ -5074,7 +5337,9 @@ class P115Client:
         self, 
         file_id: int | str, 
         /, 
-        score: int,
+        score: int = 0, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -5084,7 +5349,9 @@ class P115Client:
         self, 
         file_id: int | str, 
         /, 
-        score: int,
+        score: int = 0, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -5093,7 +5360,9 @@ class P115Client:
         self, 
         file_id: int | str, 
         /, 
-        score: int = 0,
+        score: int = 0, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -5105,7 +5374,7 @@ class P115Client:
             - file_id: int | str 💡 文件或目录 id，多个用逗号 "," 隔开
             - score: int = 0     💡 0 为删除评分
         """
-        api = "https://webapi.115.com/files/score"
+        api = complete_webapi(base_url, "/files/score")
         payload = {"file_id": file_id, "score": score}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
@@ -5114,6 +5383,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -5123,6 +5394,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -5131,6 +5404,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -5176,7 +5451,7 @@ class P115Client:
               - 7: 书籍
               - 99: 仅文件
         """
-        api = "https://webapi.115.com/files/search"
+        api = complete_webapi(base_url, "/files/search")
         if isinstance(payload, str):
             payload = {
                 "aid": 1, "cid": 0, "format": "json", "limit": 32, "offset": 0, 
@@ -5280,6 +5555,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -5289,6 +5566,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -5297,6 +5576,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -5307,7 +5588,7 @@ class P115Client:
         :payload:
             - sha1: str
         """
-        api = "https://webapi.115.com/files/shasearch"
+        api = complete_webapi(base_url, "/files/shasearch")
         if isinstance(payload, str):
             payload = {"sha1": payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
@@ -5350,9 +5631,10 @@ class P115Client:
     @overload
     def fs_space_report(
         self, 
-        payload: str | dict, 
+        payload: str | dict = "", 
         /, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -5360,18 +5642,20 @@ class P115Client:
     @overload
     def fs_space_report(
         self, 
-        payload: str | dict, 
+        payload: str | dict = "", 
         /, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
         ...
     def fs_space_report(
         self, 
-        payload: str | dict, 
+        payload: str | dict = "", 
         /, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -5382,8 +5666,16 @@ class P115Client:
         :payload:
             - month: str 💡 年月，格式为 YYYYMM
         """
-        api = "https://webapi.115.com/user/report"
-        if isinstance(payload, str):
+        api = complete_webapi(base_url, "/user/report")
+        if not payload:
+            now = datetime.now()
+            year, month = now.year, now.month
+            if month == 1:
+                ym = f"{year-1}12"
+            else:
+                ym = f"{year}{month-1:02d}"
+            payload = {"month": ym}
+        elif isinstance(payload, str):
             payload = {"month": payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
@@ -5391,6 +5683,8 @@ class P115Client:
     def fs_space_summury(
         self, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -5399,6 +5693,8 @@ class P115Client:
     def fs_space_summury(
         self, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -5406,6 +5702,8 @@ class P115Client:
     def fs_space_summury(
         self, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -5413,16 +5711,17 @@ class P115Client:
 
         POST https://webapi.115.com/user/space_summury
         """
-        api = "https://webapi.115.com/user/space_summury"
+        api = complete_webapi(base_url, "/user/space_summury")
         return self.request(url=api, method="POST", async_=async_, **request_kwargs)
 
     @overload
     def fs_star_set(
         self, 
-        file_id: int | str, 
+        file_id: int | str | Iterable[int | str], 
         /, 
         star: bool = True, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -5430,20 +5729,22 @@ class P115Client:
     @overload
     def fs_star_set(
         self, 
-        file_id: int | str, 
+        file_id: int | str | Iterable[int | str], 
         /, 
         star: bool = True, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
         ...
     def fs_star_set(
         self, 
-        file_id: int | str, 
+        file_id: int | str | Iterable[int | str], 
         /, 
         star: bool = True, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -5455,7 +5756,9 @@ class P115Client:
             - file_id: int | str 💡 文件或目录 id，多个用逗号 "," 隔开
             - star: 0 | 1 = 1
         """
-        api = "https://webapi.115.com/files/star"
+        api = complete_webapi(base_url, "/files/star")
+        if not isinstance(file_id, (int, str)):
+            file_id = ",".join(map(str, file_id))
         payload = {"file_id": file_id, "star": int(star)}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
@@ -5493,6 +5796,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -5502,6 +5807,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -5510,6 +5817,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -5522,7 +5831,7 @@ class P115Client:
             - share_id: int | str = <default>
             - local: 0 | 1 = <default>
         """
-        api = "https://webapi.115.com/files/video"
+        api = complete_webapi(base_url, "/files/video")
         if isinstance(payload, str):
             payload = {"pickcode": payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
@@ -5595,6 +5904,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -5604,6 +5915,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -5612,6 +5925,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -5622,7 +5937,7 @@ class P115Client:
         :payload:
             - pickcode: str
         """
-        api = "https://webapi.115.com/movies/subtitle"
+        api = complete_webapi(base_url, "/movies/subtitle")
         if isinstance(payload, str):
             payload = {"pickcode": payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
@@ -6082,8 +6397,9 @@ class P115Client:
     def login_qrcode(
         payload: str | dict, 
         /, 
-        async_: Literal[False] = False, 
         request: None | Callable = None, 
+        *, 
+        async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> bytes:
         ...
@@ -6092,8 +6408,9 @@ class P115Client:
     def login_qrcode(
         payload: str | dict, 
         /, 
-        async_: Literal[True], 
         request: None | Callable = None, 
+        *, 
+        async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, bytes]:
         ...
@@ -6101,8 +6418,9 @@ class P115Client:
     def login_qrcode(
         payload: str | dict, 
         /, 
-        async_: Literal[False, True] = False, 
         request: None | Callable = None, 
+        *, 
+        async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> bytes | Coroutine[Any, Any, bytes]:
         """下载登录二维码图片
@@ -6203,8 +6521,9 @@ class P115Client:
     def login_qrcode_scan_cancel(
         payload: str | dict, 
         /, 
-        async_: Literal[False] = False, 
         request: None | Callable = None, 
+        *, 
+        async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
         ...
@@ -6213,8 +6532,9 @@ class P115Client:
     def login_qrcode_scan_cancel(
         payload: str | dict, 
         /, 
-        async_: Literal[True], 
         request: None | Callable = None, 
+        *, 
+        async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
         ...
@@ -6222,8 +6542,9 @@ class P115Client:
     def login_qrcode_scan_cancel(
         payload: str | dict, 
         /, 
-        async_: Literal[False, True] = False, 
         request: None | Callable = None, 
+        *, 
+        async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
         """确认扫描二维码，payload 数据取自 `login_qrcode_scan` 接口响应
@@ -6249,8 +6570,9 @@ class P115Client:
     def login_qrcode_scan_result(
         payload: int | str | dict, 
         /, 
-        async_: Literal[False] = False, 
         request: None | Callable = None, 
+        *, 
+        async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
         ...
@@ -6259,8 +6581,9 @@ class P115Client:
     def login_qrcode_scan_result(
         payload: int | str | dict, 
         /, 
-        async_: Literal[True], 
         request: None | Callable = None, 
+        *, 
+        async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
         ...
@@ -6268,8 +6591,9 @@ class P115Client:
     def login_qrcode_scan_result(
         payload: int | str | dict, 
         /, 
-        async_: Literal[False, True] = False, 
         request: None | Callable = None, 
+        *, 
+        async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
         """获取扫码登录的结果，包含 cookie
@@ -6299,8 +6623,9 @@ class P115Client:
     def login_qrcode_scan_status(
         payload: dict, 
         /, 
-        async_: Literal[False] = False, 
         request: None | Callable = None, 
+        *, 
+        async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
         ...
@@ -6309,8 +6634,9 @@ class P115Client:
     def login_qrcode_scan_status(
         payload: dict, 
         /, 
-        async_: Literal[True], 
         request: None | Callable = None, 
+        *, 
+        async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
         ...
@@ -6318,8 +6644,9 @@ class P115Client:
     def login_qrcode_scan_status(
         payload: dict, 
         /, 
-        async_: Literal[False, True] = False, 
         request: None | Callable = None, 
+        *, 
+        async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
         """获取二维码的状态（未扫描、已扫描、已登录、已取消、已过期等），payload 数据取自 `login_qrcode_token` 接口响应
@@ -6341,23 +6668,26 @@ class P115Client:
     @overload
     @staticmethod
     def login_qrcode_token(
-        async_: Literal[False] = False, 
         request: None | Callable = None, 
+        *, 
+        async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
         ...
     @overload
     @staticmethod
     def login_qrcode_token(
-        async_: Literal[True], 
         request: None | Callable = None, 
+        *, 
+        async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
         ...
     @staticmethod
     def login_qrcode_token(
-        async_: Literal[False, True] = False, 
         request: None | Callable = None, 
+        *, 
+        async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
         """获取登录二维码，扫码可用
@@ -6423,9 +6753,9 @@ class P115Client:
         self, 
         /, 
         app: None | str = None, 
+        request: None | Callable = None, 
         *, 
         async_: Literal[False] = False, 
-        request: None | Callable = None, 
         **request_kwargs, 
     ) -> None:
         ...
@@ -6434,9 +6764,9 @@ class P115Client:
         self, 
         /, 
         app: None | str = None, 
+        request: None | Callable = None, 
         *, 
         async_: Literal[True], 
-        request: None | Callable = None, 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, None]:
         ...
@@ -6444,9 +6774,9 @@ class P115Client:
         self, 
         /, 
         app: None | str = None, 
+        request: None | Callable = None, 
         *, 
         async_: Literal[False, True] = False, 
-        request: None | Callable = None, 
         **request_kwargs, 
     ) -> None | Coroutine[Any, Any, None]:
         """退出登录状态（可以把某个客户端下线，所有已登录设备可从 `login_devices` 获取）
@@ -6948,6 +7278,8 @@ class P115Client:
     def offline_download_path(
         self, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -6956,6 +7288,8 @@ class P115Client:
     def offline_download_path(
         self, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -6963,6 +7297,8 @@ class P115Client:
     def offline_download_path(
         self, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -6970,7 +7306,7 @@ class P115Client:
 
         GET https://webapi.115.com/offine/downpath
         """
-        api = "https://webapi.115.com/offine/downpath"
+        api = complete_webapi(base_url, "/offine/downpath")
         return self.request(url=api, async_=async_, **request_kwargs)
 
     @overload
@@ -7225,6 +7561,8 @@ class P115Client:
         self, 
         payload: int | str | Iterable[int | str] | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -7234,6 +7572,8 @@ class P115Client:
         self, 
         payload: int | str | Iterable[int | str] | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -7242,6 +7582,8 @@ class P115Client:
         self, 
         payload: int | str | Iterable[int | str] | dict = {}, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -7255,7 +7597,7 @@ class P115Client:
             - ...
             - password: int | str = <default> 💡 密码，是 6 位数字
         """
-        api = "https://webapi.115.com/rb/clean"
+        api = complete_webapi(base_url, "/rb/clean")
         if isinstance(payload, (int, str)):
             payload = {"rid[0]": payload}
         elif not isinstance(payload, dict):
@@ -7267,6 +7609,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -7276,6 +7620,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -7284,6 +7630,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -7294,7 +7642,7 @@ class P115Client:
         :payload:
             - rid: int | str
         """
-        api = "https://webapi.115.com/rb/rb_info"
+        api = complete_webapi(base_url, "/rb/rb_info")
         if isinstance(payload, (int, str)):
             payload = {"rid": payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
@@ -7305,6 +7653,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -7315,6 +7664,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -7324,6 +7674,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -7339,7 +7690,7 @@ class P115Client:
             - format: str = "json"
             - source: str = <default>
         """ 
-        api = "https://webapi.115.com/rb"
+        api = complete_webapi(base_url, "/rb")
         if isinstance(payload, (int, str)):
             payload = {"aid": 7, "cid": 0, "limit": 32, "format": "json", "offset": payload}
         else:
@@ -7351,6 +7702,8 @@ class P115Client:
         self, 
         payload: int | str | Iterable[int | str] | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -7360,6 +7713,8 @@ class P115Client:
         self, 
         payload: int | str | Iterable[int | str] | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -7368,6 +7723,8 @@ class P115Client:
         self, 
         payload: int | str | Iterable[int | str] | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -7380,7 +7737,7 @@ class P115Client:
             - rid[1]: int | str
             - ...
         """
-        api = "https://webapi.115.com/rb/revert"
+        api = complete_webapi(base_url, "/rb/revert")
         if isinstance(payload, (int, str)):
             payload = {"rid[0]": payload}
         elif not isinstance(payload, dict):
@@ -7574,6 +7931,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -7583,6 +7942,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -7591,6 +7952,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -7604,7 +7967,7 @@ class P115Client:
             - share_code: str
             - user_id: int | str = <default>
         """
-        api = "https://webapi.115.com/share/downurl"
+        api = complete_webapi(base_url, "/share/downurl")
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -7612,6 +7975,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -7621,6 +7986,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -7629,6 +7996,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -7639,7 +8008,7 @@ class P115Client:
         :payload:
             - share_code: str
         """
-        api = "https://webapi.115.com/share/shareinfo"
+        api = complete_webapi(base_url, "/share/shareinfo")
         if isinstance(payload, str):
             payload = {"share_code": payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
@@ -7647,8 +8016,10 @@ class P115Client:
     @overload
     def share_list(
         self, 
-        payload: dict, 
+        payload: int | dict = 0, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -7656,16 +8027,20 @@ class P115Client:
     @overload
     def share_list(
         self, 
-        payload: dict, 
+        payload: int | dict = 0, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
         ...
     def share_list(
         self, 
-        payload: dict = {}, 
+        payload: int | dict = 0, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -7678,8 +8053,11 @@ class P115Client:
             - offset: int = 0
             - user_id: int | str = <default>
         """
-        api = "https://webapi.115.com/share/slist"
-        payload = {"offset": 0, "limit": 32, **payload}
+        api = complete_webapi(base_url, "/share/slist")
+        if isinstance(payload, int):
+            payload = {"limit": 32, "offset": payload}
+        else:
+            payload = {"limit": 32, "offset": 0, **payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -7687,6 +8065,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -7696,6 +8076,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -7704,6 +8086,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -7718,7 +8102,7 @@ class P115Client:
             - cid: int | str = <default>     💡 这是你网盘的目录 cid
             - user_id: int | str = <default>
         """
-        api = "https://webapi.115.com/share/receive"
+        api = complete_webapi(base_url, "/share/receive")
         payload = {"cid": 0, **payload}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
@@ -7727,6 +8111,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -7736,6 +8122,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -7744,6 +8132,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -7766,7 +8156,7 @@ class P115Client:
             - ignore_warn: 0 | 1 = 1 💡 忽略信息提示，传 1 就行了
             - user_id: int | str = <default>
         """
-        api = "https://webapi.115.com/share/send"
+        api = complete_webapi(base_url, "/share/send")
         if isinstance(payload, (int, str)):
             payload = {"ignore_warn": 1, "is_asc": 1, "order": "file_name", "file_ids": payload}
         else:
@@ -7778,8 +8168,10 @@ class P115Client:
     def share_snap(
         payload: dict, 
         /, 
-        async_: Literal[False] = False, 
         request: None | Callable = None, 
+        *, 
+        base_url: bool | str = False, 
+        async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
         ...
@@ -7788,8 +8180,10 @@ class P115Client:
     def share_snap(
         payload: dict, 
         /, 
-        async_: Literal[True], 
         request: None | Callable = None, 
+        *, 
+        base_url: bool | str = False, 
+        async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
         ...
@@ -7797,8 +8191,10 @@ class P115Client:
     def share_snap(
         payload: dict, 
         /, 
-        async_: Literal[False, True] = False, 
         request: None | Callable = None, 
+        *, 
+        base_url: bool | str = False, 
+        async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
         """获取分享链接的某个目录中的文件和子目录的列表（包含详细信息）
@@ -7821,7 +8217,7 @@ class P115Client:
               - "user_ptime": 创建时间
               - "user_otime": 上一次打开时间
         """
-        api = "https://webapi.115.com/share/snap"
+        api = complete_webapi(base_url, "/share/snap")
         payload = {"cid": 0, "limit": 32, "offset": 0, **payload}
         request_kwargs.setdefault("parse", default_parse)
         if request is None:
@@ -7834,6 +8230,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -7843,6 +8241,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -7851,6 +8251,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -7867,7 +8269,7 @@ class P115Client:
             - share_channel: int = <default>        💡 分享渠道代码（不用管）
             - action: str = <default>               💡 操作: 取消分享 "cancel"
         """
-        api = "https://webapi.115.com/share/updateshare"
+        api = complete_webapi(base_url, "/share/updateshare")
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     ########## Tool API ##########
@@ -8304,23 +8706,26 @@ class P115Client:
     @overload
     @staticmethod
     def upload_url(
-        async_: Literal[False] = False, 
         request: None | Callable = None, 
+        *, 
+        async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
         ...
     @overload
     @staticmethod
     def upload_url(
-        async_: Literal[True], 
         request: None | Callable = None, 
+        *, 
+        async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
         ...
     @staticmethod
     def upload_url(
-        async_: Literal[False, True] = False, 
         request: None | Callable = None, 
+        *, 
+        async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
         """获取用于上传的一些 http 接口，此接口具有一定幂等性，请求一次，然后把响应记下来即可
@@ -8919,6 +9324,8 @@ class P115Client:
     def user_fingerprint(
         self, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -8927,6 +9334,8 @@ class P115Client:
     def user_fingerprint(
         self, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -8934,6 +9343,8 @@ class P115Client:
     def user_fingerprint(
         self, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -8941,7 +9352,7 @@ class P115Client:
 
         GET https://webapi.115.com/user/fingerprint
         """
-        api = "https://webapi.115.com/user/fingerprint"
+        api = complete_webapi(base_url, "/user/fingerprint")
         return self.request(url=api, async_=async_, **request_kwargs)
 
     @overload
@@ -9142,6 +9553,8 @@ class P115Client:
     def user_setting_web(
         self, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -9150,6 +9563,8 @@ class P115Client:
     def user_setting_web(
         self, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -9157,6 +9572,8 @@ class P115Client:
     def user_setting_web(
         self, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -9164,7 +9581,7 @@ class P115Client:
 
         GET https://webapi.115.com/user/setting
         """
-        api = "https://webapi.115.com/user/setting"
+        api = complete_webapi(base_url, "/user/setting")
         return self.request(url=api, async_=async_, **request_kwargs)
 
     @overload
@@ -9172,6 +9589,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -9181,6 +9600,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -9189,6 +9610,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -9196,7 +9619,7 @@ class P115Client:
 
         POST https://webapi.115.com/user/setting
         """
-        api = "https://webapi.115.com/user/setting"
+        api = complete_webapi(base_url, "/user/setting")
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -9279,6 +9702,8 @@ class P115Client:
         self, 
         payload: int | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -9288,6 +9713,8 @@ class P115Client:
         self, 
         payload: int | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -9296,6 +9723,8 @@ class P115Client:
         self, 
         payload: int | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -9308,7 +9737,7 @@ class P115Client:
             - offset: int = 0
             - limit: int = 32
         """
-        api = "https://webapi.115.com/usershare/action"
+        api = complete_webapi(base_url, "/usershare/action")
         if isinstance(payload, int):
             payload = {"limit": 32, "offset": 0, "share_id": payload}
         else:
@@ -9320,6 +9749,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -9329,6 +9760,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -9337,6 +9770,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -9347,7 +9782,7 @@ class P115Client:
         :payload:
             - share_id: int | str
         """
-        api = "https://webapi.115.com/usershare/invite"
+        api = complete_webapi(base_url, "/usershare/invite")
         if isinstance(payload, (int, str)):
             payload = {"share_id": payload}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
@@ -9358,6 +9793,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -9368,6 +9804,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -9377,6 +9814,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -9389,7 +9827,7 @@ class P115Client:
             - limit: int = 1150
             - all: 0 | 1 = 1
         """
-        api = "https://webapi.115.com/usershare/list"
+        api = complete_webapi(base_url, "/usershare/list")
         if isinstance(payload, (int, str)):
             payload = {"all": 1, "limit": 1150, "offset": payload}
         else:
@@ -9401,6 +9839,8 @@ class P115Client:
         self, 
         payload: int | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -9410,6 +9850,8 @@ class P115Client:
         self, 
         payload: int | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -9418,6 +9860,8 @@ class P115Client:
         self, 
         payload: int | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -9430,7 +9874,7 @@ class P115Client:
             - action: "member_list" | "member_info" | "noticeset" = "member_list"
             - notice_set: 0 | 1 = <default> 💡 action 为 "noticeset" 时可以设置
         """
-        api = "https://webapi.115.com/usershare/member"
+        api = complete_webapi(base_url, "/usershare/member")
         if isinstance(payload, int):
             payload = {"action": "member_list", "share_id": payload}
         else:
@@ -9442,6 +9886,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -9451,6 +9897,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -9459,6 +9907,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        *, 
+        base_url: bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -9472,7 +9922,7 @@ class P115Client:
             - ignore_warn: 0 | 1 = 0
             - safe_pwd: str = "" 
         """
-        api = "https://webapi.115.com/usershare/share"
+        api = complete_webapi(base_url, "/usershare/share")
         if isinstance(payload, (int, str)):
             payload = {"ignore_warn": 0, "share_opt": 1, "safe_pwd": "", "file_id": payload}
         else:

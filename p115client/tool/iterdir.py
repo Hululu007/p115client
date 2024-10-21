@@ -92,6 +92,11 @@ def get_path_to_cid(
         return path[1:]
 
 
+# TODO 支持 refresh
+# def get_path_to_id(client, refresh: bool = True)
+
+
+# TODO 支持 refresh
 @overload
 def get_id_of_path(
     client: str | P115Client, 
@@ -611,7 +616,7 @@ def ensure_attr_path(
     walk_next: Any = anext if async_ else next
     walk_through: Any = async_through if async_ else through
     def gen_step():
-        if len(id_to_dirnode) <= 10_000:
+        if not id_to_dirnode:
             try:
                 yield walk_through(iter_stared_dirs_raw(
                     client, 

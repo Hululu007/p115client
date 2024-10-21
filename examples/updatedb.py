@@ -5,7 +5,7 @@ __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __version__ = (0, 0, 7)
 __all__ = ["updatedb", "updatedb_one", "updatedb_tree"]
 __doc__ = "遍历 115 网盘的目录信息导出到数据库"
-__requirements__ = ["p115client", "posixpatht", "urllib3", "urllib3_request"]
+__requirements__ = ["p115client", "posixpatht", "urllib3", "urllib3_request>=0.0.3"]
 
 if __name__ == "__main__":
     from argparse import ArgumentParser, RawTextHelpFormatter
@@ -30,7 +30,7 @@ if __name__ == "__main__":
 如果都找不到，则默认使用 '2. 用户根目录，此时则需要扫码登录'""")
     parser.add_argument("-f", "--dbfile", default="", help="sqlite 数据库文件路径，默认为在当前工作目录下的 f'115-{user_id}.db'")
     parser.add_argument("-cl", "--clean", action="store_true", help="任务完成后清理数据库，以节约空间")
-    parser.add_argument("-st", "--auto-splitting-threshold", type=int, default=200_000, help="自动拆分的文件数阈值，大于此值时，自动进行拆分，如果 <= 0，则总是拆分，默认值 200,000（20 万）")
+    parser.add_argument("-st", "--auto-splitting-threshold", type=int, default=100_000, help="自动拆分的文件数阈值，大于此值时，自动进行拆分，如果 <= 0，则总是拆分，默认值 100,000（10 万）")
     parser.add_argument("-sst", "--auto-splitting-statistics-timeout", type=float, default=3, help="自动拆分前的执行文件数统计的超时时间（秒），大于此值时，视为文件数无穷大，如果 <= 0，视为永不超时，默认值 3")
     parser.add_argument("-nm", "--no-dir-moved", action="store_true", help="声明没有目录被移动或改名（但可以有目录被新增或删除），这可以加快批量拉取时的速度")
     parser.add_argument("-nr", "--not-recursive", action="store_true", help="不遍历目录树：只拉取顶层目录，不递归子目录")
@@ -44,7 +44,7 @@ if __name__ == "__main__":
 try:
     from p115client import check_response, P115Client
     from p115client.exception import BusyOSError
-    from p115client.tool.iterdir import ensure_attr_path, iter_stared_dirs, DirNode, DirNodeTuple
+    from p115client.tool.iterdir import ensure_attr_path, get_path_to_cid, iter_stared_dirs, DirNode, DirNodeTuple
     from posixpatht import escape, joins, normpath
     from urllib3.poolmanager import PoolManager
     from urllib3.exceptions import ReadTimeoutError
@@ -55,7 +55,7 @@ except ImportError:
     run([executable, "-m", "pip", "install", "-U", *__requirements__], check=True)
     from p115client import check_response, P115Client
     from p115client.exception import BusyOSError
-    from p115client.tool.iterdir import ensure_attr_path, iter_stared_dirs, DirNode, DirNodeTuple
+    from p115client.tool.iterdir import ensure_attr_path, get_path_to_cid, iter_stared_dirs, DirNode, DirNodeTuple
     from posixpatht import escape, joins, normpath
     from urllib3.poolmanager import PoolManager
     from urllib3.exceptions import ReadTimeoutError
@@ -71,7 +71,7 @@ from functools import partial
 from itertools import islice, takewhile
 from math import isnan, isinf
 from sqlite3 import connect, Connection, Cursor
-from time import time
+from time import perf_counter
 from typing import cast, Final
 
 
@@ -892,6 +892,8 @@ def diff_dir(
     try:
         if not n:
             upsert_list += data_it
+            if not tree:
+                dirs += (a for a in upsert_list if a["is_dir"])
             return result
         it = iter(stored.items())
         his_mtime, his_ids = next(it)
@@ -924,8 +926,12 @@ def diff_dir(
     finally:
         if ancestors:
             insert_dir_incomplete_items(con, ancestors)
+            for a in ancestors:
+                ID_TO_DIRNODE[a["id"]] = DirNodeTuple((a["name"], a["parent_id"]))
         if dirs:
             insert_dir_items(con, dirs)
+            for a in dirs:
+                ID_TO_DIRNODE[a["id"]] = DirNodeTuple((a["name"], a["parent_id"]))
 
 
 def updatedb_one(
@@ -942,14 +948,18 @@ def updatedb_one(
         dbfile = f"115-{client.user_id}.db"
     if isinstance(dbfile, (Connection, Cursor)):
         con = dbfile
-        start = time()
+        start = perf_counter()
         try:
             to_delete, to_replace = diff_dir(con, client, id)
             with transaction(con):
                 if to_delete:
                     delete_items(con, to_delete, commit=False)
                 if to_replace:
-                    ensure_attr_path(client, to_replace, with_path=True, id_to_dirnode=ID_TO_DIRNODE)
+                    dirname = get_path_to_cid(ID_TO_DIRNODE, id)
+                    if dirname != "/":
+                        dirname += "/"
+                    for attr in to_replace:
+                        attr["path"] = dirname + escape(attr["name"])
                     insert_items(con, to_replace, commit=False)
                 _, updated, deleted = update_path(con, commit=False)
         except BaseException as e:
@@ -959,12 +969,12 @@ def updatedb_one(
             raise
         else:
             logger.info(
-                "[\x1b[1;32mGOOD\x1b[0m] %s, upsert: %d, delete: %d, update_path: %d, cost: %.6f s", 
+                "[\x1b[1;32mGOOD\x1b[0m] \x1b[1m%d\x1b[0m, upsert: %d, delete: %d, update_path: %d, cost: %.6f s", 
                 id, 
                 len(to_replace), 
                 len(to_delete) + deleted, 
                 updated, 
-                time() - start, 
+                perf_counter() - start, 
             )
     else:
         with connect(dbfile, uri=dbfile.startswith("file:")) as con:
@@ -979,7 +989,7 @@ def updatedb_tree(
     dbfile: None | str | Connection | Cursor = None, 
     id: int = 0, 
     /, 
-    no_dir_moved: bool = False, 
+    no_dir_moved: bool = True, 
 ):
     """
     """
@@ -989,12 +999,9 @@ def updatedb_tree(
         dbfile = f"115-{client.user_id}.db"
     if isinstance(dbfile, (Connection, Cursor)):
         con = dbfile
-        start = time()
+        start = perf_counter()
         try:
             to_delete, to_replace = diff_dir(con, client, id, tree=True)
-            if not no_dir_moved:
-                update_id_to_dirnode(con, client)
-                no_dir_moved = True
             if to_delete:
                 # 找出所有待删除记录的祖先节点 id，并更新它们的 mtime
                 all_pids: set[int] = set()
@@ -1040,12 +1047,12 @@ def updatedb_tree(
             raise
         else:
             logger.info(
-                "[\x1b[1;32mGOOD\x1b[0m] %s, upsert: %d, delete: %d, update_path: %d, cost: %.6f s", 
+                "[\x1b[1;32mGOOD\x1b[0m] \x1b[1m%d\x1b[0m, upsert: %d, delete: %d, update_path: %d, cost: %.6f s", 
                 id, 
                 len(to_replace), 
                 len(to_delete) + deleted, 
                 updated, 
-                time() - start, 
+                perf_counter() - start, 
             )
     else:
         with connect(dbfile, uri=dbfile.startswith("file:")) as con:
@@ -1058,9 +1065,9 @@ def updatedb(
     client: str | P115Client, 
     dbfile: None | str | Connection | Cursor = None, 
     top_dirs: int | str | Iterable[int | str] = 0, 
-    auto_splitting_threshold: int = 20_0000, 
+    auto_splitting_threshold: int = 100_000, 
     auto_splitting_statistics_timeout: None | float = 3, 
-    no_dir_moved: bool = False, 
+    no_dir_moved: bool = True, 
     recursive: bool = True, 
     clean: bool = False, 
 ):
@@ -1126,26 +1133,40 @@ def updatedb(
                 continue
             if auto_splitting_threshold <= 0:
                 need_to_split_tasks = True
-            else:
+            elif recursive:
                 if id == 0:
                     resp = check_response(client.fs_space_summury(request=request))
                     count = sum(v["count"] for k, v in resp["type_summury"].items() if k.isupper())
                 else:
+                    start = perf_counter()
                     try:
-                        resp = client.fs_category_get(id, timeout=auto_splitting_statistics_timeout, request=request)
+                        resp = client.fs_category_get(
+                            id, 
+                            timeout=auto_splitting_statistics_timeout, 
+                            request=request, 
+                            retries=False, 
+                        )
                         if not resp:
                             seen_add(id)
                             continue
                         check_response(resp)
                         count = int(resp["count"])
                     except ReadTimeoutError:
+                        logger.info("[\x1b[1;37;43mSTAT\x1b[0m] \x1b[1m%d\x1b[0m, too big, since statistics timeout, consider the size as \x1b[1;3minf\x1b[0m", id)
                         count = float("inf")
                 need_to_split_tasks = count > auto_splitting_threshold
+                if need_to_split_tasks:
+                    logger.info("[\x1b[1;37;41mTELL\x1b[0m] \x1b[1m%d\x1b[0m, \x1b[1;31mbig\x1b[0m (%s > %d), will be pulled in \x1b[1;4;5;31mmulti batches\x1b[0m, cost: %.6f s", id, count, auto_splitting_threshold, perf_counter() - start)
+                else:
+                    logger.info("[\x1b[1;37;42mTELL\x1b[0m] \x1b[1m%d\x1b[0m, \x1b[1;32mfit\x1b[0m (%s <= %d), will be pulled in \x1b[1;4;5;32mone batch\x1b[0m, cost: %.6f s", id, count, auto_splitting_threshold, perf_counter() - start)
             try:
                 if not recursive or need_to_split_tasks:
                     updatedb_one(client, con, id)
                 else:
-                    updatedb_tree(client, con, id, no_dir_moved=no_dir_moved)
+                    if not no_dir_moved:
+                        update_id_to_dirnode(con, client)
+                        no_dir_moved = True
+                    updatedb_tree(client, con, id)
             except (FileNotFoundError, NotADirectoryError):
                 pass
             except BusyOSError:
@@ -1228,3 +1249,4 @@ if __name__ == "__main__":
 
 # TODO: 增加一个选项，允许对数据进行全量而不是增量更新，这样可以避免一些问题
 # TODO: 如果查询的某个 id 不存在，就把这个 id 的在数据库的数据给删除
+# TODO: 检测目录大小应该后台运行，并且进行一定量的并发，这个操作太耗时了
