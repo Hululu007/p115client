@@ -67,7 +67,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from errno import EBUSY, ENOENT, ENOTDIR
 from functools import partial
-from itertools import islice, takewhile
+from itertools import takewhile
 from math import isnan, isinf
 from sqlite3 import connect, Connection, Cursor
 from time import perf_counter
@@ -473,7 +473,9 @@ VALUES
     (:id, :parent_id, :pickcode, :name, :size, :sha1, :is_dir, :is_image, :ctime, :mtime, :path)
 ON CONFLICT(id) DO UPDATE SET
     parent_id = excluded.parent_id,
+    pickcode  = excluded.pickcode,
     name      = CASE WHEN is_dir THEN name ELSE excluded.name END,
+    ctime     = excluded.ctime,
     mtime     = excluded.mtime,
     path      = excluded.path
 """
@@ -980,10 +982,11 @@ def updatedb_tree(
                 while pids := [id for id in select_parent_ids(con, pids) if id != 0 and id not in all_pids]:
                     all_pids.update(pids)
                 if all_pids:
-                    update_desc(client, all_pids)
-                    no_dir_moved = False
-                # 把所有无效的 id 添加到待删除列表
-                to_delete += filter_na_ids(client, all_pids)
+                    if not custom_no_dir_moved:
+                        update_desc(client, all_pids)
+                        no_dir_moved = False
+                    # 把所有无效的 id 添加到待删除列表
+                    to_delete += filter_na_ids(client, all_pids)
             if to_replace:
                 # 找出所有待更新记录的祖先节点 id，并更新它们的 mtime
                 all_pids = set()
@@ -1038,7 +1041,6 @@ def updatedb_tree(
             updatedb_tree(client, con, id, no_dir_moved=no_dir_moved)
 
 
-# TODO: 在单独线程中统计目录大小
 def updatedb(
     client: str | P115Client, 
     dbfile: None | str | Connection | Cursor = None, 
@@ -1243,7 +1245,4 @@ if __name__ == "__main__":
 
 # TODO: 增加一个选项，允许对数据进行全量而不是增量更新，这样可以避免一些问题
 # TODO: 增加一个选项，如果查询的某个 id 不存在，就把这个 id 的在数据库的数据给删除
-# TODO: 检测目录大小应该后台运行，并且进行一定量的并发，这个操作太耗时了
-# TODO: 如果 no_dir_moved 为 False，可以提前拉一次数据，更新一下目录，作为预处理，以后尽量少地去调用拉取星标目录的函数，越少调用速度越快
-# TODO: 如果上一个任务已经更新过一次星标目录，下一个任务非必要无需再拉取，即使 no_dir_moved 为 False
 # TODO: 为数据库插入弄单独一个线程，就不需要等待数据库插入完成，就可以开始下一批数据拉取

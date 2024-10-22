@@ -40,7 +40,7 @@ def update_desc(
             it: Iterator[Iterable[int | str]] = (ids[i:i+batch_size] for i in range(0, len(ids), batch_size))
         else:
             ids_it = iter(ids)
-            it = takewhile(bool, (tuple(islice(ids_it, batch_size) for _ in count())))
+            it = takewhile(bool, (tuple(islice(ids_it, batch_size)) for _ in count()))
         for batch in it:
             resp = yield set_desc(batch, desc, async_=async_, **request_kwargs)
             check_response(resp)
@@ -74,7 +74,7 @@ def update_star(
             it: Iterator[Iterable[int | str]] = (ids[i:i+batch_size] for i in range(0, len(ids), batch_size))
         else:
             ids_it = iter(ids)
-            it = takewhile(bool, (tuple(islice(ids_it, batch_size) for _ in count())))
+            it = takewhile(bool, (tuple(islice(ids_it, batch_size)) for _ in count()))
         for batch in it:
             resp = yield set_star(batch, star, async_=async_, **request_kwargs)
             check_response(resp)

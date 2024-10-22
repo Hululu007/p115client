@@ -2,7 +2,10 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__all__ = ["batch_get_url", "iter_images_with_url", "iter_subtitles_with_url", "make_strm", "MakeStrmLog"]
+__all__ = [
+    "MakeStrmLog", "batch_get_url", "iter_images_with_url", "iter_subtitles_with_url", 
+    "make_strm", "make_strm_by_export_dir", 
+]
 __doc__ = "这个模块提供了一些和下载有关的函数"
 
 import errno
@@ -14,6 +17,7 @@ from functools import partial
 from glob import iglob
 from inspect import isawaitable
 from itertools import chain
+from mimetypes import guess_type
 from os import fsdecode, makedirs, remove, PathLike
 from os.path import dirname, join as joinpath, normpath, splitext
 from threading import Lock
@@ -29,10 +33,12 @@ from p115client import check_response, normalize_attr, P115Client, P115URL
 from p115client.exception import P115Warning
 from posixpatht import escape
 
+from .export_dir import export_dir_parse_iter
 from .iterdir import get_path_to_cid, iter_files, iter_files_raw, DirNode, DirNodeTuple, ID_TO_DIRNODE_CACHE
 
 
-TRANSTAB: Final = {c: f"%{c:02x}" for c in b"/%?#"}
+TRANSTAB3: Final = {c: f"%{c:02x}" for c in b"%?#"}
+TRANSTAB4: Final = {c: f"%{c:02x}" for c in b"/%?#"}
 translate = str.translate
 
 
@@ -552,12 +558,13 @@ def make_strm(
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
     """
+    origin = origin.rstrip("/")
     savedir = fsdecode(save_dir)
     makedirs(savedir, exist_ok=True)
     if ensure_ascii:
         encode = lambda attr: quote(attr["name"], safe="@[]:!$&'()*+,;=")
     else:
-        encode = lambda attr: translate(attr["name"], TRANSTAB)
+        encode = lambda attr: translate(attr["name"], TRANSTAB4)
     if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
@@ -684,6 +691,7 @@ def make_strm(
                             type="error", 
                             path=path, 
                             attr=attr, 
+                            error=e, 
                         ))
                         if isawaitable(ret):
                             await ret
@@ -743,7 +751,7 @@ def make_strm(
             path = normalize_path(attr)
             try:
                 try:
-                    f = open(path,  mode)
+                    f = open(path, mode)
                 except FileExistsError:
                     if log is not None:
                         log(MakeStrmLog(
@@ -776,6 +784,7 @@ def make_strm(
                         type="error", 
                         path=path, 
                         attr=attr, 
+                        error=e, 
                     ))
                 if not isinstance(e, OSError):
                     raise
@@ -794,6 +803,312 @@ def make_strm(
                 escape=None, 
                 **request_kwargs, 
             ))
+            executor.shutdown(wait=True)
+            if discard:
+                removed = do_discard()
+            return {
+                "total": success + failed + skipped, 
+                "success": success, 
+                "failed": failed, 
+                "skipped": skipped, 
+                "removed": removed, 
+                "elapsed": perf_counter() - start_t, 
+            }
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+
+@overload
+def make_strm_by_export_dir(
+    client: str | P115Client, 
+    export_file_ids: int | str | Iterable[int | str], 
+    save_dir: bytes | str | PathLike = ".", 
+    origin: str = "http://localhost:8000", 
+    without_suffix: bool = True, 
+    ensure_ascii: bool = False, 
+    log: None | Callable[[MakeStrmLog], Any] = print, 
+    max_workers: None | int = None, 
+    update: bool = False, 
+    discard: bool = True, 
+    layer_limit: int = 0, 
+    timeout: None | int | float = None, 
+    check_interval: int | float = 1, 
+    show_clock: bool = True, 
+    *, 
+    async_: Literal[False] = False, 
+    **request_kwargs, 
+) -> MakeStrmResult:
+    ...
+@overload
+def make_strm_by_export_dir(
+    client: str | P115Client, 
+    export_file_ids: int | str | Iterable[int | str], 
+    save_dir: bytes | str | PathLike = ".", 
+    origin: str = "http://localhost:8000", 
+    without_suffix: bool = True, 
+    ensure_ascii: bool = False, 
+    log: None | Callable[[MakeStrmLog], Any] = print, 
+    max_workers: None | int = None, 
+    update: bool = False, 
+    discard: bool = True, 
+    layer_limit: int = 0, 
+    timeout: None | int | float = None, 
+    check_interval: int | float = 1, 
+    show_clock: bool = True, 
+    *, 
+    async_: Literal[True], 
+    **request_kwargs, 
+) -> Coroutine[Any, Any, MakeStrmResult]:
+    ...
+def make_strm_by_export_dir(
+    client: str | P115Client, 
+    export_file_ids: int | str | Iterable[int | str], 
+    save_dir: bytes | str | PathLike = ".", 
+    origin: str = "http://localhost:8000", 
+    without_suffix: bool = True, 
+    ensure_ascii: bool = False, 
+    log: None | Callable[[MakeStrmLog], Any] = print, 
+    max_workers: None | int = None, 
+    update: bool = False, 
+    discard: bool = True, 
+    layer_limit: int = 0, 
+    timeout: None | int | float = None, 
+    check_interval: int | float = 1, 
+    show_clock: bool = True, 
+    *, 
+    async_: Literal[False, True] = False, 
+    **request_kwargs, 
+) -> MakeStrmResult | Coroutine[Any, Any, MakeStrmResult]:
+    """生成 strm 保存到本地（通过导出目录树 `export_dir`）
+
+    .. hint::
+        通过 `mimetypes.guess_type` 判断文件的 `mimetype <https://developer.mozilla.org/en-US/docs/Web/HTTP/MIME_types>`_，如果以 "video/" 开头，则会生成相应的 strm 文件
+        有哪些扩展名会被系统识别为视频，在不同电脑是上是不同的，你可以使用 `mimetypes.add_type` 添加一些 mimetype 和 扩展名 的关系
+        或者你可以安装这个模块，`mimetype_more <https://pypi.org/project/mimetype_more/>`_，我已经在其中添加了很多的 mimetype 和 扩展名 的关系，import 此模块后即会自行添加
+
+        .. code:: console
+
+            pip install -U mimetype_more
+
+    :param client: 115 客户端或 cookies
+    :param export_file_ids: 待导出的目录 id 或 路径（如果有多个，需传入可迭代对象）
+    :param save_dir: 本地的保存目录，默认是当前工作目录
+    :param origin: strm 文件的 `HTTP 源 <https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Origin>`_
+    :param without_suffix: 是否去除原来的扩展名。如果为 False，则直接用 ".strm" 拼接到原来的路径后面；如果为 True，则去掉原来的扩展名后再拼接
+    :param ensure_ascii: strm 是否进行完全转码，确保 ascii 之外的字符都被 urlencode 转码
+    :param log: 调用以收集事件，如果为 None，则忽略
+    :param max_workers: 最大并发数，主要用于限制同时打开的文件数
+    :param update: 是否更新 strm 文件，如果为 False，则跳过已存在的路径
+    :param discard: 是否清理 strm 文件，如果为 True，则删除未取得的路径（不在本次的路径集合内）
+    :param layer_limit: 层级深度，小于等于 0 时不限
+    :param timeout: 导出任务的超时秒数，如果为 None 或 小于等于 0，则相当于 float("inf")，即永不超时
+    :param check_interval: 导出任务的状态，两次轮询之间的等待秒数，如果 <= 0，则不等待
+    :param show_clock: 是否在等待导出结果时，显示时钟
+    :param async_: 是否异步
+    :param request_kwargs: 其它请求参数
+    """
+    origin = origin.rstrip("/")
+    savedir = fsdecode(save_dir)
+    makedirs(savedir, exist_ok=True)
+    if ensure_ascii:
+        encode = lambda path: quote(path, safe="/@[]:!$&'()*+,;=")
+    else:
+        encode = lambda path: translate(path, TRANSTAB3)
+    if isinstance(client, str):
+        client = P115Client(client, check_for_relogin=True)
+    mode = "w" if update else "x"
+    if discard:
+        seen: set[str] = set()
+        seen_add = seen.add
+        existing: set[str] = set()
+        def do_discard():
+            removed = 0
+            for path in existing - seen:
+                path = joinpath(savedir, path)
+                try:
+                    remove(path)
+                    if log is not None:
+                        log(MakeStrmLog(
+                            f"[DEL] path={path!r}", 
+                            type="remove", 
+                            path=path, 
+                        ))
+                    removed += 1
+                except OSError:
+                    pass
+            return removed
+    def normalize_path(path: str, /) -> str:
+        if without_suffix:
+            path = splitext(path)[0]
+        relpath = normpath(path[1:]) + ".strm"
+        if discard:
+            seen_add(relpath)
+        return joinpath(savedir, relpath)
+    if async_:
+        try:
+            from aiofile import async_open
+        except ImportError:
+            from sys import executable
+            from subprocess import run
+            run([executable, "-m", "pip", "install", "-U", "aiofile"], check=True)
+            from aiofile import async_open
+        if max_workers is None or max_workers <= 0:
+            sema = None
+        else:
+            sema = Semaphore(max_workers)
+        async def request():
+            success = 0
+            failed = 0
+            skipped = 0
+            removed = 0
+            async def save(remote_path, /, sema=None):
+                nonlocal success, failed, skipped
+                if sema is not None:
+                    async with sema:
+                        return await save(remote_path)
+                path = normalize_path(remote_path)
+                url = f"{origin}/{encode(remote_path)}"
+                try:
+                    try:
+                        async with async_open(path, mode) as f:
+                            await f.write(url)
+                    except FileExistsError:
+                        if log is not None:
+                            ret = log(MakeStrmLog(
+                                f"[SKIP] path={path!r} remote_path={remote_path!r}", 
+                                type="ignore", 
+                                path=path, 
+                                remote_path=remote_path, 
+                            ))
+                            if isawaitable(ret):
+                                await ret
+                        skipped += 1
+                        return
+                    except FileNotFoundError:
+                        makedirs(dirname(path), exist_ok=True)
+                        async with async_open(path, "w") as f:
+                            await f.write(url)
+                    if log is not None:
+                        ret = log(MakeStrmLog(
+                            f"[OK] path={path!r} remote_path={remote_path!r}", 
+                            type="write", 
+                            path=path, 
+                            remote_path=remote_path, 
+                        ))
+                        if isawaitable(ret):
+                            await ret
+                    success += 1
+                except BaseException as e:
+                    failed += 1
+                    if log is not None:
+                        ret =log(MakeStrmLog(
+                            f"[ERROR] path={path!r} remote_path={remote_path!r} error={e!r}", 
+                            type="error", 
+                            path=path, 
+                            remote_path=remote_path, 
+                            error=e, 
+                        ))
+                        if isawaitable(ret):
+                            await ret
+                    if not isinstance(e, OSError):
+                        raise
+            start_t = perf_counter()
+            async with TaskGroup() as group:
+                create_task = group.create_task
+                if discard:
+                    create_task(to_thread(lambda: existing.update(iglob("**/*.strm", root_dir=savedir, recursive=True))))
+                async for remote_path in export_dir_parse_iter(
+                    client, 
+                    export_file_ids=export_file_ids, 
+                    layer_limit=layer_limit, 
+                    timeout=timeout, 
+                    check_interval=check_interval, 
+                    show_clock=show_clock, 
+                    async_=async_, 
+                    **request_kwargs, 
+                ):
+                    mime = guess_type(remote_path)[0]
+                    if mime and mime.startswith("video/"):
+                        create_task(save(remote_path, sema))
+            if discard:
+                removed = do_discard()
+            return {
+                "total": success + failed + skipped, 
+                "success": success, 
+                "failed": failed, 
+                "skipped": skipped, 
+                "removed": removed, 
+                "elapsed": perf_counter() - start_t, 
+            }
+        return request()
+    else:
+        success = 0
+        failed = 0
+        skipped = 0
+        removed = 0
+        lock = Lock()
+        def save(remote_path: str, /):
+            nonlocal success, failed, skipped
+            path = normalize_path(remote_path)
+            try:
+                try:
+                    f = open(path, mode)
+                except FileExistsError:
+                    if log is not None:
+                        log(MakeStrmLog(
+                            f"[SKIP] path={path!r} remote_path={remote_path!r}", 
+                            type="ignore", 
+                            path=path, 
+                            remote_path=remote_path, 
+                        ))
+                    skipped += 1
+                    return
+                except FileNotFoundError:
+                    makedirs(dirname(path), exist_ok=True)
+                    f = open(path,  "w")
+                f.write(f"{origin}/{encode(remote_path)}")
+                if log is not None:
+                    log(MakeStrmLog(
+                        f"[OK] path={path!r} remote_path={remote_path!r}", 
+                        type="write", 
+                        path=path, 
+                        remote_path=remote_path, 
+                    ))
+                with lock:
+                    success += 1
+            except BaseException as e:
+                with lock:
+                    failed += 1
+                if log is not None:
+                    log(MakeStrmLog(
+                        f"[ERROR] path={path!r} remote_path={remote_path!r} error={e!r}", 
+                        type="error", 
+                        path=path, 
+                        remote_path=remote_path, 
+                        error=e, 
+                    ))
+                if not isinstance(e, OSError):
+                    raise
+        if max_workers and max_workers <= 0:
+            max_workers = None
+        start_t = perf_counter()
+        executor = ThreadPoolExecutor(max_workers)
+        submit = executor.submit
+        try:
+            if discard:
+                submit(lambda: existing.update(iglob("**/*.strm", root_dir=savedir, recursive=True)))
+            for remote_path in export_dir_parse_iter(
+                client, 
+                export_file_ids=export_file_ids, 
+                layer_limit=layer_limit, 
+                timeout=timeout, 
+                check_interval=check_interval, 
+                show_clock=show_clock, 
+                **request_kwargs, 
+            ):
+                mime = guess_type(remote_path)[0]
+                if mime and mime.startswith("video/"):
+                    submit(save, remote_path)
             executor.shutdown(wait=True)
             if discard:
                 removed = do_discard()

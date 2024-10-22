@@ -8,14 +8,17 @@ __all__ = [
 ]
 __doc__ = "这个模块提供了一些和导出目录树有关的函数"
 
-from asyncio import sleep as async_sleep
+from asyncio import sleep as async_sleep, create_task
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Coroutine, Iterable, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from functools import partial
+from inspect import isawaitable
 from io import BufferedReader, TextIOBase, TextIOWrapper
 from itertools import count
 from os import PathLike
 from re import compile as re_compile
-from time import sleep, time
+from _thread import start_new_thread
+from time import sleep, perf_counter
 from typing import cast, overload, Any, Final, IO, Literal
 
 from asynctools import ensure_async, ensure_aiter
@@ -29,6 +32,66 @@ from .iterdir import get_id_to_path
 
 
 CRE_TREE_PREFIX_match: Final = re_compile("^(?:\| )+\|-(.*)").match
+
+
+@contextmanager
+def backgroud_loop(
+    call: None | Callable = None, 
+    /, 
+    interval: int | float = 0.05, 
+):
+    use_default_call = not callable(call)
+    if use_default_call:
+        start = perf_counter()
+        def call():
+            print("\r\x1b[K%.6f" % (perf_counter() - start), end="")
+    def run():
+        while running:
+            try:
+                call() # type: ignore
+            except Exception:
+                pass
+            if interval > 0:
+                sleep(interval) 
+    running = True
+    try:
+        yield start_new_thread(run, ())
+    finally:
+        running = False
+        if use_default_call:
+            print("\r\x1b[K", end="")
+
+
+@asynccontextmanager
+async def async_backgroud_loop(
+    call: None | Callable = None, 
+    /, 
+    interval: int | float = 0.05, 
+):
+    use_default_call = not callable(call)
+    if use_default_call:
+        start = perf_counter()
+        def call():
+            print("\r\x1b[K%.6f" % (perf_counter() - start), end="")
+    async def run():
+        while running:
+            try:
+                ret = call() # type: ignore
+                if isawaitable(ret):
+                    await ret
+            except Exception:
+                pass
+            if interval > 0:
+                await async_sleep(interval)
+    running = True
+    try:
+        task = create_task(run())
+        yield task
+    finally:
+        running = False
+        task.cancel()
+        if use_default_call:
+            print("\r\x1b[K", end="")
 
 
 @overload
@@ -371,7 +434,7 @@ def export_dir_result(
         if timeout is None or timeout <= 0:
             timeout = float("inf")
         do_sleep: Callable = async_sleep if async_ else sleep # type: ignore
-        expired_t = time() + timeout
+        expired_t = perf_counter() + timeout
         while True:
             resp = yield client.fs_export_dir_status(
                 export_id, 
@@ -380,7 +443,7 @@ def export_dir_result(
             )
             if data := check_response(resp)["data"]:
                 return data
-            remaining_seconds = expired_t - time()
+            remaining_seconds = expired_t - perf_counter()
             if remaining_seconds <= 0:
                 raise TimeoutError
             if check_interval:
@@ -398,6 +461,7 @@ def export_dir_parse_iter(
     delete: bool = True, 
     timeout: None | int | float = None, 
     check_interval: int | float = 1, 
+    show_clock: bool = False, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -413,6 +477,7 @@ def export_dir_parse_iter(
     delete: bool = True, 
     timeout: None | int | float = None, 
     check_interval: int | float = 1, 
+    show_clock: bool = False, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -427,6 +492,7 @@ def export_dir_parse_iter(
     delete: bool = True, 
     timeout: None | int | float = None, 
     check_interval: int | float = 1, 
+    show_clock: bool = False, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -441,6 +507,7 @@ def export_dir_parse_iter(
     :param delete: 最终删除目录树文件
     :param timeout: 导出任务的超时秒数，如果为 None 或 小于等于 0，则相当于 float("inf")，即永不超时
     :param check_interval: 导出任务的状态，两次轮询之间的等待秒数，如果 <= 0，则不等待
+    :param show_clock: 是否在等待导出结果时，显示时钟
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -462,17 +529,39 @@ def export_dir_parse_iter(
             async_=async_, 
             **request_kwargs, 
         )
-        result: dict = yield export_dir_result(
-            client, 
-            export_id, 
-            timeout=timeout, 
-            check_interval=check_interval, 
-            async_=async_, 
-            **request_kwargs, 
-        )
+        if show_clock:
+            result: dict = yield export_dir_result(
+                client, 
+                export_id, 
+                timeout=timeout, 
+                check_interval=check_interval, 
+                async_=async_, 
+                **request_kwargs, 
+            )
+        if async_:
+            async def wait_for_result():
+                async with async_backgroud_loop():
+                    return await export_dir_result(
+                        client, 
+                        export_id, 
+                        timeout=timeout, 
+                        check_interval=check_interval, 
+                        async_=True, 
+                        **request_kwargs, 
+                    )
+            result = yield wait_for_result
+        else:
+            with backgroud_loop():
+                result = export_dir_result(
+                    client, 
+                    export_id, 
+                    timeout=timeout, 
+                    check_interval=check_interval, 
+                    **request_kwargs, 
+                )
         try:
             try:
-                url = yield partial(
+                url: str = yield partial(
                     client.download_url, 
                     result["pick_code"], 
                     use_web_api=True, 
@@ -486,7 +575,7 @@ def export_dir_parse_iter(
                     async_=async_, 
                     **request_kwargs, 
                 )
-            file = client.open(url, async_=async_)
+            file = client.open(url, async_=async_) # type: ignore
             try:
                 if async_:
                     file_wrapper: IO = AsyncTextIOWrapper(AsyncBufferedReader(file), encoding="utf-16", newline="\n")
