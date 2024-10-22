@@ -3,17 +3,18 @@
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __all__ = [
-    "ID_TO_DIRNODE_CACHE", "type_of_attr", "get_id_of_path", "iter_stared_dirs_raw", "iter_stared_dirs", 
-    "ensure_attr_path", "iterdir_raw", "iterdir", "iter_files", "iter_files_raw", "dict_files", 
-    "traverse_files", "iter_dupfiles", "dict_dupfiles", "iter_image_files", "dict_image_files", 
+    "ID_TO_DIRNODE_CACHE", "type_of_attr", "get_path_to_cid", "get_ancestors_to_cid", "get_id_to_path", 
+    "filter_na_ids", "iter_stared_dirs_raw", "iter_stared_dirs", "ensure_attr_path", "iterdir_raw", 
+    "iterdir", "iter_files", "iter_files_raw", "dict_files", "traverse_files", "iter_dupfiles", 
+    "dict_dupfiles", "iter_image_files", "dict_image_files", 
 ]
 __doc__ = "这个模块提供了一些和目录信息罗列有关的函数"
 
 import errno
 
 from collections import defaultdict, deque
-from collections.abc import AsyncIterator, Callable, Collection, Coroutine, Iterable, Iterator, Mapping
-from itertools import chain, islice
+from collections.abc import AsyncIterator, Callable, Collection, Coroutine, Iterable, Iterator, Mapping, Sequence
+from itertools import count, chain, islice, takewhile
 from operator import itemgetter
 from time import time
 from typing import cast, overload, Any, Final, Literal, NamedTuple, NewType, TypeVar
@@ -25,6 +26,8 @@ from iter_collect import grouped_mapping, grouped_mapping_async, iter_keyed_dups
 from p115client import check_response, normalize_attr, P115Client, P115OSError, P115Warning
 from p115client.const import CLASS_TO_TYPE, SUFFIX_TO_TYPE
 from posixpatht import escape, splitext, splits
+
+from .edit import update_desc, update_star
 
 
 D = TypeVar("D", bound=dict)
@@ -71,55 +74,200 @@ def type_of_attr(attr: Mapping, /) -> int:
     return 99
 
 
+@overload
 def get_path_to_cid(
-    id_to_dirnode: dict[int, DirNode | DirNodeTuple], 
-    cid: int, 
+    client: str | P115Client, 
+    cid: int = 0, 
+    /, 
     root_id: None | int = None, 
     escape: None | Callable[[str], str] = escape, 
+    refresh: bool = False, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    *, 
+    async_: Literal[False] = False, 
+    **request_kwargs, 
 ) -> str:
-    parts: list[str] = []
-    while cid and (not root_id or cid != root_id):
-        name, cid = id_to_dirnode[cid]
-        parts.append(name)
-    if root_id is not None and cid != root_id:
-        return ""
-    if escape is None:
-        path = "/".join(reversed(parts))
-    else:
-        path = "/".join(map(escape, reversed(parts)))
-    if root_id is None or root_id:
-        return "/" + path
-    else:
-        return path
+    ...
+@overload
+def get_path_to_cid(
+    client: str | P115Client, 
+    cid: int = 0, 
+    /, 
+    root_id: None | int = None, 
+    escape: None | Callable[[str], str] = escape, 
+    refresh: bool = False, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    *, 
+    async_: Literal[True], 
+    **request_kwargs, 
+) -> Coroutine[Any, Any, str]:
+    ...
+def get_path_to_cid(
+    client: str | P115Client, 
+    cid: int = 0, 
+    /, 
+    root_id: None | int = None, 
+    escape: None | Callable[[str], str] = escape, 
+    refresh: bool = False, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    *, 
+    async_: Literal[False, True] = False, 
+    **request_kwargs, 
+) -> str | Coroutine[Any, Any, str]:
+    """获取目录对应的路径（绝对路径或相对路径）
+
+    :param client: 115 客户端或 cookies
+    :param cid: 目录的 id
+    :param root_id: 根目录 id，如果指定此参数且不为 None，则返回相对路径，否则返回绝对路径
+    :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
+    :param refresh: 是否刷新。如果为 True，则会执行网络请求以查询；如果为 False，则直接从 `id_to_dirnode` 中获取
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param async_: 是否异步
+    :param request_kwargs: 其它请求参数
+
+    :return: 目录对应的绝对路径或相对路径
+    """
+    if isinstance(client, str):
+        client = P115Client(client, check_for_relogin=True)
+    if id_to_dirnode is None:
+        id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
+    def gen_step():
+        parts: list[str] = []
+        if cid and (refresh or cid not in id_to_dirnode):
+            resp = yield client.fs_files({"cid": cid, "limit": 1}, async_=async_, **request_kwargs)
+            check_response(resp)
+            parts.extend(info["name"] for info in resp["path"][1:])
+            for info in resp["path"][1:]:
+                id_to_dirnode[int(info["cid"])] = DirNode(info["name"], int(info["pid"]))
+        else:
+            while cid and (not root_id or cid != root_id):
+                name, cid = id_to_dirnode[cid]
+                parts.append(name)
+            parts.reverse()
+        if root_id is not None and cid != root_id:
+            return ""
+        if escape is None:
+            path = "/".join(parts)
+        else:
+            path = "/".join(map(escape, parts))
+        if root_id is None or root_id:
+            return "/" + path
+        else:
+            return path
+    return run_gen_step(gen_step, async_=async_)
 
 
 @overload
-def get_id_of_path(
+def get_ancestors_to_cid(
+    client: str | P115Client, 
+    cid: int = 0, 
+    /, 
+    refresh: bool = False, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    *, 
+    async_: Literal[False] = False, 
+    **request_kwargs, 
+) -> list[dict]:
+    ...
+@overload
+def get_ancestors_to_cid(
+    client: str | P115Client, 
+    cid: int = 0, 
+    /, 
+    refresh: bool = False, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    *, 
+    async_: Literal[True], 
+    **request_kwargs, 
+) -> Coroutine[Any, Any, list[dict]]:
+    ...
+def get_ancestors_to_cid(
+    client: str | P115Client, 
+    cid: int = 0, 
+    /, 
+    refresh: bool = False, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    *, 
+    async_: Literal[False, True] = False, 
+    **request_kwargs, 
+) -> list[dict] | Coroutine[Any, Any, list[dict]]:
+    """获取目录对应的 ancestors（祖先信息列表）
+
+    :param client: 115 客户端或 cookies
+    :param cid: 目录的 id
+    :param refresh: 是否刷新。如果为 True，则会执行网络请求以查询；如果为 False，则直接从 `id_to_dirnode` 中获取
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param async_: 是否异步
+    :param request_kwargs: 其它请求参数
+
+    :return: 目录所对应的祖先信息列表，每一条的结构如下
+
+        .. code:: python
+
+            {
+                "id": int, # 目录的 id
+                "parent_id": int, # 上级目录的 id
+                "name": str, # 名字
+            }
+    """
+    if isinstance(client, str):
+        client = P115Client(client, check_for_relogin=True)
+    if id_to_dirnode is None:
+        id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
+    def gen_step():
+        parts: list[dict] = []
+        if cid and (refresh or cid not in id_to_dirnode):
+            resp = yield client.fs_files({"cid": cid, "limit": 1}, async_=async_, **request_kwargs)
+            check_response(resp)
+            parts.append({"id": 0, "name": "", "parent_id": 0})
+            for info in resp["path"][1:]:
+                id, pid, name = int(info["cid"]), int(info["pid"]), info["name"]
+                id_to_dirnode[id] = DirNode(name, pid)
+                parts.append({"id": id, "name": name, "parent_id": pid})
+        else:
+            while cid:
+                id = cid
+                name, cid = id_to_dirnode[cid]
+                parts.append({"id": id, "name": name, "parent_id": cid})
+            parts.append({"id": 0, "name": "", "parent_id": 0})
+            parts.reverse()
+        return parts
+    return run_gen_step(gen_step, async_=async_)
+
+
+@overload
+def get_id_to_path(
     client: str | P115Client, 
     path: str, 
     /, 
     ensure_file: None | bool = None, 
+    refresh: bool = False, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
 ) -> int:
     ...
 @overload
-def get_id_of_path(
+def get_id_to_path(
     client: str | P115Client, 
     path: str, 
     /, 
     ensure_file: None | bool = None, 
+    refresh: bool = False, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
 ) -> Coroutine[Any, Any, int]:
     ...
-def get_id_of_path(
+def get_id_to_path(
     client: str | P115Client, 
     path: str, 
     /, 
     ensure_file: None | bool = None, 
+    refresh: bool = False, 
+    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -134,6 +282,8 @@ def get_id_of_path(
         - False: 必须是目录
         - None: 可以是目录或文件
 
+    :param refresh: 是否刷新。如果为 True，则会执行网络请求以查询；如果为 False，则直接从 `id_to_dirnode` 中获取
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -141,6 +291,8 @@ def get_id_of_path(
     """
     if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
+    if id_to_dirnode is None:
+        id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
     error = FileNotFoundError(errno.ENOENT, f"no such path: {path!r}")
     def gen_step():
         nonlocal client
@@ -169,12 +321,29 @@ def get_id_of_path(
             cid = 0
             dirname = "/"
         else:
-            dirname = "/".join(patht[:i])
-            resp = yield client.fs_dir_getid(dirname, async_=async_, **request_kwargs)
-            if not (resp["state"] and (cid := resp["id"])):
-                raise error
-            if not ensure_file:
-                return int(cid)
+            j = 0
+            if not refresh and id_to_dirnode:
+                pid = 0
+                for j in range(1, len(patht) - bool(ensure_file)):
+                    t = (patht[j], pid)
+                    for id, node in id_to_dirnode.items():
+                        if node == t:
+                            pid = id
+                    else:
+                        break
+                else:
+                    j += 1
+            if j > i:
+                i = j
+                cid = pid
+            else:
+                dirname = "/".join(patht[:i])
+                resp = yield client.fs_dir_getid(dirname, async_=async_, **request_kwargs)
+                if not (resp["state"] and (cid := resp["id"])):
+                    raise error
+                cid = int(cid)
+                if i == len(patht):
+                    return cid
         for name in patht[i:-1]:
             if async_:
                 async def request():
@@ -219,6 +388,69 @@ def get_id_of_path(
             else:
                 raise error
     return run_gen_step(gen_step, async_=async_)
+
+
+@overload
+def filter_na_ids(
+    client: str | P115Client, 
+    ids: Iterable[int | str], 
+    /, 
+    batch_size: int = 50_000, 
+    *, 
+    async_: Literal[False] = False, 
+    **request_kwargs, 
+) -> Iterator[int]:
+    ...
+@overload
+def filter_na_ids(
+    client: str | P115Client, 
+    ids: Iterable[int | str], 
+    /, 
+    batch_size: int = 50_000, 
+    *, 
+    async_: Literal[True], 
+    **request_kwargs, 
+) -> AsyncIterator[int]:
+    ...
+def filter_na_ids(
+    client: str | P115Client, 
+    ids: Iterable[int | str], 
+    /, 
+    batch_size: int = 50_000, 
+    *, 
+    async_: Literal[False, True] = False, 
+    **request_kwargs, 
+) -> Iterator[int] | AsyncIterator[int]:
+    """找出一组 id 中无效的，所谓无效就是指不在网盘中，可能已经被删除，也可能从未存在过
+
+    :param client: 115 客户端或 cookies
+    :param ids: 一组文件或目录的 id
+    :param batch_size: 批次大小，分批次，每次提交的 id 数
+    :param async_: 是否异步
+    :param request_kwargs: 其它请求参数
+
+    :return: 迭代器，筛选出所有无效的 id
+    """
+    if isinstance(client, str):
+        client = P115Client(client, check_for_relogin=True)
+    file_skim = client.fs_file_skim
+    def gen_step():
+        if isinstance(ids, Sequence):
+            it: Iterator[Iterable[int | str]] = (ids[i:i+batch_size] for i in range(0, len(ids), batch_size))
+        else:
+            ids_it = iter(ids)
+            it = takewhile(bool, (tuple(islice(ids_it, batch_size) for _ in count())))
+        for batch in it:
+            resp = yield file_skim(batch, async_=async_, **request_kwargs)
+            if resp.get("error") == "文件不存在":
+                yield YieldFrom(map(int, ids), identity=True)
+            else:
+                check_response(resp)
+                yield YieldFrom(
+                    set(map(int, batch)) - {int(a["file_id"]) for a in resp["data"]}, 
+                    identity=True, 
+                )
+    return run_gen_step_iter(gen_step, async_=async_)
 
 
 @overload
@@ -576,7 +808,6 @@ def ensure_attr_path(
         attrs = tuple(attrs)
     if with_ancestors:
         id_to_ancestors: dict[int, list[dict]] = {}
-
         def get_ancestors(id: int, attr: dict | DirNode | DirNodeTuple, /) -> list[dict]:
             if isinstance(attr, (DirNode, tuple)):
                 name, pid = attr
@@ -593,7 +824,6 @@ def ensure_attr_path(
             return ancestors
     if with_path:
         id_to_path: dict[int, str] = {}
-
         def get_path(attr: dict | DirNode | DirNodeTuple, /) -> str:
             if isinstance(attr, (DirNode, tuple)):
                 name, pid = attr
@@ -655,21 +885,13 @@ def ensure_attr_path(
                                     **request_kwargs, 
                                 ), None)
                         else:
-                            start = time()
+                            start = int(time())
                             ids_it = iter(find_ids)
                             while t_ids := tuple(islice(ids_it, 10_000)):
                                 # NOTE: 批量给目录添加星标，这样便于把这些目录进行批量拉取
-                                check_response((yield client.fs_star_set(
-                                    t_ids, 
-                                    async_=async_, 
-                                    **request_kwargs, 
-                                )))
+                                yield update_star(client, t_ids, async_=async_, **request_kwargs)
                                 # NOTE: 批量给目录添加空备注，这样可以更新这些目录的更新时间
-                                check_response((yield client.fs_desc_set(
-                                    t_ids, 
-                                    async_=async_, 
-                                    **request_kwargs, 
-                                )))
+                                yield update_desc(client, t_ids, async_=async_, **request_kwargs)
                             yield walk_through(iter_stared_dirs_raw(
                                 client, 
                                 page_size, 
@@ -681,26 +903,13 @@ def ensure_attr_path(
                             ), take_while=take_while)
                             if find_ids:
                                 # NOTE: 首先检查一下，这些 id 中如果有已经被删除的 id，则报错
-                                ids_it = iter(find_ids)
-                                while s_ids := set(islice(ids_it, 10_000)):
-                                    resp = yield client.fs_file_skim(
-                                        s_ids, 
-                                        async_=async_, 
-                                        **request_kwargs, 
+                                make_list: Callable = to_list if async_ else list
+                                na_ids = yield make_list((yield filter_na_ids(client, find_ids, async_=async_, **request_kwargs)))
+                                if na_ids:
+                                    raise P115OSError(
+                                        errno.EIO, 
+                                        f"these ids have been deleted: {na_ids}", 
                                     )
-                                    if resp.get("error") == "文件不存在":
-                                        raise P115OSError(
-                                            errno.EIO, 
-                                            f"at least these ids have been deleted: {s_ids} (from {find_ids})", 
-                                        )
-                                    else:
-                                        check_response(resp)
-                                        s_ids -= {int(a["file_id"]) for a in resp["data"]}
-                                        if s_ids:
-                                            raise P115OSError(
-                                                errno.EIO, 
-                                                f"at least these ids have been deleted: {s_ids} (from {find_ids})", 
-                                            )
                                 continue
                         break
                 except Exception as e:

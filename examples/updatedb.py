@@ -45,7 +45,8 @@ try:
     from httpx import ReadTimeout
     from p115client import check_response, P115Client
     from p115client.exception import BusyOSError
-    from p115client.tool.iterdir import ensure_attr_path, get_path_to_cid, iter_stared_dirs, DirNode, DirNodeTuple
+    from p115client.tool.edit import update_desc, update_star
+    from p115client.tool.iterdir import ensure_attr_path, filter_na_ids, get_path_to_cid, iter_stared_dirs, DirNode, DirNodeTuple
     from posixpatht import escape, joins, normpath
 except ImportError:
     from sys import executable
@@ -54,7 +55,8 @@ except ImportError:
     from httpx import ReadTimeout
     from p115client import check_response, P115Client
     from p115client.exception import BusyOSError
-    from p115client.tool.iterdir import ensure_attr_path, get_path_to_cid, iter_stared_dirs, DirNode, DirNodeTuple
+    from p115client.tool.edit import update_desc, update_star
+    from p115client.tool.iterdir import ensure_attr_path, filter_na_ids, get_path_to_cid, iter_stared_dirs, DirNode, DirNodeTuple
     from posixpatht import escape, joins, normpath
 
 import logging
@@ -188,86 +190,6 @@ def transaction(con: Connection | Cursor, /):
         raise
     else:
         con.commit()
-
-
-# TODO: 这些函数都移动到 p115client.tool.edit
-def update_desc(
-    client: P115Client, 
-    ids: Iterable[int], 
-    /, 
-    desc: str = "", 
-    batch_size: int = 10_000, 
-):
-    """设置文件或目录的备注为空，此举可更新此文件或目录的 mtime
-
-    :param client: 115 网盘客户端对象
-    :param ids: 一组文件或目录的 id
-    :param batch_size: 批次大小，分批次，每次提交的 id 数
-    """
-    set_desc = client.fs_desc_set
-    if isinstance(ids, Sequence):
-        for i in range(0, len(ids), batch_size):
-            check_response(set_desc(ids[i:i+batch_size], desc))
-    else:
-        ids_it = iter(ids)
-        while t_ids := tuple(islice(ids_it, batch_size)):
-            check_response(set_desc(t_ids, desc))
-
-
-def update_star(
-    client: P115Client, 
-    ids: Iterable[int], 
-    /, 
-    star: bool = True, 
-    batch_size: int = 10_000, 
-):
-    """给文件或目录加上星标，此举就目录而言，可以实现批量拉取
-
-    :param client: 115 网盘客户端对象
-    :param ids: 一组文件或目录的 id
-    :param batch_size: 批次大小，分批次，每次提交的 id 数
-    """
-    set_star = client.fs_star_set
-    if isinstance(ids, Sequence):
-        for i in range(0, len(ids), batch_size):
-            idss = ",".join(map(str, ids[i:i+batch_size]))
-            check_response(set_star(idss, star))
-    else:
-        ids_it = iter(ids)
-        while idss := ",".join(map(str, islice(ids_it, batch_size))):
-            check_response(set_star(idss, star))
-
-
-def filter_na_ids(
-    client: P115Client, 
-    ids: Iterable[int], 
-    /, 
-    batch_size: int = 50_000, 
-) -> Iterator[int]:
-    """找出一组 id 中无效的，所谓无效就是指不在网盘中，可能已经被删除，也可能从未存在过
-
-    :param client: 115 网盘客户端对象
-    :param ids: 一组文件或目录的 id
-    :param batch_size: 批次大小，分批次，每次提交的 id 数
-
-    :return: 迭代器，筛选出所有无效的 id
-    """
-    def check_part(ids: Iterable[int], /) -> Iterable[int]:
-        resp = client.fs_file_skim(ids)
-        if resp.get("error") == "文件不存在":
-            return ids
-        else:
-            check_response(resp)
-            if not isinstance(ids, Set):
-                ids = set(ids)
-            return ids - {int(a["file_id"]) for a in resp["data"]}
-    if isinstance(ids, Sequence):
-        for i in range(0, len(ids), batch_size):
-            yield from check_part(ids[i:i+batch_size])
-    else:
-        ids_it = iter(ids)
-        while t_ids := tuple(islice(ids_it, batch_size)):
-            yield from check_part(t_ids)
 
 
 def execute_commit(
@@ -967,7 +889,7 @@ def updatedb_one(
                 if to_delete:
                     delete_items(con, to_delete, commit=False)
                 if to_replace:
-                    dirname = get_path_to_cid(ID_TO_DIRNODE, id)
+                    dirname = get_path_to_cid(client, id, id_to_dirnode=ID_TO_DIRNODE)
                     if dirname != "/":
                         dirname += "/"
                     for attr in to_replace:

@@ -25,7 +25,7 @@ from p115client import check_response, P115Client
 from posixpatht import escape
 from urlopen import urlopen
 
-from .iterdir import get_id_of_path
+from .iterdir import get_id_to_path
 
 
 CRE_TREE_PREFIX_match: Final = re_compile("^(?:\| )+\|-(.*)").match
@@ -272,7 +272,7 @@ def export_dir(
         if isinstance(export_file_ids, int):
             pass
         elif isinstance(export_file_ids, str):
-            export_file_ids = yield get_id_of_path(
+            export_file_ids = yield get_id_to_path(
                 client, 
                 export_file_ids, 
                 ensure_file=False, 
@@ -284,7 +284,7 @@ def export_dir(
             add_cid = cids.add
             for cid in export_file_ids:
                 if isinstance(cid, str):
-                    cid = yield get_id_of_path(
+                    cid = yield get_id_to_path(
                         client, 
                         cid, 
                         ensure_file=False, 
@@ -296,7 +296,7 @@ def export_dir(
                 raise ValueError("`export_file_ids` is empty")
             export_file_ids = ",".join(map(str, cids))
         if isinstance(target_pid, str):
-            target_pid = yield get_id_of_path(
+            target_pid = yield get_id_to_path(
                 client, 
                 target_pid, 
                 ensure_file=False, 

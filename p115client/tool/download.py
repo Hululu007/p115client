@@ -527,12 +527,6 @@ def make_strm(
 ) -> MakeStrmResult | Coroutine[Any, Any, MakeStrmResult]:
     """生成 strm 保存到本地
 
-    .. note::
-        只是做全量更新，因此可避免判断。如果想要实现增量的效果，有 2 种办法：
-
-        1. 你可以在执行前，把本地目录给删了。
-        2. 你可以在执行完成后，把更新时间早于脚本开始执行前的文件全删了，然后再批量删除空目录。
-
     .. hint::
         函数在第 2 次处理同一个 id 时，速度会快一些，因为第 1 次时候需要全量拉取构建路径所需的数据
 
@@ -592,7 +586,7 @@ def make_strm(
         elif use_abspath:
             path = attr["path"][1:]
         else:
-            dir_ = get_path_to_cid(id_to_dirnode, attr["parent_id"], cid, escape=None)
+            dir_ = get_path_to_cid(client, cid, root_id=attr["parent_id"], escape=None, id_to_dirnode=id_to_dirnode)
             path = joinpath(dir_, attr["name"])
         if without_suffix:
             path = splitext(path)[0]
