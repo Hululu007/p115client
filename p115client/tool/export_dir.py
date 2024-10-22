@@ -529,7 +529,7 @@ def export_dir_parse_iter(
             async_=async_, 
             **request_kwargs, 
         )
-        if show_clock:
+        if not show_clock:
             result: dict = yield export_dir_result(
                 client, 
                 export_id, 

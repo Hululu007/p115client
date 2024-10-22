@@ -130,6 +130,7 @@ def batch_get_url(
 
     .. attention::
         请确保所有的 pickcode 都是有效的，要么是现在存在的，要么是以前存在过被删除的。
+
         如果有目录的 pickcode 混在其中，则会自动排除。
 
     :param client: 115 客户端或 cookies
@@ -883,7 +884,9 @@ def make_strm_by_export_dir(
 
     .. hint::
         通过 `mimetypes.guess_type` 判断文件的 `mimetype <https://developer.mozilla.org/en-US/docs/Web/HTTP/MIME_types>`_，如果以 "video/" 开头，则会生成相应的 strm 文件
+
         有哪些扩展名会被系统识别为视频，在不同电脑是上是不同的，你可以使用 `mimetypes.add_type` 添加一些 mimetype 和 扩展名 的关系
+
         或者你可以安装这个模块，`mimetype_more <https://pypi.org/project/mimetype_more/>`_，我已经在其中添加了很多的 mimetype 和 扩展名 的关系，import 此模块后即会自行添加
 
         .. code:: console

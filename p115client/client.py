@@ -4672,6 +4672,7 @@ class P115Client:
         
         .. attention::
             目前尚不清楚此接口如何使用，所以暂时不要使用，除非你知道怎么用
+
             请用 `P115Client.fs_files(..., type=2)` 作为替代
 
         GET https://webapi.115.com/files/imglist
@@ -5426,6 +5427,7 @@ class P115Client:
 
         .. attention::
             最多只能取回前 10,000 条数据，也就是 limit + offset <= 10_000
+
             这个接口实际上不支持在查询中直接设置排序，只能由 `P115Client.fs_order_set` 设置
 
         .. note::
@@ -5433,6 +5435,7 @@ class P115Client:
 
         .. important::
             一般使用的话，要提供 "search_value" 或 "file_label"，不然返回数据里面看不到任何一条数据，即使你指定了其它参数
+
             下面指定的很多参数其实是一点效果都没有的，具体可以实际验证
 
         :payload:
