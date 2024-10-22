@@ -22,6 +22,7 @@ reference/type
 :hidden:
 
 reference/tool/download
+reference/tool/edit
 reference/tool/export_dir
 reference/tool/iterdir
 reference/tool/xys
