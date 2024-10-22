@@ -132,10 +132,13 @@ def get_path_to_cid(
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
     def gen_step():
+        nonlocal cid
         parts: list[str] = []
         if cid and (refresh or cid not in id_to_dirnode):
             resp = yield client.fs_files({"cid": cid, "limit": 1}, async_=async_, **request_kwargs)
             check_response(resp)
+            if cid and int(resp["path"][-1]["cid"]) != cid:
+                raise FileNotFoundError(errno.ENOENT, cid)
             parts.extend(info["name"] for info in resp["path"][1:])
             for info in resp["path"][1:]:
                 id_to_dirnode[int(info["cid"])] = DirNode(info["name"], int(info["pid"]))
@@ -215,10 +218,13 @@ def get_ancestors_to_cid(
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
     def gen_step():
+        nonlocal cid
         parts: list[dict] = []
         if cid and (refresh or cid not in id_to_dirnode):
             resp = yield client.fs_files({"cid": cid, "limit": 1}, async_=async_, **request_kwargs)
             check_response(resp)
+            if cid and int(resp["path"][-1]["cid"]) != cid:
+                raise FileNotFoundError(errno.ENOENT, cid)
             parts.append({"id": 0, "name": "", "parent_id": 0})
             for info in resp["path"][1:]:
                 id, pid, name = int(info["cid"]), int(info["pid"]), info["name"]
@@ -879,7 +885,7 @@ def ensure_attr_path(
                                 yield walk_next(iterdir_raw(
                                     client, 
                                     pid, 
-                                    page_size=1, 
+                                    first_page_size=1, 
                                     id_to_dirnode=id_to_dirnode, 
                                     async_=async_, 
                                     **request_kwargs, 
@@ -1137,6 +1143,7 @@ def iterdir(
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
     def gen_step():
+        nonlocal cid
         it = iterdir_raw(
             client, 
             cid=cid, 
@@ -1774,7 +1781,7 @@ def traverse_files(
                             **request_kwargs, 
                             "timeout": auto_splitting_statistics_timeout, 
                         })))
-                        if int(resp["path"][-1]["cid"]) != cid:
+                        if cid and int(resp["path"][-1]["cid"]) != cid:
                             continue
                         for info in resp["path"][1:]:
                             id_to_dirnode[int(info["cid"])] = DirNode(info["name"], int(info["pid"]))

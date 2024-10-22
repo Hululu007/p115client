@@ -5,7 +5,9 @@ __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __all__ = ["batch_get_url", "iter_images_with_url", "iter_subtitles_with_url", "make_strm", "MakeStrmLog"]
 __doc__ = "这个模块提供了一些和下载有关的函数"
 
-from asyncio import Semaphore, TaskGroup
+import errno
+
+from asyncio import to_thread, Semaphore, TaskGroup
 from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
@@ -23,7 +25,7 @@ from warnings import warn
 
 from asynctools import async_chain_from_iterable
 from iterutils import run_gen_step, run_gen_step_iter, Yield, YieldFrom
-from p115client import P115Client, P115URL, normalize_attr
+from p115client import check_response, normalize_attr, P115Client, P115URL
 from p115client.exception import P115Warning
 from posixpatht import escape
 
@@ -354,7 +356,7 @@ def iter_subtitles_with_url(
     """获取字幕文件信息和下载链接
 
     .. caution::
-        这个函数运行时，会把相关文件以 1_000 为一批，同一批次复制到同一个新建的目录，在批量获取链接后，自动把目录删除到回收站。
+        这个函数运行时，会把相关文件以 1,000 为一批，同一批次复制到同一个新建的目录，在批量获取链接后，自动把目录删除到回收站。
 
     .. attention::
         请不要把不能被 115 识别为字幕的文件扩展名放在 `suffixes` 参数中传入，这只是浪费时间，最后也只能获得普通的下载链接
@@ -482,7 +484,7 @@ def make_strm(
     ensure_ascii: bool = False, 
     log: None | Callable[[MakeStrmLog], Any] = print, 
     max_workers: None | int = None, 
-    update: bool = True, 
+    update: bool = False, 
     discard: bool = True, 
     *, 
     async_: Literal[False] = False, 
@@ -501,7 +503,7 @@ def make_strm(
     ensure_ascii: bool = False, 
     log: None | Callable[[MakeStrmLog], Any] = print, 
     max_workers: None | int = None, 
-    update: bool = True, 
+    update: bool = False, 
     discard: bool = True, 
     *, 
     async_: Literal[True], 
@@ -519,7 +521,7 @@ def make_strm(
     ensure_ascii: bool = False, 
     log: None | Callable[[MakeStrmLog], Any] = print, 
     max_workers: None | int = None, 
-    update: bool = True, 
+    update: bool = False, 
     discard: bool = True, 
     *, 
     async_: Literal[False, True] = False, 
@@ -546,12 +548,12 @@ def make_strm(
     :param log: 调用以收集事件，如果为 None，则忽略
     :param max_workers: 最大并发数，主要用于限制同时打开的文件数
     :param update: 是否更新 strm 文件，如果为 False，则跳过已存在的路径
-    :param discard: 是否清理 strm 文件，如果为 True，则删除未取得的路径
+    :param discard: 是否清理 strm 文件，如果为 True，则删除未取得的路径（不在本次的路径集合内）
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
     """
-    save_dir = fsdecode(save_dir)
-    makedirs(save_dir, exist_ok=True)
+    savedir = fsdecode(save_dir)
+    makedirs(savedir, exist_ok=True)
     if ensure_ascii:
         encode = lambda attr: quote(attr["name"], safe="@[]:!$&'()*+,;=")
     else:
@@ -563,40 +565,44 @@ def make_strm(
     if discard:
         seen: set[str] = set()
         seen_add = seen.add
+        existing: set[str] = set()
         def do_discard():
             removed = 0
-            for path in iglob("**/*.strm", root_dir=save_dir, recursive=True):
-                if path not in seen:
-                    path = joinpath(save_dir, path)
-                    try:
-                        remove(path)
-                        if log is not None:
-                            log(MakeStrmLog(
-                                f"[DEL] path={path!r}", 
-                                type="remove", 
-                                path=path, 
-                            ))
-                        removed += 1
-                    except OSError:
-                        pass
+            for path in existing - seen:
+                path = joinpath(savedir, path)
+                try:
+                    remove(path)
+                    if log is not None:
+                        log(MakeStrmLog(
+                            f"[DEL] path={path!r}", 
+                            type="remove", 
+                            path=path, 
+                        ))
+                    removed += 1
+                except OSError:
+                    pass
             return removed
+    abspath_prefix_length = 1
     def normalize_path(attr: dict, /) -> str:
         if use_abspath is None:
             path = attr["name"]
         elif use_abspath:
-            path = attr["path"][1:]
+            path = attr["path"][abspath_prefix_length:]
         else:
-            dir_ = get_path_to_cid(client, cid, root_id=attr["parent_id"], escape=None, id_to_dirnode=id_to_dirnode)
+            dir_ = get_path_to_cid(
+                client, 
+                cid, 
+                root_id=attr["parent_id"], 
+                escape=None, 
+                id_to_dirnode=id_to_dirnode, 
+            )
             path = joinpath(dir_, attr["name"])
         if without_suffix:
             path = splitext(path)[0]
-        if with_root and not use_abspath:
-            relpath = normpath(joinpath(id_to_dirnode[cid][0], path + ".strm"))
-        else:
-            relpath = path + ".strm"
+        relpath = normpath(path) + ".strm"
         if discard:
             seen_add(relpath)
-        return joinpath(save_dir, relpath)
+        return joinpath(savedir, relpath)
     if async_:
         try:
             from aiofile import async_open
@@ -610,6 +616,25 @@ def make_strm(
         else:
             sema = Semaphore(max_workers)
         async def request():
+            nonlocal savedir, abspath_prefix_length
+            if use_abspath:
+                if cid:
+                    root = await get_path_to_cid(
+                        client, 
+                        cid, 
+                        escape=None, 
+                        refresh=True, 
+                        async_=True, 
+                        **request_kwargs, 
+                    )
+                    savedir += root
+                    abspath_prefix_length = len(root) + 1
+            elif with_root:
+                resp = await client.fs_file_skim(cid, async_=True, **request_kwargs)
+                if not resp:
+                    raise FileNotFoundError(errno.ENOENT, cid)
+                check_response(resp)
+                savedir = joinpath(savedir, resp["data"][0]["file_name"])
             success = 0
             failed = 0
             skipped = 0
@@ -667,6 +692,8 @@ def make_strm(
             start_t = perf_counter()
             async with TaskGroup() as group:
                 create_task = group.create_task
+                if discard:
+                    create_task(to_thread(lambda: existing.update(iglob("**/*.strm", root_dir=savedir, recursive=True))))
                 async for attr in iter_files(
                     client, 
                     cid, 
@@ -689,6 +716,23 @@ def make_strm(
             }
         return request()
     else:
+        if use_abspath:
+            if cid:
+                root = get_path_to_cid(
+                    client, 
+                    cid, 
+                    escape=None, 
+                    refresh=True, 
+                    **request_kwargs, 
+                )
+                savedir += root
+                abspath_prefix_length = len(root) + 1
+        elif with_root:
+            resp = client.fs_file_skim(cid, **request_kwargs)
+            if not resp:
+                raise FileNotFoundError(errno.ENOENT, cid)
+            check_response(resp)
+            savedir = joinpath(savedir, resp["data"][0]["file_name"])
         success = 0
         failed = 0
         skipped = 0
@@ -740,6 +784,8 @@ def make_strm(
         start_t = perf_counter()
         executor = ThreadPoolExecutor(max_workers)
         try:
+            if discard:
+                executor.submit(lambda: existing.update(iglob("**/*.strm", root_dir=savedir, recursive=True)))
             executor.map(save, iter_files(
                 client, 
                 cid, 

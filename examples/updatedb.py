@@ -485,6 +485,37 @@ ON CONFLICT(id) DO UPDATE SET
         return con.executemany(sql, items)
 
 
+def insert_ancestor_items(
+    con: Connection | Cursor, 
+    items: list[dict], 
+    /, 
+    commit: bool = True, 
+) -> Cursor:
+    """向 `data` 表插入一组数据
+
+    :param con: 数据库连接或游标
+    :param items: 一组数据
+    :param commit: 是否提交
+
+    :return: 游标
+    """
+    sql = """\
+INSERT INTO
+    data(id, parent_id, name, path, is_dir)
+VALUES
+    (:id, :parent_id, :name, :path, 1)
+ON CONFLICT(id) DO UPDATE SET
+    parent_id = excluded.parent_id
+"""
+    path = "/"
+    for item in items:
+        path = item["path"] = path + escape(item["name"])
+    if commit:
+        return execute_commit(con, sql, items, executemany=True)
+    else:
+        return con.executemany(sql, items)
+
+
 def insert_dir_items(
     con: Connection | Cursor, 
     items: Mapping | Iterable[Mapping], 
@@ -856,6 +887,7 @@ def diff_dir(
     finally:
         if ancestors:
             insert_dir_incomplete_items(con, ancestors)
+            insert_ancestor_items(con, ancestors, commit=False)
             for a in ancestors:
                 ID_TO_DIRNODE[a["id"]] = DirNodeTuple((a["name"], a["parent_id"]))
             if dir_ids is not None:
