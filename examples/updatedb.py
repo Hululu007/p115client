@@ -272,9 +272,8 @@ CREATE TABLE IF NOT EXISTS event (
     type TEXT, -- 类型，可能是 'insert'、'update' 或 'delete' 之一
     old JSON, -- 旧数据
     new JSON, -- 新数据
-    summary JSON NOT NULL DEFAULT '{}', -- 概要，事件列表
-    created_at DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%S.%f+08:00', 'now', '+8 hours')), -- 创建时间
-    id INTEGER GENERATED ALWAYS AS (COALESCE(old->'id', new->'id')) STORED -- 数据的 id
+    summary JSON NOT NULL DEFAULT '{}', -- 概要，发生的事件集
+    created_at DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%S.%f+08:00', 'now', '+8 hours')) -- 创建时间
 );
 
 -- 触发器，记录 data 表 'insert'
@@ -1207,6 +1206,8 @@ def updatedb(
             def get_dir_size(cid: int = 0, /) -> int | float:
                 if cid == 0:
                     resp = check_response(client.fs_space_summury())
+                    if not resp["type_summury"]:
+                        return float("inf")
                     return sum(v["count"] for k, v in resp["type_summury"].items() if k.isupper())
                 else:
                     try:
