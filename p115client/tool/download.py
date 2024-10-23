@@ -924,7 +924,8 @@ def make_strm_by_export_dir(
     layer_limit: int = 0, 
     timeout: None | int | float = None, 
     check_interval: int | float = 1, 
-    show_clock: bool = True, 
+    show_clock: bool | Callable[[], Any] = True, 
+    clock_interval: int | float = 0.05, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -945,7 +946,8 @@ def make_strm_by_export_dir(
     layer_limit: int = 0, 
     timeout: None | int | float = None, 
     check_interval: int | float = 1, 
-    show_clock: bool = True, 
+    show_clock: bool | Callable[[], Any] = True, 
+    clock_interval: int | float = 0.05, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -965,7 +967,8 @@ def make_strm_by_export_dir(
     layer_limit: int = 0, 
     timeout: None | int | float = None, 
     check_interval: int | float = 1, 
-    show_clock: bool = True, 
+    show_clock: bool | Callable[[], Any] = True, 
+    clock_interval: int | float = 0.05, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -996,7 +999,8 @@ def make_strm_by_export_dir(
     :param layer_limit: 层级深度，小于等于 0 时不限
     :param timeout: 导出任务的超时秒数，如果为 None 或 小于等于 0，则相当于 float("inf")，即永不超时
     :param check_interval: 导出任务的状态，两次轮询之间的等待秒数，如果 <= 0，则不等待
-    :param show_clock: 是否在等待导出结果时，显示时钟
+    :param show_clock: 是否在等待导出目录树时，显示时钟。如果为 True，则显示默认的时钟，如果为 Callable，则作为自定义时钟进行调用（无参数）
+    :param clock_interval: 更新时钟的时间间隔
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
     """
@@ -1117,6 +1121,7 @@ def make_strm_by_export_dir(
                     timeout=timeout, 
                     check_interval=check_interval, 
                     show_clock=show_clock, 
+                    clock_interval=clock_interval, 
                     async_=async_, 
                     **request_kwargs, 
                 ):
@@ -1197,6 +1202,7 @@ def make_strm_by_export_dir(
                 timeout=timeout, 
                 check_interval=check_interval, 
                 show_clock=show_clock, 
+                clock_interval=clock_interval, 
                 **request_kwargs, 
             ):
                 mime = guess_type(remote_path)[0]

@@ -34,6 +34,17 @@ from .iterdir import get_id_to_path
 CRE_TREE_PREFIX_match: Final = re_compile("^(?:\| )+\|-(.*)").match
 
 
+def format_time(t: int | float, /) -> str:
+    m, s = divmod(t, 60)
+    if m < 60:
+        return f"{m:02.0f}:{s:09.06f}"
+    h, m = divmod(m, 60)
+    if h < 24:
+        return f"{h:02.0f}:{m:02.0f}:{s:09.06f}"
+    d, h = divmod(h, 60)
+    return f"{d}d{h:02.0f}:{m:02.0f}:{s:09.06f}"
+
+
 @contextmanager
 def backgroud_loop(
     call: None | Callable = None, 
@@ -44,7 +55,7 @@ def backgroud_loop(
     if use_default_call:
         start = perf_counter()
         def call():
-            print("\r\x1b[K%.6f" % (perf_counter() - start), end="")
+            print(f"\r\x1b[K{format_time(perf_counter() - start)}", end="")
     def run():
         while running:
             try:
@@ -72,7 +83,7 @@ async def async_backgroud_loop(
     if use_default_call:
         start = perf_counter()
         def call():
-            print("\r\x1b[K%.6f" % (perf_counter() - start), end="")
+            print(f"\r\x1b[K{format_time(perf_counter() - start)}", end="")
     async def run():
         while running:
             try:
@@ -407,6 +418,9 @@ def export_dir_result(
 ) -> dict | Coroutine[Any, Any, dict]:
     """获取导出目录树的结果
 
+    .. attention::
+        如果指定超时时间为正数，则会在过期时抛出 TimeoutError，但这并不会取消远程正在执行的任务，而 115 同时只允许运行一个导出目录树的任务，所以如果要开始下一个导出任务，还需要此任务完成或者被 115 自动超时取消
+
     :param client: 115 客户端或 cookies
     :param export_id: 任务 id，由 `P115Client.fs_export_dir` 接口调用产生
     :param timeout: 超时秒数，如果为 None 或 小于等于 0，则相当于 float("inf")，即永不超时
@@ -445,7 +459,7 @@ def export_dir_result(
                 return data
             remaining_seconds = expired_t - perf_counter()
             if remaining_seconds <= 0:
-                raise TimeoutError
+                raise TimeoutError(export_id)
             if check_interval:
                 yield do_sleep(min(check_interval, remaining_seconds))
     return run_gen_step(gen_step, async_=async_)
@@ -461,7 +475,8 @@ def export_dir_parse_iter(
     delete: bool = True, 
     timeout: None | int | float = None, 
     check_interval: int | float = 1, 
-    show_clock: bool = False, 
+    show_clock: bool | Callable[[], Any] = False, 
+    clock_interval: int | float = 0.05, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -477,7 +492,8 @@ def export_dir_parse_iter(
     delete: bool = True, 
     timeout: None | int | float = None, 
     check_interval: int | float = 1, 
-    show_clock: bool = False, 
+    show_clock: bool | Callable[[], Any] = False, 
+    clock_interval: int | float = 0.05, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -492,7 +508,8 @@ def export_dir_parse_iter(
     delete: bool = True, 
     timeout: None | int | float = None, 
     check_interval: int | float = 1, 
-    show_clock: bool = False, 
+    show_clock: bool | Callable[[], Any] = False, 
+    clock_interval: int | float = 0.05, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -507,7 +524,8 @@ def export_dir_parse_iter(
     :param delete: 最终删除目录树文件
     :param timeout: 导出任务的超时秒数，如果为 None 或 小于等于 0，则相当于 float("inf")，即永不超时
     :param check_interval: 导出任务的状态，两次轮询之间的等待秒数，如果 <= 0，则不等待
-    :param show_clock: 是否在等待导出结果时，显示时钟
+    :param show_clock: 是否在等待导出目录树时，显示时钟。如果为 True，则显示默认的时钟，如果为 Callable，则作为自定义时钟进行调用（无参数）
+    :param clock_interval: 更新时钟的时间间隔
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -540,7 +558,10 @@ def export_dir_parse_iter(
             )
         elif async_:
             async def wait_for_result():
-                async with async_backgroud_loop():
+                async with async_backgroud_loop(
+                    None if show_clock is True else show_clock, 
+                    interval=clock_interval, 
+                ):
                     return await export_dir_result(
                         client, 
                         export_id, 
@@ -551,7 +572,10 @@ def export_dir_parse_iter(
                     )
             result = yield wait_for_result
         else:
-            with backgroud_loop():
+            with backgroud_loop(
+                None if show_clock is True else show_clock, 
+                interval=clock_interval, 
+            ):
                 result = export_dir_result(
                     client, 
                     export_id, 

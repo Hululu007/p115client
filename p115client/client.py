@@ -1330,16 +1330,20 @@ class P115Client:
             url = make_url(url, params)
         check_for_relogin = getattr(self, "check_for_relogin", None)
         request_kwargs.setdefault("parse", default_parse)
+        use_default_request = request is None
         if request is None:
             request_kwargs["session"] = self.async_session if async_ else self.session
             request_kwargs["async_"] = async_
             request = get_default_request()
-        if (headers := request_kwargs.get("headers")):
+        if (headers := request_kwargs.get("headers")) is not None:
             headers = request_kwargs["headers"] = {**self.headers, **headers}
-            if "Cookie" not in headers and "cookie" not in headers:
+            if use_default_request:
+                if not any(k.lower() == "cookie" for k in headers):
+                    headers = None
+            elif not any(k.lower() == "cookie" for k in headers):
                 headers["Cookie"] = self.cookies_str
-        else:
-            request_kwargs["headers"] = {**self.headers, "Cookie": self.cookies_str}
+        elif not use_default_request:
+            headers = request_kwargs["headers"] = {**self.headers, "Cookie": self.cookies_str}
         if callable(check_for_relogin):
             if async_:
                 async def wrap():
@@ -1347,6 +1351,8 @@ class P115Client:
                     for i in count(0):
                         try:
                             cookies_old = self.cookies_str
+                            if headers is not None:
+                                headers["Cookie"] = cookies_old
                             return await request(url=url, method=method, **request_kwargs)
                         except BaseException as e:
                             res = check_for_relogin(e)
@@ -1362,6 +1368,8 @@ class P115Client:
                                     continue
                                 raise
                             cookies = self.cookies_str
+                            if cookies != cookies_old:
+                                continue
                             cookies_mtime = getattr(self, "cookies_mtime", 0)
                             async with self._request_alock:
                                 cookies_new = self.cookies_str
@@ -1386,6 +1394,8 @@ class P115Client:
                 for i in count(0):
                     try:
                         cookies_old = self.cookies_str
+                        if headers is not None:
+                            headers["Cookie"] = cookies_old
                         return request(url=url, method=method, **request_kwargs)
                     except BaseException as e:
                         res = check_for_relogin(e)
@@ -1400,6 +1410,8 @@ class P115Client:
                                 continue
                             raise
                         cookies = self.cookies_str
+                        if cookies != cookies_old:
+                            continue
                         cookies_mtime = getattr(self, "cookies_mtime", 0)
                         with self._request_lock:
                             cookies_new = self.cookies_str
