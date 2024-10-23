@@ -538,7 +538,7 @@ def export_dir_parse_iter(
                 async_=async_, 
                 **request_kwargs, 
             )
-        if async_:
+        elif async_:
             async def wait_for_result():
                 async with async_backgroud_loop():
                     return await export_dir_result(

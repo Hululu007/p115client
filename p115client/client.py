@@ -409,7 +409,7 @@ def normalize_attr_app(
     :return: 翻译后的 dict 类型数据
     """
     attr: AttrDict[str, Any] = AttrDict()
-    attr["is_dir"] = attr["is_directory"] = info["fc"] == "0"
+    attr["is_dir"] = attr["is_directory"] = info["fc"] == "0" # fc => file_category
     attr["id"] = int(info["fid"])        # fid => file_id
     attr["parent_id"] = int(info["pid"]) # pid => parent_id
     #attr["area_id"] = int(attr["aid"])
@@ -426,10 +426,10 @@ def normalize_attr_app(
         attr["thumb"] = f"https://imgjump.115.com?{info['thumb']}&size=0&sha1={info['sha1']}"
     if "uppt" in info: # pptime
         attr["ctime"] = attr["user_ptime"] = int(info["uppt"])
-    if "uet" in info: # utime
-        attr["mtime"] = attr["user_utime"] = int(info["uet"])
     if "upt" in info: # ptime
-        attr["time"] = int(info["upt"])
+        attr["mtime"] = attr["user_utime"] = int(info["upt"])
+    if "uet" in info: # utime
+        attr["utime"] = int(info["uet"])
     for key, name in (
         ("ism", "star"), 
         ("is_top", "is_top"), 
@@ -450,6 +450,7 @@ def normalize_attr_app(
         ("flabel", "fflabel"), 
         ("multitrack", "multitrack"), 
         ("play_long", "play_long"), 
+        ("d_img", "d_img"), 
         ("v_img", "v_img"), 
         ("audio_play_long", "audio_play_long"), 
         ("current_time", "current_time"), 
@@ -3656,10 +3657,6 @@ class P115Client:
         .. hint::
             如果仅指定 cid 和 natsort=1 和 o="file_name"，则可仅统计当前目录的总数，而不返回具体的文件信息
 
-        .. hint::
-            当 7 < type < 99 或 type > 99 时，效果都一样，相当于 type = 1 再额外包含一些其它的文件
-            当 type < 0 时，相当于 type = 0
-
         :payload:
             - cid: int | str = 0 💡 目录 id
             - limit: int = 32 💡 分页大小
@@ -3702,7 +3699,7 @@ class P115Client:
             - suffix: str = <default> 💡 后缀名（优先级高于 `type`）
             - type: int = <default> 💡 文件类型
 
-              - 0: 全部
+              - 0: 全部（仅当前目录）
               - 1: 文档
               - 2: 图片
               - 3: 音频
@@ -3710,7 +3707,18 @@ class P115Client:
               - 5: 压缩包
               - 6: 应用
               - 7: 书籍
+              - 8: 其它
+              - 9: 相当于 8
+              - 10: 相当于 8
+              - 11: 相当于 8
+              - 12: ？？？
+              - 13: 相当于 3
+              - 14: ？？？
+              - 15: 图片和视频，相当于 2 和 4
+              - 16: ？？？
+              - 17~98: 相当于 8
               - 99: 仅文件
+              - >=100: 相当于 8
         """
         api = complete_webapi(base_url, "/files")
         if isinstance(payload, (int, str)):
@@ -3762,6 +3770,9 @@ class P115Client:
 
         GET https://proapi.115.com/{app}/2.0/ufile/files
 
+        .. hint::
+            如果要遍历获取所有文件，需要指定 show_dir=0 且 cur=0（或不指定 cur），这个接口并没有 type=99 时获取所有文件的意义
+
         :payload:
             - cid: int | str = 0 💡 目录 id
             - limit: int = 32 💡 分页大小
@@ -3804,7 +3815,7 @@ class P115Client:
             - suffix: str = <default> 💡 后缀名（优先级高于 `type`）
             - type: int = <default> 💡 文件类型
 
-              - 0: 全部
+              - 0: 全部（仅当前目录）
               - 1: 文档
               - 2: 图片
               - 3: 音频
@@ -3812,7 +3823,15 @@ class P115Client:
               - 5: 压缩包
               - 6: 应用
               - 7: 书籍
-              - 99: 仅文件
+              - 8: 其它
+              - 9: 相当于 8
+              - 10: 相当于 8
+              - 11: 相当于 8
+              - 12: ？？？
+              - 13: ？？？
+              - 14: ？？？
+              - 15: 图片和视频，相当于 2 和 4
+              - >= 16: 相当于 8
         """
         api = f"https://proapi.115.com/{app}/2.0/ufile/files"
         if isinstance(payload, (int, str)):
@@ -3903,7 +3922,7 @@ class P115Client:
             - suffix: str = <default> 💡 后缀名（优先级高于 `type`）
             - type: int = <default> 💡 文件类型
 
-              - 0: 全部
+              - 0: 全部（仅当前目录）
               - 1: 文档
               - 2: 图片
               - 3: 音频
@@ -3911,7 +3930,18 @@ class P115Client:
               - 5: 压缩包
               - 6: 应用
               - 7: 书籍
+              - 8: 其它
+              - 9: 相当于 8
+              - 10: 相当于 8
+              - 11: 相当于 8
+              - 12: ？？？
+              - 13: 相当于 3
+              - 14: ？？？
+              - 15: 图片和视频，相当于 2 和 4
+              - 16: ？？？
+              - 17~98: 相当于 8
               - 99: 仅文件
+              - >=100: 相当于 8
         """
         api = "https://aps.115.com/natsort/files.php"
         if isinstance(payload, (int, str)):
@@ -5466,7 +5496,7 @@ class P115Client:
             - suffix: str = <default> 💡 文件后缀（扩展名），优先级高于 `type`
             - type: int = <default>   💡 文件类型
 
-              - 0: 全部
+              - 0: 全部（仅当前目录）
               - 1: 文档
               - 2: 图片
               - 3: 音频
@@ -5555,7 +5585,7 @@ class P115Client:
             - suffix: str = <default>
             - type: int = <default> 💡 文件类型
 
-              - 0: 全部
+              - 0: 全部（仅当前目录）
               - 1: 文档
               - 2: 图片
               - 3: 音频

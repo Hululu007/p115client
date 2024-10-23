@@ -2,7 +2,7 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 0, 9)
+__version__ = (0, 0, 10)
 __all__ = ["updatedb", "updatedb_one", "updatedb_tree"]
 __doc__ = "遍历 115 网盘的目录信息导出到数据库"
 __requirements__ = ["p115client", "posixpatht"]
@@ -251,7 +251,7 @@ CREATE TABLE IF NOT EXISTS data (
     is_dir INTEGER NOT NULL CHECK(is_dir IN (0, 1)), -- 是否目录
     is_image INTEGER NOT NULL CHECK(is_image IN (0, 1)) DEFAULT 0, -- 是否图片
     ctime INTEGER NOT NULL DEFAULT 0,  -- 创建时间戳，一旦设置就不会更新
-    mtime INTEGER NOT NULL DEFAULT 0,  -- 更新时间戳，如果名字、备注被设置（即使值没变），或者进出回收站，或者（如果自己是目录）增删直接子节点或设置封面，会更新此值，但移动并不更新
+    mtime INTEGER NOT NULL DEFAULT 0,  -- 更新时间戳，如果名字、备注被设置（即使值没变），或者（如果自己是目录）进出回收站或增删直接子节点或设置封面，会更新此值，但移动并不更新
     path TEXT NOT NULL DEFAULT '',     -- 路径
     updated_at DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%S.%f+08:00', 'now', '+8 hours')) -- 最近一次更新时间
 );
@@ -266,12 +266,96 @@ CREATE TABLE IF NOT EXISTS dir (
     mtime INTEGER NOT NULL DEFAULT 0   -- 更新时间戳，如果名字、备注被设置（即使值没变），或者进出回收站，或者增删直接子节点，或者设置封面，会更新此值，但移动并不更新
 );
 
--- 给 data 表创建触发器，自动更新 updated_at，这个字段记录最近一次更新时间
-CREATE TRIGGER IF NOT EXISTS trg_data_updated_at
+-- 创建 event 表，用于记录 data 表上发生的 'insert'、'update' 和 'delete' 事件
+CREATE TABLE IF NOT EXISTS event (
+    _id INTEGER PRIMARY KEY AUTOINCREMENT, -- 主键
+    type TEXT, -- 类型，可能是 'insert'、'update' 或 'delete' 之一
+    old JSON, -- 旧数据
+    new JSON, -- 新数据
+    created_at DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%S.%f+08:00', 'now', '+8 hours')) -- 创建时间
+);
+
+-- 触发器，记录 data 表 'insert'
+CREATE TRIGGER IF NOT EXISTS trg_data_insert
+AFTER INSERT ON data
+FOR EACH ROW
+BEGIN
+    INSERT INTO event(type, new) VALUES (
+        'insert', 
+        json_object(
+            'id', new.id, 
+            'parent_id', new.parent_id, 
+            'pickcode', new.pickcode, 
+            'name', new.name, 
+            'size', new.size, 
+            'sha1', new.sha1, 
+            'is_dir', new.is_dir, 
+            'is_image', new.is_image, 
+            'ctime', new.ctime, 
+            'mtime', new.mtime, 
+            'path', new.path
+        )
+    );
+END;
+
+-- 触发器，记录 data 表 'update'
+CREATE TRIGGER IF NOT EXISTS trg_data_update
 AFTER UPDATE ON data 
 FOR EACH ROW
 BEGIN
     UPDATE data SET updated_at = strftime('%Y-%m-%dT%H:%M:%S.%f+08:00', 'now', '+8 hours') WHERE id = NEW.id;
+    INSERT INTO event(type, old, new) VALUES (
+        'update', 
+        json_object(
+            'id', old.id, 
+            'parent_id', old.parent_id, 
+            'pickcode', old.pickcode, 
+            'name', old.name, 
+            'size', old.size, 
+            'sha1', old.sha1, 
+            'is_dir', old.is_dir, 
+            'is_image', old.is_image, 
+            'ctime', old.ctime, 
+            'mtime', old.mtime, 
+            'path', old.path
+        ), 
+        json_object(
+            'id', new.id, 
+            'parent_id', new.parent_id, 
+            'pickcode', new.pickcode, 
+            'name', new.name, 
+            'size', new.size, 
+            'sha1', new.sha1, 
+            'is_dir', new.is_dir, 
+            'is_image', new.is_image, 
+            'ctime', new.ctime, 
+            'mtime', new.mtime, 
+            'path', new.path
+        )
+    );
+END;
+
+-- 触发器，记录 data 表 'delete'
+CREATE TRIGGER IF NOT EXISTS trg_data_delete
+AFTER DELETE ON data
+FOR EACH ROW
+BEGIN
+    INSERT INTO event(type, old) VALUES (
+        'delete', 
+        json_object(
+            'id', old.id, 
+            'parent_id', old.parent_id, 
+            'pickcode', old.pickcode, 
+            'name', old.name, 
+            'size', old.size, 
+            'sha1', old.sha1, 
+            'is_dir', old.is_dir, 
+            'is_image', old.is_image, 
+            'ctime', old.ctime, 
+            'mtime', old.mtime, 
+            'path', old.path
+        )
+    );
 END;
 
 -- 创建索引
@@ -1246,3 +1330,5 @@ if __name__ == "__main__":
 # TODO: 增加一个选项，允许对数据进行全量而不是增量更新，这样可以避免一些问题
 # TODO: 增加一个选项，如果查询的某个 id 不存在，就把这个 id 的在数据库的数据给删除
 # TODO: 为数据库插入弄单独一个线程，就不需要等待数据库插入完成，就可以开始下一批数据拉取
+# TODO: 遇到悬空元素，如何处理，是 1) 忽略、2) 删除 3) 移走 还是 4) 报错
+# TODO: 还要处理一种情况，和悬空元素有关，某个目录被删除了，后来建立了同名的目录，然后有些文件还是移动入那个被删除的目录，就会造成这些元素悬空，更重要的是，不可有两个相同路径的目录，如果有的话，就要进行冲突处理，最多只能保留一个

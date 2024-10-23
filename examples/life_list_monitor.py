@@ -197,6 +197,7 @@ from datetime import datetime
 from functools import partial
 from itertools import count
 from pathlib import Path
+from _thread import start_new_thread
 from time import sleep, time
 from typing import Any
 
@@ -210,24 +211,134 @@ formatter = logging.Formatter(
 handler.setFormatter(formatter)
 logger.addHandler(handler)
 
+#+ 新增
+#+ 文件重命名
+#+ 复制文件
+
+
+def iter_files(client, cid, first_page_size=0, page_size=10_000):
+    if page_size <= 0:
+        page_size = 10_000
+    if first_page_size <= 0:
+        first_page_size = page_size
+    payload = {"asc": 0, "cid": cid, "cur": 0, "limit": first_page_size, "offset": 0, "o": "user_utime", "show_dir": 0}
+    for i in count(0):
+        resp = client.fs_files_app(payload)
+        if cid and int(resp["path"][-1]["cid"]) != cid:
+            break
+        if resp["offset"] != payload["offset"]:
+            break
+        if i == 0:
+            payload["limit"] = page_size
+        yield from map(normalize_attr, resp["data"])
+        payload["offset"] += len(resp["data"]) # type: ignore
+        if payload["offset"] >= resp["count"]:
+            break
+
+
+def normalize_attr(info, /) -> dict:
+    """翻译 `P115Client.fs_files`、`P115Client.fs_search`、`P115Client.share_snap` 等接口响应的文件信息数据，使之便于阅读
+
+    :param info: 原始数据
+    :param keep_raw: 是否保留原始数据，如果为 True，则保存到 "raw" 字段
+
+    :return: 翻译后的 dict 类型数据
+    """
+    attr = {}
+    attr["user_id"] = info["fuuid"]
+    attr["file_id"] = info["fid"]
+    attr["parent_id"] = info["pid"]
+    attr["file_name"] = info["fn"]
+    attr["file_category"] = int(info["fc"])
+    attr["file_type"] = int(info.get("ftype") or 0)
+    attr["file_size"] = int(info.get("fs") or 0)
+    attr["sha1"] = info.get("sha1", "")
+    attr["pick_code"] = info["pc"]
+    attr["fl"] = info["fl"]
+    attr["ico"] = info.get("ico", "")
+    if "thumb" in info:
+        attr["thumb"] = f"https://imgjump.115.com?{info['thumb']}&size=0&sha1={info['sha1']}"
+    attr["create_time"] = int(info["uppt"])
+    attr["update_time"] = int(info["upt"])
+    for key, name in (
+        ("ism", "is_mark"), 
+        ("is_top", "is_top"), 
+        ("isp", "is_private"), 
+        ("ispl", "show_play_long"), 
+        ("iss", "is_share"), 
+        ("isv", "isv"), 
+        ("issct", "is_shortcut"), 
+        ("ic", "violated"), 
+    ):
+        if key in info:
+            attr[name] = int(info[key] or 0)
+    for key, name in (
+        ("def", "def"), 
+        ("def2", "def2"), 
+        ("fco", "cover"), 
+        ("fdesc", "desc"), 
+        ("flabel", "fflabel"), 
+        ("multitrack", "multitrack"), 
+        ("play_long", "play_long"), 
+        ("d_img", "d_img"), 
+        ("v_img", "v_img"), 
+        ("audio_play_long", "audio_play_long"), 
+        ("current_time", "current_time"), 
+        ("last_time", "last_time"), 
+        ("played_end", "played_end"), 
+    ):
+        if key in info:
+            attr[name] = info[key]
+    return attr
+
 
 def main(
-    cookies: None | str | Path = Path(__file__).parent / "115-cookies.txt", 
+    cookies: str | Path = Path(__file__).parent / "115-cookies.txt", 
     collect: None | Callable[[dict], Any] = logger.info, 
     queue_collect: bool = False, 
 ):
-    if not cookies:
-        cookies = Path(__file__).parent / "115-cookies.txt"
     if collect is None:
         collect = logger.info
-    client = P115Client(cookies, app="harmony", check_for_relogin=True)
+    client = P115Client(cookies, app="harmony", ensure_cookies=True, check_for_relogin=True)
     urlopen = partial(request, pool=PoolManager(num_pools=50))
     client.life_calendar_setoption(request=urlopen)
     log_error = logger.exception
     running = True
+        
+    # NOTE: 文件信息缓存（不包括目录）
+    file_id_to_name: dict[int, str] = {}
+    file_id_to_mtime: dict[int, int] = {}
+
+    def watch(cid):
+        # TODO: 使用增量比较增略
+        # start = int(time())
+        for attr in iter_files(client, cid):
+            file_id = attr["file_id"]
+            file_id_to_name[file_id] = attr["file_name"]
+            file_id_to_mtime[file_id] = attr["update_time"]
+        while running:
+            for attr in iter_files(client, cid, 1000):
+                # if attr["update_time"] < start:
+                #     break
+                file_id = attr["file_id"]
+                if name := file_id_to_name.get(file_id):
+                    if name != attr["file_name"]:
+                        file_id_to_name[file_id] = attr["file_name"]
+                        file_id_to_mtime[file_id] = attr["update_time"]
+                        attr["type"] = 99
+                        attr["behavior_type"] = "rename_file"
+                        collect(attr) # type: ignore
+                else:
+                    file_id_to_name[file_id] = attr["file_name"]
+                    file_id_to_mtime[file_id] = attr["update_time"]
+                    attr["type"] = 99
+                    attr["behavior_type"] = "add_file"
+                    collect(attr) # type: ignore
+            start = int(time())
+    cid = 2580587204111760961
+    start_new_thread(watch, (cid,))
 
     if queue_collect:
-        from _thread import start_new_thread
         from queue import Queue
 
         queue: Queue = Queue()
@@ -280,8 +391,16 @@ def main(
                         item["update_time_str"] = str(datetime.fromtimestamp(item["update_time"]))
                         item["collection_start_time"] = collection_start_time
                         item["collection_id"] = get_id()
+                        file_id = item["file_id"]
+                        if behavior_type in ("upload_file", "upload_image_file", "move_file", "move_image_file"):
+                            if item.get("file_category"):
+                                file_id_to_name[file_id] = item["file_name"]
+                                file_id_to_mtime[file_id] = int(item["update_time"])
+                        elif behavior_type == "delete_file":
+                            file_id_to_name.pop(file_id, None)
+                            file_id_to_mtime.pop(file_id, None)
                         collect(item)
-                    if behavior_type == "upload_file" or len(items["items"]) == 10 and items["total"] > 10:
+                    if behavior_type.startswith("upload_") or len(items["items"]) == 10 and items["total"] > 10:
                         seen_items: set[str] = {item["id"] for item in items["items"]}
                         payload = {"offset": 0, "limit": 32, "type": behavior_type, "date": date}
                         while True:
@@ -301,6 +420,10 @@ def main(
                                 item["update_time_str"] = str(datetime.fromtimestamp(item["update_time"]))
                                 item["collection_start_time"] = collection_start_time
                                 item["collection_id"] = get_id()
+                                if item.get("file_category"):
+                                    file_id = item["file_id"]
+                                    file_id_to_name[file_id] = item["file_name"]
+                                    file_id_to_mtime[file_id] = int(item["update_time"])
                                 collect(item)
                             else:
                                 if not resp["data"]["next_page"]:
@@ -319,10 +442,12 @@ def main(
 if __name__ == "__main__":
     from textwrap import dedent
 
-    if not (cookies := args.cookies) and (cookies_path := args.cookies_path):
+    if cookies := args.cookies:
+        pass
+    elif cookies_path := args.cookies_path:
         cookies = Path(cookies_path)
-    if not cookies:
-        cookies = None
+    elif not cookies:
+        cookies = Path("~/115-cookies.txt").expanduser()
     collect = None
     if code := dedent(args.collect).strip():
         ns: dict = {"logger": logger}
@@ -339,4 +464,4 @@ if __name__ == "__main__":
 # TODO: 更详细的文档，以说明所能监控的事件范围
 # TODO: 支持一定时间返回的回溯，以监测一些删除事件，如果这个事件之前看到，现在看不到，说明文件被还原
 # TODO: 支持不休眠轮询，甚至并发轮询，每隔 0.1 秒发送一个查询，以增强实时性
-
+# TODO: 找到新的接口，以规避风控

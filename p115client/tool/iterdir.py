@@ -2387,6 +2387,9 @@ def iter_dangling_files(
 ) -> Iterator[dict] | AsyncIterator[dict]:
     """找出所有悬空的文件，即所在的目录 id 不为 0 且不存在
 
+    .. todo::
+        实际上，广义的悬空，包括所有这样的文件或目录，它们的祖先节点中存在一个节点，这个节点的 id 目前不存在于网盘（可能被删除或移入回收站）
+
     .. danger::
         你可以用 `P115Client.fs_move` 方法，把文件或目录随意移动到任何目录 id 下，即使这个 id 不存在
 
@@ -2448,7 +2451,7 @@ def iter_dangling_files(
             for info in resp["data"]:
                 if int(info["cid"]) in na_cids:
                     yield Yield(normalize_attr(info), identity=True)
-            payload["offset"] += page_size # type: ignore
+            payload["offset"] += len(resp["data"]) # type: ignore
             if payload["offset"] >= resp["count"]:
                 break
     return run_gen_step_iter(gen_step, async_=async_)
