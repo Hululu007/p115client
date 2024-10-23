@@ -304,7 +304,8 @@ AFTER UPDATE ON data
 FOR EACH ROW
 BEGIN
     UPDATE data SET updated_at = strftime('%Y-%m-%dT%H:%M:%S.%f+08:00', 'now', '+8 hours') WHERE id = NEW.id;
-    INSERT INTO event(type, old, new) VALUES (
+    INSERT INTO event(type, old, new) 
+    SELECT
         'update', 
         json_object(
             'id', old.id, 
@@ -332,7 +333,7 @@ BEGIN
             'mtime', new.mtime, 
             'path', new.path
         )
-    );
+    WHERE old.mtime != new.mtime OR old.path != new.path;
 END;
 
 -- 触发器，记录 data 表 'delete'
