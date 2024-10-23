@@ -1343,6 +1343,7 @@ class P115Client:
         if callable(check_for_relogin):
             if async_:
                 async def wrap():
+                    cookies_new: None | str
                     for i in count(0):
                         try:
                             cookies_old = self.cookies_str
@@ -1353,10 +1354,17 @@ class P115Client:
                                 res = await res
                             if not res if isinstance(res, bool) else res != 405:
                                 raise
+                            if isinstance(e, AuthenticationError):
+                                if cookies_old != self.cookies_str:
+                                    continue
+                                elif cookies_old != (cookies_new := self._read_cookies_from_path()):
+                                    setattr(self, "cookies", cookies_new)
+                                    continue
+                                raise
                             cookies = self.cookies_str
                             cookies_mtime = getattr(self, "cookies_mtime", 0)
                             async with self._request_alock:
-                                cookies_new: None | str = self.cookies_str
+                                cookies_new = self.cookies_str
                                 cookies_mtime_new = getattr(self, "cookies_mtime", 0)
                                 if cookies == cookies_new:
                                     warn("relogin to refresh cookies", category=P115Warning)
@@ -1374,6 +1382,7 @@ class P115Client:
                                             await self.login_another_app(replace=True, async_=True)
                 return wrap()
             else:
+                cookies_new: None | str
                 for i in count(0):
                     try:
                         cookies_old = self.cookies_str
@@ -1382,18 +1391,28 @@ class P115Client:
                         res = check_for_relogin(e)
                         if not res if isinstance(res, bool) else res != 405:
                             raise
+                        # TODO: 可能是被踢下线了，如果看到 cookies 被更新了就再尝试一遍
+                        if isinstance(e, AuthenticationError):
+                            if cookies_old != self.cookies_str:
+                                continue
+                            elif cookies_old != (cookies_new := self._read_cookies_from_path()):
+                                setattr(self, "cookies", cookies_new)
+                                continue
+                            raise
                         cookies = self.cookies_str
                         cookies_mtime = getattr(self, "cookies_mtime", 0)
                         with self._request_lock:
-                            cookies_new: None | str = self.cookies_str
+                            cookies_new = self.cookies_str
                             cookies_mtime_new = getattr(self, "cookies_mtime", 0)
                             if cookies == cookies_new:
                                 warn("relogin to refresh cookies", category=P115Warning)
                                 if not cookies_mtime_new or cookies_mtime == cookies_mtime_new:
+                                    # NOTE: 这意味着期间 cookies 没有被改动过，则说明重新登录依然会报错 405，那就不要再尝试了
                                     if i and cookies_old == cookies_new:
                                         raise
                                     self.login_another_app(replace=True)
                                 else:
+                                    # NOTE: 再看看 cookies 被其它进程改动了，读取 cookies 文件后比对一下，如果没有发生改动，则说明重新登录依然会报错 405，那就不要再尝试了
                                     cookies_new = self._read_cookies_from_path()
                                     if i and cookies_old == cookies_new:
                                         raise

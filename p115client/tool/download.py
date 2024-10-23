@@ -4,14 +4,14 @@
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __all__ = [
     "MakeStrmLog", "batch_get_url", "iter_images_with_url", "iter_subtitles_with_url", 
-    "make_strm", "make_strm_by_export_dir", 
+    "iter_subtitle_batches", "make_strm", "make_strm_by_export_dir", 
 ]
 __doc__ = "这个模块提供了一些和下载有关的函数"
 
 import errno
 
 from asyncio import to_thread, Semaphore, TaskGroup
-from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from glob import iglob
@@ -366,6 +366,8 @@ def iter_subtitles_with_url(
         这个函数运行时，会把相关文件以 1,000 为一批，同一批次复制到同一个新建的目录，在批量获取链接后，自动把目录删除到回收站。
 
     .. attention::
+        目前看来 115 只支持：".srt", ".ass", ".ssa"
+
         请不要把不能被 115 识别为字幕的文件扩展名放在 `suffixes` 参数中传入，这只是浪费时间，最后也只能获得普通的下载链接
 
     :param client: 115 客户端或 cookies
@@ -476,6 +478,94 @@ def iter_subtitles_with_url(
                             **request_kwargs, 
                         )
                     yield Yield(attr, identity=True)
+    return run_gen_step_iter(gen_step, async_=async_)
+
+
+@overload
+def iter_subtitle_batches(
+    client: str | P115Client, 
+    file_ids: Iterable[int], 
+    batch_size = 1_000, 
+    *, 
+    async_: Literal[False] = False, 
+    **request_kwargs, 
+) -> Iterator[dict]:
+    ...
+@overload
+def iter_subtitle_batches(
+    client: str | P115Client, 
+    file_ids: Iterable[int], 
+    batch_size = 1_000, 
+    *, 
+    async_: Literal[True], 
+    **request_kwargs, 
+) -> AsyncIterator[dict]:
+    ...
+def iter_subtitle_batches(
+    client: str | P115Client, 
+    file_ids: Iterable[int], 
+    batch_size = 1_000, 
+    *, 
+    async_: Literal[False, True] = False, 
+    **request_kwargs, 
+) -> Iterator[dict] | AsyncIterator[dict]:
+    """批量获取字幕文件的信息和下载链接
+
+    .. caution::
+        这个函数运行时，会把相关文件以 1,000 为一批，同一批次复制到同一个新建的目录，在批量获取链接后，自动把目录删除到回收站。
+
+    .. attention::
+        目前看来 115 只支持：".srt"、".ass"、".ssa"，如果不能被 115 识别为字幕，将会被自动略过
+
+    :param client: 115 客户端或 cookies
+    :param file_ids: 一组文件的 id（必须全是 115 所认为的字幕）
+    :param batch_size: 每一个批次最多处理的 id 数
+    :param async_: 是否异步
+    :param request_kwargs: 其它请求参数
+
+    :return: 迭代器，产生文件信息，并增加一个 "url" 作为下载链接，文件信息中的 file_id 是复制所得的文件信息，不是原来文件的 id
+    """
+    if isinstance(client, str):
+        client = P115Client(client, check_for_relogin=True)
+    if batch_size <= 0:
+        batch_size = 1_000
+    def gen_step():
+        nonlocal file_ids
+        if not isinstance(file_ids, Sequence):
+            file_ids = tuple(file_ids)
+        do_next: Callable = anext if async_ else next
+        for i in range(0, len(file_ids), batch_size):
+            try:
+                resp = yield client.fs_mkdir(
+                    f"subtitle-{uuid4()}", 
+                    async_=async_, 
+                    **request_kwargs, 
+                )
+                scid = resp["cid"]
+                yield client.fs_copy(
+                    file_ids[i:i+batch_size], 
+                    pid=scid, 
+                    async_=async_, 
+                    **request_kwargs, 
+                )
+                attr = yield do_next(iter_files_raw(
+                    client, 
+                    scid, 
+                    first_page_size=1, 
+                    async_=async_, 
+                    **request_kwargs, 
+                ))
+                resp = yield client.fs_video_subtitle(
+                    attr["pc"], 
+                    async_=async_, 
+                    **request_kwargs, 
+                )
+                yield YieldFrom(
+                    filter(lambda info: "file_id" in info, resp["data"]["list"]), 
+                    identity=True, 
+                )
+            finally:
+                yield client.fs_delete(scid, async_=async_, **request_kwargs)
     return run_gen_step_iter(gen_step, async_=async_)
 
 

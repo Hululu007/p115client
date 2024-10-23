@@ -253,7 +253,7 @@ CREATE TABLE IF NOT EXISTS data (
     ctime INTEGER NOT NULL DEFAULT 0,  -- 创建时间戳，一旦设置就不会更新
     mtime INTEGER NOT NULL DEFAULT 0,  -- 更新时间戳，如果名字、备注被设置（即使值没变），或者（如果自己是目录）进出回收站或增删直接子节点或设置封面，会更新此值，但移动并不更新
     path TEXT NOT NULL DEFAULT '',     -- 路径
-    updated_at DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%S.%f+08:00', 'now', '+8 hours')) -- 最近一次更新时间
+    updated_at DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+08:00', 'now', '+8 hours')) -- 最近一次更新时间
 );
 
 -- 创建 dir 表，用来存储所有看到的目录数据，只增改而不删
@@ -273,7 +273,7 @@ CREATE TABLE IF NOT EXISTS event (
     old JSON, -- 旧数据
     new JSON, -- 新数据
     summary JSON NOT NULL DEFAULT '{}', -- 概要，发生的事件集
-    created_at DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%S.%f+08:00', 'now', '+8 hours')) -- 创建时间
+    created_at DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+08:00', 'now', '+8 hours')) -- 创建时间
 );
 
 -- 触发器，记录 data 表 'insert'
@@ -305,7 +305,7 @@ CREATE TRIGGER IF NOT EXISTS trg_data_update
 AFTER UPDATE ON data 
 FOR EACH ROW
 BEGIN
-    UPDATE data SET updated_at = strftime('%Y-%m-%dT%H:%M:%S.%f+08:00', 'now', '+8 hours') WHERE id = NEW.id;
+    UPDATE data SET updated_at = strftime('%Y-%m-%dT%H:%M:%f+08:00', 'now', '+8 hours') WHERE id = NEW.id;
     INSERT INTO event(type, old, new, summary) 
     SELECT
         'update', 
