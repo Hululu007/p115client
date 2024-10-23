@@ -272,7 +272,9 @@ CREATE TABLE IF NOT EXISTS event (
     type TEXT, -- 类型，可能是 'insert'、'update' 或 'delete' 之一
     old JSON, -- 旧数据
     new JSON, -- 新数据
-    created_at DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%S.%f+08:00', 'now', '+8 hours')) -- 创建时间
+    summary JSON NOT NULL DEFAULT '{}', -- 概要，事件列表
+    created_at DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%S.%f+08:00', 'now', '+8 hours')), -- 创建时间
+    id INTEGER GENERATED ALWAYS AS (COALESCE(old->'id', new->'id')) STORED -- 数据的 id
 );
 
 -- 触发器，记录 data 表 'insert'
@@ -280,7 +282,7 @@ CREATE TRIGGER IF NOT EXISTS trg_data_insert
 AFTER INSERT ON data
 FOR EACH ROW
 BEGIN
-    INSERT INTO event(type, new) VALUES (
+    INSERT INTO event(type, new, summary) VALUES (
         'insert', 
         json_object(
             'id', new.id, 
@@ -294,7 +296,8 @@ BEGIN
             'ctime', new.ctime, 
             'mtime', new.mtime, 
             'path', new.path
-        )
+        ),
+        json_object('add', new.path)
     );
 END;
 
@@ -304,7 +307,7 @@ AFTER UPDATE ON data
 FOR EACH ROW
 BEGIN
     UPDATE data SET updated_at = strftime('%Y-%m-%dT%H:%M:%S.%f+08:00', 'now', '+8 hours') WHERE id = NEW.id;
-    INSERT INTO event(type, old, new) 
+    INSERT INTO event(type, old, new, summary) 
     SELECT
         'update', 
         json_object(
@@ -332,8 +335,12 @@ BEGIN
             'ctime', new.ctime, 
             'mtime', new.mtime, 
             'path', new.path
+        ), 
+        json_object(
+            'move', CASE WHEN old.parent_id != new.parent_id OR (old.name = new.name AND old.path != new.path) THEN json_array(old.path, new.path) END, 
+            'rename', CASE WHEN old.name != new.name THEN json_array(old.name, new.name) END
         )
-    WHERE old.mtime != new.mtime OR old.path != new.path;
+    WHERE old.mtime != new.mtime OR old.name != new.name OR old.path != new.path;
 END;
 
 -- 触发器，记录 data 表 'delete'
@@ -341,7 +348,7 @@ CREATE TRIGGER IF NOT EXISTS trg_data_delete
 AFTER DELETE ON data
 FOR EACH ROW
 BEGIN
-    INSERT INTO event(type, old) VALUES (
+    INSERT INTO event(type, old, summary) VALUES (
         'delete', 
         json_object(
             'id', old.id, 
@@ -355,7 +362,8 @@ BEGIN
             'ctime', old.ctime, 
             'mtime', old.mtime, 
             'path', old.path
-        )
+        ), 
+        json_object('delete', old.path)
     );
 END;
 
@@ -363,6 +371,7 @@ END;
 CREATE INDEX IF NOT EXISTS idx_data_parent_id ON data(parent_id);
 CREATE INDEX IF NOT EXISTS idx_data_path ON data(path);
 CREATE INDEX IF NOT EXISTS idx_dir_mtime ON dir(mtime);
+CREATE INDEX IF NOT EXISTS idx_event_created_at ON event(created_at);
 """)
 
 
@@ -562,7 +571,7 @@ ON CONFLICT(id) DO UPDATE SET
     name      = CASE WHEN is_dir THEN name ELSE excluded.name END,
     ctime     = excluded.ctime,
     mtime     = excluded.mtime,
-    path      = excluded.path
+    path      = CASE WHEN is_dir THEN path ELSE excluded.path END
 """
     if isinstance(items, Mapping):
         items = items,
@@ -913,7 +922,7 @@ def diff_dir(
     id: int = 0, 
     /, 
     tree: bool = False, 
-    dir_ids: None | list[int] = None, 
+    dir_ids: None | set[int] = None, 
 ) -> tuple[list[int], list[dict]]:
     """拉取数据，确定哪些记录需要删除或更替
 
@@ -978,13 +987,14 @@ def diff_dir(
             for a in ancestors:
                 ID_TO_DIRNODE[a["id"]] = DirNodeTuple((a["name"], a["parent_id"]))
             if dir_ids is not None:
-                dir_ids.extend(a["id"] for a in ancestors)
+                dir_ids.update(a["id"] for a in ancestors)
         if dirs:
             insert_dir_items(con, dirs)
             for a in dirs:
                 ID_TO_DIRNODE[a["id"]] = DirNodeTuple((a["name"], a["parent_id"]))
             if dir_ids is not None:
-                dir_ids.extend(a["id"] for a in ancestors)
+                dir_ids.update(a["id"] for a in dirs)
+
 
 def updatedb_one(
     client: str | P115Client, 
@@ -1002,7 +1012,7 @@ def updatedb_one(
         con = dbfile
         start = perf_counter()
         try:
-            dir_ids: list[int] = []
+            dir_ids: set[int] = set()
             to_delete, to_replace = diff_dir(con, client, id, dir_ids=dir_ids)
             with transaction(con):
                 if to_delete:
@@ -1059,7 +1069,7 @@ def updatedb_tree(
         try:
             to_delete, to_replace = diff_dir(con, client, id, tree=True)
             custom_no_dir_moved = no_dir_moved
-            dir_ids: list[int] = []
+            dir_ids: set[int] = set()
             if to_delete:
                 # 找出所有待删除记录的祖先节点 id，并更新它们的 mtime
                 all_pids: set[int] = set()
@@ -1084,14 +1094,14 @@ def updatedb_tree(
                             update_desc(client, find_ids)
                         else:
                             update_desc(client, pids)
-                        dir_ids += (a["id"] for a in update_id_to_dirnode(con, client))
+                        dir_ids.update(a["id"] for a in update_id_to_dirnode(con, client))
                         no_dir_moved = True
                     elif not custom_no_dir_moved:
                         update_desc(client, pids)
                         no_dir_moved = False
                     pids = {ppid for pid in pids if (ppid := ID_TO_DIRNODE[pid][1]) and ppid not in all_pids}
             if not no_dir_moved:
-                dir_ids += (a["id"] for a in update_id_to_dirnode(con, client))
+                dir_ids.update(a["id"] for a in update_id_to_dirnode(con, client))
             if to_replace and all_pids:
                 # 把所有相关的目录 id 添加到待更替列表
                 to_replace += select_items_from_dir(con, all_pids)
