@@ -557,13 +557,12 @@ class P115Client:
                 self.cookies_path = Path(fsdecode(cookies))
             cookies = self._read_cookies_from_path()
         if cookies is None:
-            resp = self.login_with_qrcode(app, console_qrcode=console_qrcode)
-            cookies = resp["data"]["cookie"]
-            ensure_cookies = False
-        if cookies:
-            setattr(self, "cookies", cookies)
-        if ensure_cookies:
-            self.login(app, console_qrcode=console_qrcode)
+            resp = self.login(app, console_qrcode=console_qrcode)
+        else:
+            if cookies:
+                setattr(self, "cookies", cookies)
+            if ensure_cookies:
+                self.login(app, console_qrcode=console_qrcode)
         if check_for_relogin is True:
             check_for_relogin = default_check_for_relogin
         self.check_for_relogin = check_for_relogin

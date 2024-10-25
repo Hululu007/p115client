@@ -28,7 +28,7 @@ __doc__ = """\
 
         \x1b[5m🔨\x1b[0m 如何运行 \x1b[5m🪛\x1b[0m
 
-在脚本所在目录下，创建一个 \x1b[4m\x1b[34m115-cookies.txt\x1b[0m，并把 115 的 cookies 保存其中，格式为
+请在当前工作目录下创建一个 \x1b[4m\x1b[34m115-cookies.txt\x1b[0m，并把 115 的 cookies 保存其中，格式为
 
     UID=...; CID=...; SEID=...
 
@@ -57,7 +57,7 @@ if __name__ == "__main__":
     from argparse import ArgumentParser, RawTextHelpFormatter
 
     parser = ArgumentParser(formatter_class=RawTextHelpFormatter, description=__doc__)
-    parser.add_argument("-cp", "--cookies-path", default="", help="cookies 文件保存路径，默认是此脚本同一目录下的 115-cookies.txt")
+    parser.add_argument("-cp", "--cookies-path", default="", help="cookies 文件保存路径，默认为当前工作目录下的 115-cookies.txt")
     parser.add_argument("-p", "--password", help="执行 POST 请求所需密码")
     parser.add_argument("-t", "--token", default="", help="用于给链接进行签名的 token，如果不提供则无签名")
     parser.add_argument("-pcs", "--path-cache-size", type=int, default=1048576, help="路径缓存的容量大小，默认值 1048576，等于 0 时关闭，小于等于 0 时不限")
@@ -139,7 +139,7 @@ def make_application(
     if cookies_path:
         cookies_path = Path(cookies_path)
     else:
-        cookies_path = Path(__file__).parent / "115-cookies.txt"
+        cookies_path = Path("115-cookies.txt")
     # NOTE: id   到 pickcode 的映射
     ID_TO_PICKCODE: MutableMapping[str, str] = LRUCache(65536)
     # NOTE: sha1 到 pickcode 的映射

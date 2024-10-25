@@ -273,7 +273,7 @@ def get_id_to_path(
 
     :param client: 115 客户端或 cookies
     :param path: 路径
-    :param ensure_dir: 是否确保为文件
+    :param ensure_file: 是否确保为文件
 
         - True: 必须是文件
         - False: 必须是目录
