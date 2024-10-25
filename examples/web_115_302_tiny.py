@@ -2,8 +2,9 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 0, 1)
-__doc__ = """\t115 302 微型版，仅支持用 pickcode 或 sha1 查询
+__version__ = (0, 0, 2)
+__doc__ = """\
+    🛫 115 302 微型版，仅支持用 pickcode 或 sha1 查询 🛬
 
 此版本不依赖于 p115client 和 pycryptodome，且 Python 版本可低于 3.10
 
@@ -17,9 +18,9 @@ __doc__ = """\t115 302 微型版，仅支持用 pickcode 或 sha1 查询
         http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?pickcode=ecjq9ichcb40lzlvx
     3. 查询 sha1
         http://localhost:8000?E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
-        http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
-    4. 带（任意）名字查询 sha1
         http://localhost:8000?sha1=E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
+    4. 带（任意）名字查询 sha1
+        http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
         http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?sha1=E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
 """
 __requirements__ = ["flask", "urllib3"]
@@ -65,7 +66,7 @@ RSA_n = 0x10001
 CRE_SHA1_match = re_compile(r"[0-9a-fA-F]{40}").fullmatch
 to_bytes = partial(int.to_bytes, byteorder="big", signed=False)
 from_bytes = partial(int.from_bytes, byteorder="big", signed=False)
-urlopen = PoolManager(100).request
+urlopen = PoolManager(128).request
 
 app = Flask(__name__)
 
@@ -126,7 +127,7 @@ def encrypt(data):
 
 
 def decrypt(cipher_data):
-    "RSA 加密"
+    "RSA 解密"
     cipher_data = memoryview(b64decode(cipher_data))
     data = bytearray()
     for l, r, _ in acc_step(0, len(cipher_data), 128):
