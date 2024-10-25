@@ -62,6 +62,7 @@ except ImportError:
 G_kts = b"\xf0\xe5i\xae\xbf\xdc\xbf\x8a\x1aE\xe8\xbe}\xa6s\xb8\xde\x8f\xe7\xc4E\xda\x86\xc4\x9bd\x8b\x14j\xb4\xf1\xaa8\x015\x9e&i,\x86\x00kO\xa564b\xa6*\x96h\x18\xf2J\xfd\xbdk\x97\x8fM\x8f\x89\x13\xb7l\x8e\x93\xed\x0e\rH>\xd7/\x88\xd8\xfe\xfe~\x86P\x95O\xd1\xeb\x83&4\xdbf{\x9c~\x9dz\x812\xea\xb63\xde:\xa9Y4f;\xaa\xba\x81`H\xb9\xd5\x81\x9c\xf8l\x84w\xffTx&_\xbe\xe8\x1e6\x9f4\x80\\E,\x9bv\xd5\x1b\x8f\xcc\xc3\xb8\xf5"
 RSA_e = 0x8686980c0f5a24c4b9d43020cd2c22703ff3f450756529058b1cf88f09b8602136477198a6e2683149659bd122c33592fdb5ad47944ad1ea4d36c6b172aad6338c3bb6ac6227502d010993ac967d1aef00f0c8e038de2e4d3bc2ec368af2e9f10a6f1eda4f7262f136420c07c331b871bf139f74f3010e3c4fe57df3afb71683 
 RSA_n = 0x10001
+SHA1_TO_PICKCODE = {} # type: dict[str, str]
 
 CRE_SHA1_match = re_compile(r"[0-9a-fA-F]{40}").fullmatch
 to_bytes = partial(int.to_bytes, byteorder="big", signed=False)
@@ -159,7 +160,9 @@ def get_pickcode_for_sha1(sha1):
         headers={"Cookie": cookies}, 
     ).json()
     if resp["state"]:
-        return resp["data"]["pick_code"]
+        info = resp["data"]
+        pickcode = SHA1_TO_PICKCODE[info["file_id"]] = info["pick_code"]
+        return pickcode
 
 
 def get_downurl(pickcode, user_agent = ""):
