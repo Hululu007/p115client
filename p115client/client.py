@@ -11,7 +11,7 @@ from collections.abc import (
     AsyncGenerator, AsyncIterable, Awaitable, Callable, Coroutine, Generator, 
     ItemsView, Iterable, Iterator, Mapping, MutableMapping, Sequence, 
 )
-from contextlib import closing, asynccontextmanager
+from contextlib import asynccontextmanager, closing
 from datetime import date, datetime
 from functools import cached_property, partial
 from hashlib import sha1
@@ -68,6 +68,7 @@ CRE_SET_COOKIE: Final = re_compile(r"[0-9a-f]{32}=[0-9a-f]{32}.*")
 CRE_CLIENT_API_search: Final = re_compile("^ +((?:GET|POST) .*)", MULTILINE).search
 CRE_SHARE_LINK_search1: Final = re_compile(r"(?:/s/|share\.115\.com/)(?P<share_code>[a-z0-9]+)\?password=(?P<receive_code>[a-z0-9]{4})").search
 CRE_SHARE_LINK_search2: Final = re_compile(r"(?P<share_code>[a-z0-9]+)-(?P<receive_code>[a-z0-9]{4})").search
+CRE_115_DOMAIN_match: Final = re_compile("https?://(?:[^.]+\.)*115.com").match
 ED2K_NAME_TRANSTAB: Final = dict(zip(b"/|", ("%2F", "%7C")))
 WEBAPI_SUB_ROUTERS: Final = ("/category", "/files", "/history", "/label", "/movies", "/offine", "/photo", "/rb", "/share", "/user", "/usershare")
 
@@ -1327,21 +1328,23 @@ class P115Client:
         """
         if params:
             url = make_url(url, params)
+        need_cookie_header = CRE_115_DOMAIN_match(url) is None
         check_for_relogin = getattr(self, "check_for_relogin", None)
         request_kwargs.setdefault("parse", default_parse)
-        use_default_request = request is None
+        if not need_cookie_header:
+            need_cookie_header = request is not None
         if request is None:
             request_kwargs["session"] = self.async_session if async_ else self.session
             request_kwargs["async_"] = async_
             request = get_default_request()
         if (headers := request_kwargs.get("headers")) is not None:
             headers = request_kwargs["headers"] = {**self.headers, **headers}
-            if use_default_request:
+            if not need_cookie_header:
                 if not any(k.lower() == "cookie" for k in headers):
                     headers = None
             elif not any(k.lower() == "cookie" for k in headers):
                 headers["Cookie"] = self.cookies_str
-        elif not use_default_request:
+        elif need_cookie_header:
             headers = request_kwargs["headers"] = {**self.headers, "Cookie": self.cookies_str}
         if callable(check_for_relogin):
             if async_:
@@ -9105,6 +9108,7 @@ class P115Client:
         upload_directly: None | bool = False, 
         multipart_resume_data: None | MultipartResumeData = None, 
         make_reporthook: None | Callable[[None | int], Callable[[int], Any] | Generator[int, Any, Any] | AsyncGenerator[int, Any]] = None, 
+        close_file: bool = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -9124,6 +9128,7 @@ class P115Client:
         upload_directly: None | bool = False, 
         multipart_resume_data: None | MultipartResumeData = None, 
         make_reporthook: None | Callable[[None | int], Callable[[int], Any] | Generator[int, Any, Any] | AsyncGenerator[int, Any]] = None, 
+        close_file: bool = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -9142,6 +9147,7 @@ class P115Client:
         upload_directly: None | bool = False, 
         multipart_resume_data: None | MultipartResumeData = None, 
         make_reporthook: None | Callable[[None | int], Callable[[int], Any] | Generator[int, Any, Any] | AsyncGenerator[int, Any]] = None, 
+        close_file: bool = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -9150,25 +9156,6 @@ class P115Client:
         """
         def gen_step():
             nonlocal file, filename, filesize, filesha1
-            def reload():
-                kwargs = dict(
-                    file=file, 
-                    filename=filename, 
-                    pid=pid, 
-                    filesize=filesize, 
-                    filesha1=filesha1, 
-                    partsize=partsize, 
-                    upload_directly=upload_directly, 
-                    make_reporthook=make_reporthook, 
-                )
-                if async_:
-                    async def async_request():
-                        async with async_closing(file):
-                            return await self.upload_file(async_=True, **kwargs, **request_kwargs) # type: ignore
-                    return async_request()
-                else:
-                    with closing(file): # type: ignore
-                        return self.upload_file(**kwargs, **request_kwargs) # type: ignore
             need_calc_filesha1 = (
                 not filesha1 and
                 not upload_directly and
@@ -9185,7 +9172,7 @@ class P115Client:
                     filesha1 = sha1(file).hexdigest()
                 if not upload_directly and multipart_resume_data is None and filesize >= 1 << 20:
                     view = memoryview(file)
-                    def read_range_bytes_or_hash(sign_check: str):
+                    def read_range_bytes_or_hash(sign_check: str, *, close: bool = False):
                         start, end = map(int, sign_check.split("-"))
                         return view[start:end+1]
             elif isinstance(file, (str, PathLike)):
@@ -9203,7 +9190,19 @@ class P115Client:
                     file = yield partial(open_file, "rb")
                 else:
                     file = open_file("rb")
-                return (yield reload)
+                return (yield self.upload_file(
+                    file=file, 
+                    filename=filename, 
+                    pid=pid, 
+                    filesize=filesize, 
+                    filesha1=filesha1, 
+                    partsize=partsize, 
+                    upload_directly=upload_directly, 
+                    make_reporthook=make_reporthook, 
+                    close_file=True, 
+                    async_=async_, # type: ignore
+                    **request_kwargs, 
+                ))
             elif isinstance(file, SupportsRead):
                 seekable = False
                 seek = getattr(file, "seek", None)
@@ -9228,7 +9227,19 @@ class P115Client:
                             else:
                                 copyfileobj(fsrc, file)
                             file.seek(0)
-                            return (yield reload)
+                            return (yield self.upload_file(
+                                file=file, 
+                                filename=filename, 
+                                pid=pid, 
+                                filesize=filesize, 
+                                filesha1=filesha1, 
+                                partsize=partsize, 
+                                upload_directly=upload_directly, 
+                                make_reporthook=make_reporthook, 
+                                close_file=close_file, 
+                                async_=async_, # type: ignore
+                                **request_kwargs, 
+                            ))
                     try:
                         if async_:
                             filesize, filesha1_obj = yield file_digest_async(file, "sha1")
@@ -9256,7 +9267,10 @@ class P115Client:
                     if seekable:
                         if async_:
                             read = ensure_async(file.read, threaded=True)
-                            async def read_range_bytes_or_hash(sign_check: str):
+                            async def read_range_bytes_or_hash(sign_check: str, *, close: bool = False):
+                                if close:
+                                    async with async_closing(file):
+                                        return await cast(Callable, read_range_bytes_or_hash)(sign_check)
                                 start, end = map(int, sign_check.split("-"))
                                 try:
                                     await seek(curpos + start)
@@ -9265,7 +9279,10 @@ class P115Client:
                                     await seek(curpos)
                         else:
                             read = file.read
-                            def read_range_bytes_or_hash(sign_check: str):
+                            def read_range_bytes_or_hash(sign_check: str, *, close: bool = False):
+                                if close:
+                                    with closing(file): # type: ignore
+                                        return cast(Callable, read_range_bytes_or_hash)(sign_check)
                                 start, end = map(int, sign_check.split("-"))
                                 try:
                                     seek(curpos + start)
@@ -9293,14 +9310,38 @@ class P115Client:
                         filesize = file.length
                     except Exception:
                         pass
-                return (yield reload)
+                return (yield self.upload_file(
+                    file=file, 
+                    filename=filename, 
+                    pid=pid, 
+                    filesize=filesize, 
+                    filesha1=filesha1, 
+                    partsize=partsize, 
+                    upload_directly=upload_directly, 
+                    make_reporthook=make_reporthook, 
+                    close_file=close_file, 
+                    async_=async_, # type: ignore
+                    **request_kwargs, 
+                ))
             else:
                 if need_calc_filesha1:
                     if async_:
                         file = bytes_iter_to_async_reader(file) # type: ignore
                     else:
                         file = bytes_iter_to_reader(file) # type: ignore
-                    return (yield reload)
+                    return (yield self.upload_file(
+                        file=file, 
+                        filename=filename, 
+                        pid=pid, 
+                        filesize=filesize, 
+                        filesha1=filesha1, 
+                        partsize=partsize, 
+                        upload_directly=upload_directly, 
+                        make_reporthook=make_reporthook, 
+                        close_file=close_file, 
+                        async_=async_, # type: ignore
+                        **request_kwargs, 
+                    ))
                 if not upload_directly and multipart_resume_data is None and filesize >= 1 << 20:
                     filesize = 0
             if multipart_resume_data is not None:
@@ -9395,7 +9436,10 @@ class P115Client:
                     filename=filename, 
                     filesize=filesize, 
                     filesha1=filesha1, 
-                    read_range_bytes_or_hash=read_range_bytes_or_hash, 
+                    read_range_bytes_or_hash=(
+                        None if read_range_bytes_or_hash is None 
+                        else partial(read_range_bytes_or_hash, close=close_file)
+                    ), 
                     pid=pid, 
                     **request_kwargs, 
                 )

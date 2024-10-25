@@ -3,16 +3,24 @@
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __version__ = (0, 0, 1)
-__doc__ = """\t115 302 微型版，仅支持用 pickcode 查询
+__doc__ = """\t115 302 微型版，仅支持用 pickcode 或 sha1 查询
 
 此版本不依赖于 p115client 和 pycryptodome，且 Python 版本可低于 3.10
 
 查询示例：
 
-    1. http://localhost:8000?ecjq9ichcb40lzlvx
-    2. http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?ecjq9ichcb40lzlvx
-    3. http://localhost:8000?pickcode=ecjq9ichcb40lzlvx
-    4. http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?pickcode=ecjq9ichcb40lzlvx
+    1. 查询 pickcode
+        http://localhost:8000?ecjq9ichcb40lzlvx
+        http://localhost:8000?pickcode=ecjq9ichcb40lzlvx
+    2. 带（任意）名字查询 pickcode
+        http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?ecjq9ichcb40lzlvx
+        http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?pickcode=ecjq9ichcb40lzlvx
+    3. 查询 sha1
+        http://localhost:8000?E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
+        http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
+    4. 带（任意）名字查询 sha1
+        http://localhost:8000?sha1=E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
+        http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?sha1=E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
 """
 __requirements__ = ["flask", "urllib3"]
 
@@ -43,6 +51,7 @@ except ImportError:
 
 from base64 import b64decode, b64encode
 from functools import partial
+from re import compile as re_compile
 try:
     from orjson import loads
 except ImportError:
@@ -53,6 +62,7 @@ G_kts = b"\xf0\xe5i\xae\xbf\xdc\xbf\x8a\x1aE\xe8\xbe}\xa6s\xb8\xde\x8f\xe7\xc4E\
 RSA_e = 0x8686980c0f5a24c4b9d43020cd2c22703ff3f450756529058b1cf88f09b8602136477198a6e2683149659bd122c33592fdb5ad47944ad1ea4d36c6b172aad6338c3bb6ac6227502d010993ac967d1aef00f0c8e038de2e4d3bc2ec368af2e9f10a6f1eda4f7262f136420c07c331b871bf139f74f3010e3c4fe57df3afb71683 
 RSA_n = 0x10001
 
+CRE_SHA1_match = re_compile(r"[0-9a-fA-F]{40}").fullmatch
 to_bytes = partial(int.to_bytes, byteorder="big", signed=False)
 from_bytes = partial(int.from_bytes, byteorder="big", signed=False)
 urlopen = PoolManager(100).request
@@ -87,8 +97,7 @@ def gen_key(rand_key, sk_len) -> bytearray:
 
 
 def pad_pkcs1_v1_5(message):
-    pad = b"\x00" + b"\x02" * (128 - len(message) - 2) + b"\x00"
-    return from_bytes(pad + message)
+    return from_bytes(b"\x00" + b"\x02" * (126 - len(message)) + b"\x00" + message)
 
 
 def xor(src, key):
@@ -130,14 +139,36 @@ def decrypt(cipher_data):
     return xor(tmp, b"\x8d\xa5\xa5\x8d")
 
 
-def get_downurl(cookies, pickcode, user_agent = ""):
+def find_query_value(query, key):
+    index = query.find(key+"=")
+    if index >= 0:
+        start = index + len(key) + 1
+        stop = query.find("&", start)
+        if stop == -1:
+            return query[start:].strip()
+        else:
+            return query[start:stop].strip()
+    return ""
+
+
+def get_pickcode_for_sha1(sha1):
+    resp = urlopen(
+        "GET", 
+        f"https://webapi.115.com/files/shasearch?sha1={sha1}", 
+        headers={"Cookie": cookies}, 
+    ).json()
+    if resp["state"]:
+        return resp["data"]["pick_code"]
+
+
+def get_downurl(pickcode, user_agent = ""):
     """获取文件的下载链接
     """
     resp = urlopen(
         "POST", 
         "https://proapi.115.com/app/chrome/downurl", 
-        body=b"data=" + encrypt(b'{"pickcode":"%s"}' % bytes(pickcode, "ascii")), 
-        headers={"Cookie": cookies, "User-Agent": user_agent, "Content-Type": "application/x-www-form-urlencoded"}, 
+        fields={"data": encrypt(b'{"pickcode":"%s"}' % bytes(pickcode, "ascii")).decode("ascii")}, 
+        headers={"Cookie": cookies, "User-Agent": user_agent}, 
     ).json()
     if resp["state"]:
         resp["data"] = loads(decrypt(resp["data"]))
@@ -147,29 +178,36 @@ def get_downurl(cookies, pickcode, user_agent = ""):
 @app.route("/", methods=["GET", "HEAD"])
 @app.route("/<path:name>", methods=["GET", "HEAD"])
 def index(name=""):
-    user_agent = request.headers.get("user-agent", "")
-    query_string = request.query_string.decode()
-    index = query_string.find("pickcode=")
-    if index >= 0:
-        start = index + len("pickcode=")
-        stop = query_string.find("&", start)
-        if stop == -1:
-            pickcode = query_string[start:]
-        else:
-            pickcode = query_string[start:stop]
-    else:
+    query_string = request.query_string.decode().strip()
+    pickcode = find_query_value(query_string, "pickcode")
+    if not pickcode:
+        sha1 = find_query_value(query_string, "sha1")
+        if sha1:
+            if CRE_SHA1_match(sha1) is None:
+                return Response(f"bad sha1: {sha1!r}", 400)
+        elif CRE_SHA1_match(query_string) is not None:
+            sha1 = query_string
+        if sha1:
+            pickcode = get_pickcode_for_sha1(sha1)
+            if not pickcode:
+                return Response(f"no file with sha1: {sha1!r}", 404)
+    if not pickcode:
         pickcode = query_string
-    resp = get_downurl(cookies, pickcode, user_agent)
+    if not pickcode.isalnum():
+        return Response(f"bad pickcode: {pickcode!r}", 400)
+    user_agent = request.headers.get("user-agent", "")
+    resp = get_downurl(pickcode, user_agent)
     if resp["state"]:
         item = next(iter(resp["data"].values()))
         if item["url"]:
             return redirect(item["url"]["url"])
-    return Response("bad pickcode", 400)
+    return Response(f"no file with pickcode: {pickcode!r}", 404)
 
 
 if __name__ == "__main__":
     cookies_path = args.cookies_path or "115-cookies.txt"
     cookies = open(cookies_path, encoding="latin-1").read()
+    print(__doc__)
     app.run(
         host=args.host, 
         port=args.port, 
