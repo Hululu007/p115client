@@ -52,7 +52,7 @@ except ImportError:
 
 from base64 import b64decode, b64encode
 from functools import partial
-from re import compile as re_compile
+from string import hexdigits
 try:
     from orjson import loads
 except ImportError:
@@ -64,7 +64,6 @@ RSA_e = 0x8686980c0f5a24c4b9d43020cd2c22703ff3f450756529058b1cf88f09b86021364771
 RSA_n = 0x10001
 SHA1_TO_PICKCODE = {} # type: dict[str, str]
 
-CRE_SHA1_match = re_compile(r"[0-9a-fA-F]{40}").fullmatch
 to_bytes = partial(int.to_bytes, byteorder="big", signed=False)
 from_bytes = partial(int.from_bytes, byteorder="big", signed=False)
 urlopen = PoolManager(128).request
@@ -154,6 +153,9 @@ def find_query_value(query, key):
 
 
 def get_pickcode_for_sha1(sha1):
+    pickcode = SHA1_TO_PICKCODE.get(sha1)
+    if pickcode:
+        return pickcode
     resp = urlopen(
         "GET", 
         f"https://webapi.115.com/files/shasearch?sha1={sha1}", 
@@ -161,7 +163,7 @@ def get_pickcode_for_sha1(sha1):
     ).json()
     if resp["state"]:
         info = resp["data"]
-        pickcode = SHA1_TO_PICKCODE[info["file_id"]] = info["pick_code"]
+        pickcode = SHA1_TO_PICKCODE[sha1] = info["pick_code"]
         return pickcode
 
 
@@ -187,12 +189,12 @@ def index(name=""):
     if not pickcode:
         sha1 = find_query_value(query_string, "sha1")
         if sha1:
-            if CRE_SHA1_match(sha1) is None:
+            if sha1.strip(hexdigits):
                 return Response(f"bad sha1: {sha1!r}", 400)
-        elif CRE_SHA1_match(query_string) is not None:
+        elif len(query_string) == 40 and not query_string.strip(hexdigits):
             sha1 = query_string
         if sha1:
-            pickcode = get_pickcode_for_sha1(sha1)
+            pickcode = get_pickcode_for_sha1(sha1.upper())
             if not pickcode:
                 return Response(f"no file with sha1: {sha1!r}", 404)
     if not pickcode:
@@ -200,7 +202,7 @@ def index(name=""):
     if not pickcode.isalnum():
         return Response(f"bad pickcode: {pickcode!r}", 400)
     user_agent = request.headers.get("user-agent", "")
-    resp = get_downurl(pickcode, user_agent)
+    resp = get_downurl(pickcode.lower(), user_agent)
     if resp["state"]:
         item = next(iter(resp["data"].values()))
         if item["url"]:

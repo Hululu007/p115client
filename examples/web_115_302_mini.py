@@ -30,6 +30,7 @@ except ImportError:
     from p115client import P115Client
 
 from pathlib import Path
+from string import hexdigits
 
 
 if __name__ == "__main__":
@@ -39,8 +40,8 @@ else:
 client = P115Client(cookies_path, app="harmony", check_for_relogin=True)
 
 app = Application()
-id_to_pickcode: dict[int, str] = {}
-sha1_to_pickcode: dict[str, str] = {}
+ID_TO_PICKCODE: dict[int, str] = {}
+SHA1_TO_PICKCODE: dict[str, str] = {}
 
 
 @route("/", methods=["GET", "HEAD"])
@@ -51,16 +52,20 @@ async def index(
     id: int = 0, 
     sha1: str = "", 
 ):
-    if pickcode := pickcode.strip():
-        pass
-    elif id and not (pickcode := id_to_pickcode.get(id, "")):
+    if pickcode := pickcode.strip().lower():
+        if not pickcode.isalnum():
+            return text(f"bad pickcode: {pickcode!r}", 400)
+    elif id and not (pickcode := ID_TO_PICKCODE.get(id, "")):
         resp = await client.fs_file_skim(id, async_=True)
         if resp and resp["state"]:
-            pickcode = id_to_pickcode[id] = resp["data"][0]["pick_code"]
-    elif (sha1 := sha1.strip()) and not (pickcode := sha1_to_pickcode.get(sha1, "")):
-        resp = await client.fs_shasearch(sha1, async_=True)
-        if resp and resp["state"]:
-            pickcode = sha1_to_pickcode[sha1] = resp["data"]["pick_code"]
+            pickcode = ID_TO_PICKCODE[id] = resp["data"][0]["pick_code"]
+    elif sha1 := sha1.strip().upper():
+        if len(sha1) != 40 or sha1.strip(hexdigits):
+            return text(f"bad sha1: {sha1!r}", 400)
+        if not (pickcode := SHA1_TO_PICKCODE.get(sha1, "")):
+            resp = await client.fs_shasearch(sha1, async_=True)
+            if resp and resp["state"]:
+                pickcode = SHA1_TO_PICKCODE[sha1] = resp["data"]["pick_code"]
     if not pickcode:
         return text("Bad Request: Missing or bad query parameter: `pickcode`, `id` nor `sha1`", 400)
     user_agent = request.headers.get_first(b"user-agent") or b""

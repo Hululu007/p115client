@@ -100,6 +100,7 @@ from functools import partial
 from hashlib import sha1 as calc_sha1
 from math import isinf, isnan, nan
 from pathlib import Path
+from string import hexdigits
 from time import time
 from urllib.parse import unquote
 
@@ -335,22 +336,29 @@ def make_application(
                 return json({"state": False, "message": "invalid sign"}, 403)
             elif t > 0 and t <= time():
                 return json({"state": False, "message": "url was expired"}, 401)
-        if pickcode := pickcode.strip():
+        if pickcode := pickcode.strip().lower():
             if resp := check_sign(pickcode):
                 return resp
+            if not pickcode.isalnum():
+                return json({"state": False, "message": f"bad pickcode: {pickcode!r}"}, 400)
         elif id := id.strip():
             if resp := check_sign(id):
                 return resp
+            if id.startswith("0") or not id.isdecimal():
+                return json({"state": False, "message": f"bad id: {id!r}"}, 400)
             if not (pickcode := ID_TO_PICKCODE.get(id, "")):
                 resp = await p115client.fs_file_skim(id, async_=True, request=blacksheep_request, session=client)
                 if resp and resp["state"]:
-                    pickcode = resp["data"][0]["pick_code"]
-        elif sha1 := sha1.strip():
+                    pickcode = ID_TO_PICKCODE[id] = resp["data"][0]["pick_code"]
+        elif sha1 := sha1.strip().upper():
             if resp := check_sign(sha1):
                 return resp
-            resp = await p115client.fs_shasearch(sha1, async_=True, request=blacksheep_request, session=client)
-            if resp and resp["state"]:
-                pickcode = resp["data"]["pick_code"]
+            if len(sha1) != 40 or sha1.strip(hexdigits):
+                return json({"state": False, "message": f"bad sha1: {sha1!r}"}, 400)
+            if not (pickcode := SHA1_TO_PICKCODE.get(sha1, "")):
+                resp = await p115client.fs_shasearch(sha1, async_=True, request=blacksheep_request, session=client)
+                if resp and resp["state"]:
+                    pickcode = SHA1_TO_PICKCODE[sha1] = resp["data"]["pick_code"]
         elif path := unquote(path):
             if resp := check_sign(path):
                 return resp
@@ -365,7 +373,7 @@ def make_application(
                     session=client, 
                 ))
             except (FileNotFoundError, IsADirectoryError):
-                return json({"state": False, f"message": "no such path: {path!r}"}, 404)
+                return json({"state": False, "message": f"no such path: {path!r}"}, 404)
             else:
                 if not (pickcode := ID_TO_PICKCODE.get(id, "")):
                     resp = await p115client.fs_file_skim(id, async_=True, request=blacksheep_request, session=client)

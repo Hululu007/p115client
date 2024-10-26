@@ -114,6 +114,7 @@ from functools import partial, update_wrapper
 from hashlib import sha1 as calc_sha1
 from math import inf, isinf, isnan
 from pathlib import Path
+from string import hexdigits
 from sys import maxsize
 from time import time
 from typing import cast, Literal
@@ -366,12 +367,6 @@ def make_application(
     ) -> str:
         """获取 sha1 对应的文件的 pickcode
         """
-        if len(sha1) != 40:
-            raise OSError(
-                errno.EINVAL, 
-                {"state": False, "message": "invalid sha1", "sha1": sha1}, 
-            )
-        sha1 = sha1.lower()
         if pickcode := SHA1_TO_PICKCODE.get(sha1):
             return pickcode
         resp = await client.fs_shasearch(sha1, async_=True, request=request)
@@ -593,16 +588,22 @@ def make_application(
             elif t > 0 and t <= time():
                 return json({"state": False, "message": "url was expired"}, 401)
         do_request = partial(blacksheep_request, session=client)
-        if pickcode := pickcode.strip():
+        if pickcode := pickcode.strip().lower():
             if resp := check_sign(pickcode):
                 return resp
+            if not pickcode.isalnum():
+                return json({"state": False, "message": f"bad pickcode: {pickcode!r}"}, 400)
         elif id := id.strip():
             if resp := check_sign(id):
                 return resp
+            if id.startswith("0") or not id.isdecimal():
+                return json({"state": False, "message": f"bad id: {id!r}"}, 400)
             pickcode = await get_pickcode_by_id(p115client, id, do_request)
-        elif sha1 := sha1.strip():
+        elif sha1 := sha1.strip().upper():
             if resp := check_sign(sha1):
                 return resp
+            if len(sha1) != 40 or sha1.strip(hexdigits):
+                return json({"state": False, "message": f"bad sha1: {sha1!r}"}, 400)
             pickcode = await get_pickcode_by_sha1(p115client, sha1, do_request)
         else:
             value = unquote(path) or path2

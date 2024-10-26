@@ -564,6 +564,8 @@ def iter_subtitle_batches(
                     filter(lambda info: "file_id" in info, resp["data"]["list"]), 
                     identity=True, 
                 )
+            except (StopIteration, StopAsyncIteration):
+                pass
             finally:
                 yield client.fs_delete(scid, async_=async_, **request_kwargs)
     return run_gen_step_iter(gen_step, async_=async_)
