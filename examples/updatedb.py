@@ -2,7 +2,7 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 0, 10)
+__version__ = (0, 0, 11)
 __all__ = ["updatedb", "updatedb_one", "updatedb_tree"]
 __doc__ = "遍历 115 网盘的目录信息导出到数据库"
 __requirements__ = ["p115client", "posixpatht"]
@@ -1110,6 +1110,7 @@ def updatedb_tree(
                         if ppid and ppid not in all_pids:
                             add_pid(ppid)
                 if na_pids:
+                    # 直接忽略找不到的目录 id
                     all_pids -= na_pids
                     logging.warning("found some dangling directory ids, please clean them up, otherwise it will slow down the update speed: %r", na_pids)
             if not no_dir_moved:
@@ -1118,7 +1119,7 @@ def updatedb_tree(
                 # 把所有相关的目录 id 添加到待更替列表
                 to_replace += select_items_from_dir(con, all_pids)
             if to_replace: 
-                ensure_attr_path(client, to_replace, id_to_dirnode=ID_TO_DIRNODE)
+                ensure_attr_path(client, to_replace, id_to_dirnode=ID_TO_DIRNODE, errors="warn")
             with transaction(con):
                 if to_delete:
                     delete_items(con, to_delete, commit=False)
