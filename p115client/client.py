@@ -103,6 +103,17 @@ def make_webapi_prefix_generator(n: int = 1, /) -> Callable[[], str]:
 get_prefix = make_webapi_prefix_generator(4)
 
 
+def complete_api(base: str, path: str, /) -> str:
+    if not base:
+        return "https://webapi.115.com" + path
+    elif base.startswith("/"):
+        return f"https://v.anxia.com{base}{path}"
+    elif base.startswith(("http://", "https://")):
+        return base + path
+    else:
+        return f"https://{base}.115.com{path}"
+
+
 def complete_webapi(base_url: bool | str, path: str, /) -> str:
     if base_url:
         if base_url is True:
@@ -9352,7 +9363,10 @@ class P115Client:
                     url = self.upload_endpoint_url(bucket, object)
                 token = multipart_resume_data.get("token")
                 if not token:
-                    token = yield self.upload_token(async_=async_)
+                    while True:
+                        token = cast(dict, (yield self.upload_token(async_=async_)))
+                        if token["StatusCode"] == "200":
+                            break
                 return (yield oss_multipart_upload(
                     self.request, 
                     file, 
@@ -9400,7 +9414,10 @@ class P115Client:
             else:
                 raise P115OSError(errno.EINVAL, resp)
             url = self.upload_endpoint_url(bucket, object)
-            token = cast(dict, (yield self.upload_token(async_=async_)))
+            while True:
+                token = cast(dict, (yield self.upload_token(async_=async_)))
+                if token["StatusCode"] == "200":
+                    break
             if partsize <= 0:
                 resp = yield oss_upload(
                     self.request, 

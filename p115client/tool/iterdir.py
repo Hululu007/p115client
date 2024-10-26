@@ -938,6 +938,7 @@ def ensure_attr_path(
                             raise
                         case "warn":
                             warn(f"{type(e).__module__}.{type(e).__qualname__}: {e}", category=P115Warning)
+                    attr["ancestors"] = None
         if with_path:
             for attr in attrs:
                 try:
@@ -948,6 +949,7 @@ def ensure_attr_path(
                             raise
                         case "warn":
                             warn(f"{type(e).__module__}.{type(e).__qualname__}: {e}", category=P115Warning)
+                    attr["path"] = ""
         return attrs
     return run_gen_step(gen_step, async_=async_)
 
