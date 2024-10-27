@@ -1085,9 +1085,7 @@ def updatedb_tree(
                 # 找出所有待更新记录的祖先节点 id，并更新它们的 mtime
                 all_pids = set()
                 na_pids: set[int] = set()
-                add_na_pid = na_pids.add
                 pids = {ppid for attr in to_replace if (ppid := attr["parent_id"])}
-                add_pid = pids.add
                 while pids:
                     all_pids |= pids
                     if find_ids := pids - ID_TO_DIRNODE.keys():
@@ -1101,18 +1099,12 @@ def updatedb_tree(
                     elif not custom_no_dir_moved:
                         update_desc(client, pids)
                         no_dir_moved = False
-                    pids.clear()
-                    for pid in pids:
-                        if pid not in ID_TO_DIRNODE:
-                            add_na_pid(pid)
-                            continue
-                        ppid = ID_TO_DIRNODE[pid][1]
-                        if ppid and ppid not in all_pids:
-                            add_pid(ppid)
+                    na_pids.update(pid for pid in pids if pid not in ID_TO_DIRNODE)
+                    pids = {ppid for pid in pids - na_pids if (ppid := ID_TO_DIRNODE[pid][1]) and ppid not in all_pids}
                 if na_pids:
-                    # 直接忽略找不到的目录 id
-                    all_pids -= na_pids
-                    logging.warning("found some dangling directory ids, please clean them up, otherwise it will slow down the update speed: %r", na_pids)
+                   # 直接忽略找不到的目录 id
+                   all_pids -= na_pids
+                   logging.warning("found some dangling directory ids, please clean them up, otherwise it will slow down the update speed: %r", na_pids)
             if not no_dir_moved:
                 dir_ids.update(a["id"] for a in update_id_to_dirnode(con, client))
             if to_replace: 
