@@ -602,10 +602,9 @@ VALUES
 ON CONFLICT(id) DO UPDATE SET
     parent_id = excluded.parent_id
 """
-    path = "/"
+    path = ""
     for item in items:
-        path = item["path"] = path + escape(item["name"])
-        path += "/"
+        path = item["path"] = path + "/" + escape(item["name"])
     if commit:
         return execute_commit(con, sql, items, executemany=True)
     else:
