@@ -502,7 +502,7 @@ CREATE TABLE IF NOT EXISTS data (
             )
             if not resp["state"]:
                 return resp, 500
-            for fid, info in resp["data"]:
+            for fid, info in resp["data"].items():
                 if not info["url"]:
                     return resp, 404
                 return redirect(info["url"]["url"])
