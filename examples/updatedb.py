@@ -1115,10 +1115,10 @@ def updatedb_tree(
                     logging.warning("found some dangling directory ids, please clean them up, otherwise it will slow down the update speed: %r", na_pids)
             if not no_dir_moved:
                 dir_ids.update(a["id"] for a in update_id_to_dirnode(con, client))
-            if all_pids:
-                # 把所有相关的目录 id 添加到待更替列表
-                to_replace += select_items_from_dir(con, all_pids)
             if to_replace: 
+                if all_pids:
+                    # 把所有相关的目录 id 添加到待更替列表
+                    to_replace += select_items_from_dir(con, all_pids)
                 ensure_attr_path(client, to_replace, id_to_dirnode=ID_TO_DIRNODE, errors="warn")
             with transaction(con):
                 if to_delete:

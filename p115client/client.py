@@ -20,7 +20,7 @@ from http.cookies import Morsel
 from inspect import isawaitable
 from itertools import count, cycle, product
 from operator import itemgetter
-from os import fsdecode, fstat, isatty, stat, PathLike, path as ospath
+from os import environ, fsdecode, fstat, isatty, stat, PathLike, path as ospath
 from pathlib import Path, PurePath
 from re import compile as re_compile, MULTILINE
 from _thread import start_new_thread
@@ -114,7 +114,11 @@ def complete_api(base: str, path: str, /) -> str:
         return f"https://{base}.115.com{path}"
 
 
-def complete_webapi(base_url: bool | str, path: str, /) -> str:
+def complete_webapi(base_url: None | bool | str, path: str, /) -> str:
+    if base_url is None:
+        base_url = environ.get("WEBAPI_BASE_URL", False)
+        if base_url == "":
+            base_url = True
     if base_url:
         if base_url is True:
             return f"https://v.anxia.com/webapi{get_prefix()}{path}"
@@ -2048,7 +2052,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2059,7 +2063,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2069,7 +2073,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -2214,6 +2218,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        app: str = "chrome", 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2223,6 +2229,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        app: str = "chrome", 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2231,6 +2239,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        app: str = "chrome", 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -2241,9 +2251,16 @@ class P115Client:
         :payload:
             - pickcode: str 💡 多个用逗号 "," 隔开
         """
-        api = "https://proapi.115.com/app/chrome/downurl"
-        if isinstance(payload, str):
-            payload = {"pickcode": payload}
+        if app == "chrome":
+            api = "https://proapi.115.com/app/chrome/downurl"
+            if isinstance(payload, str):
+                payload = {"pickcode": payload}
+        else:
+            api = f"https://proapi.115.com/{app}/2.0/ufile/download"
+            if isinstance(payload, str):
+                payload = {"pick_code": payload}
+            elif "pickcode" in payload:
+                payload = {**payload, "pick_code": payload["pickcode"]}
         request_headers = request_kwargs.get("headers")
         headers = request_kwargs.get("headers")
         if headers:
@@ -2269,7 +2286,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2280,7 +2297,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2290,7 +2307,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -2337,7 +2354,7 @@ class P115Client:
         payload: list | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2348,7 +2365,7 @@ class P115Client:
         payload: list | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2358,7 +2375,7 @@ class P115Client:
         payload: list | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -2454,7 +2471,7 @@ class P115Client:
         payload: dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2465,7 +2482,7 @@ class P115Client:
         payload: dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2475,7 +2492,7 @@ class P115Client:
         payload: dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -2620,7 +2637,7 @@ class P115Client:
         payload: dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2631,7 +2648,7 @@ class P115Client:
         payload: dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2641,7 +2658,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -2716,7 +2733,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2727,7 +2744,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2737,7 +2754,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -2759,7 +2776,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2770,7 +2787,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2780,7 +2797,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -2803,7 +2820,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2814,7 +2831,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2824,7 +2841,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -2848,7 +2865,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2859,7 +2876,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2869,7 +2886,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -2895,7 +2912,7 @@ class P115Client:
         payload: list | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2906,7 +2923,7 @@ class P115Client:
         payload: list | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2916,7 +2933,7 @@ class P115Client:
         payload: list | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -2947,7 +2964,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2958,7 +2975,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2968,7 +2985,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -3039,7 +3056,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -3050,7 +3067,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -3060,7 +3077,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -3085,7 +3102,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -3096,7 +3113,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -3106,7 +3123,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -3134,7 +3151,7 @@ class P115Client:
         /, 
         pid: int = 0, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -3146,7 +3163,7 @@ class P115Client:
         /, 
         pid: int = 0, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -3157,7 +3174,7 @@ class P115Client:
         /, 
         pid: int = 0, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -3236,7 +3253,7 @@ class P115Client:
         payload: int | str | dict | Iterable[int | str], 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -3247,7 +3264,7 @@ class P115Client:
         payload: int | str | dict | Iterable[int | str], 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -3257,7 +3274,7 @@ class P115Client:
         payload: int | str | dict | Iterable[int | str], 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -3285,7 +3302,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -3296,7 +3313,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -3306,7 +3323,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -3381,7 +3398,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -3392,7 +3409,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -3402,7 +3419,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -3424,7 +3441,7 @@ class P115Client:
         payload: list | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -3435,7 +3452,7 @@ class P115Client:
         payload: list | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -3445,7 +3462,7 @@ class P115Client:
         payload: list | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -3483,7 +3500,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -3494,7 +3511,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -3504,7 +3521,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -3530,7 +3547,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -3541,7 +3558,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -3551,7 +3568,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -3573,7 +3590,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -3584,7 +3601,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -3594,7 +3611,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -3616,7 +3633,7 @@ class P115Client:
         payload: int | str | Iterable[int | str] | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -3627,7 +3644,7 @@ class P115Client:
         payload: int | str | Iterable[int | str] | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -3637,7 +3654,7 @@ class P115Client:
         payload: int | str | Iterable[int | str] | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -3661,7 +3678,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -3672,7 +3689,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -3682,7 +3699,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -4008,7 +4025,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4019,7 +4036,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -4029,7 +4046,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -4056,7 +4073,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4067,7 +4084,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -4077,7 +4094,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -4107,7 +4124,7 @@ class P115Client:
         payload: Literal[1,2,3,4,5,6,7] | dict = 1, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4118,7 +4135,7 @@ class P115Client:
         payload: Literal[1,2,3,4,5,6,7] | dict = 1, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -4128,7 +4145,7 @@ class P115Client:
         payload: Literal[1,2,3,4,5,6,7] | dict = 1, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -4244,7 +4261,7 @@ class P115Client:
         payload: int | str | Iterable[int | str] | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4255,7 +4272,7 @@ class P115Client:
         payload: int | str | Iterable[int | str] | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -4265,7 +4282,7 @@ class P115Client:
         payload: int | str | Iterable[int | str] | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -4338,7 +4355,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4349,7 +4366,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -4359,7 +4376,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -4430,7 +4447,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4441,7 +4458,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -4451,7 +4468,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -4487,7 +4504,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4498,7 +4515,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -4508,7 +4525,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -4545,7 +4562,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4556,7 +4573,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -4566,7 +4583,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -4591,7 +4608,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4602,7 +4619,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -4612,7 +4629,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -4637,7 +4654,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4648,7 +4665,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -4658,7 +4675,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -4717,7 +4734,7 @@ class P115Client:
         payload: dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4728,7 +4745,7 @@ class P115Client:
         payload: dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -4738,7 +4755,7 @@ class P115Client:
         payload: dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -4835,7 +4852,7 @@ class P115Client:
         payload: Literal[0, 1] | bool | dict = 0, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4846,7 +4863,7 @@ class P115Client:
         payload: Literal[0, 1] | bool | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -4856,7 +4873,7 @@ class P115Client:
         payload: Literal[0, 1] | bool | dict = 0, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -4877,7 +4894,7 @@ class P115Client:
         self, 
         /, 
         *lables: str, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4887,7 +4904,7 @@ class P115Client:
         self, 
         /, 
         *lables: str, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -4896,7 +4913,7 @@ class P115Client:
         self, 
         /, 
         *lables: str, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -4929,7 +4946,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4940,7 +4957,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -4950,7 +4967,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -4972,7 +4989,7 @@ class P115Client:
         payload: dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -4983,7 +5000,7 @@ class P115Client:
         payload: dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -4993,7 +5010,7 @@ class P115Client:
         payload: dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -5016,7 +5033,7 @@ class P115Client:
         payload: str | dict = "", 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -5027,7 +5044,7 @@ class P115Client:
         payload: str | dict = "", 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -5037,7 +5054,7 @@ class P115Client:
         payload: str | dict = "", 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -5115,7 +5132,7 @@ class P115Client:
         payload: dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -5126,7 +5143,7 @@ class P115Client:
         payload: dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -5136,7 +5153,7 @@ class P115Client:
         payload: dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -5166,7 +5183,7 @@ class P115Client:
         /, 
         pid: int = 0, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -5178,7 +5195,7 @@ class P115Client:
         /, 
         pid: int = 0, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -5189,7 +5206,7 @@ class P115Client:
         /, 
         pid: int = 0, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -5215,7 +5232,7 @@ class P115Client:
         /, 
         pid: int = 0, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -5227,7 +5244,7 @@ class P115Client:
         /, 
         pid: int = 0, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -5238,7 +5255,7 @@ class P115Client:
         /, 
         pid: int = 0, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -5271,7 +5288,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -5282,7 +5299,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -5292,7 +5309,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -5328,7 +5345,7 @@ class P115Client:
         payload: tuple[int | str, str] | dict | Iterable[tuple[int | str, str]], 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -5339,7 +5356,7 @@ class P115Client:
         payload: tuple[int | str, str] | dict | Iterable[tuple[int | str, str]], 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -5349,7 +5366,7 @@ class P115Client:
         payload: tuple[int | str, str] | dict | Iterable[tuple[int | str, str]], 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -5375,7 +5392,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -5386,7 +5403,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -5396,7 +5413,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -5425,7 +5442,7 @@ class P115Client:
         /, 
         score: int = 0, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -5437,7 +5454,7 @@ class P115Client:
         /, 
         score: int = 0, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -5448,7 +5465,7 @@ class P115Client:
         /, 
         score: int = 0, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -5470,7 +5487,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -5481,7 +5498,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -5491,7 +5508,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -5658,7 +5675,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -5669,7 +5686,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -5679,7 +5696,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -5736,7 +5753,7 @@ class P115Client:
         payload: str | dict = "", 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -5747,7 +5764,7 @@ class P115Client:
         payload: str | dict = "", 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -5757,7 +5774,7 @@ class P115Client:
         payload: str | dict = "", 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -5786,7 +5803,7 @@ class P115Client:
         self, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -5796,7 +5813,7 @@ class P115Client:
         self, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -5805,7 +5822,7 @@ class P115Client:
         self, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -5823,7 +5840,7 @@ class P115Client:
         /, 
         star: bool = True, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -5835,7 +5852,7 @@ class P115Client:
         /, 
         star: bool = True, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -5846,7 +5863,7 @@ class P115Client:
         /, 
         star: bool = True, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -5899,7 +5916,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -5910,7 +5927,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -5920,7 +5937,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -6007,7 +6024,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -6018,7 +6035,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -6028,7 +6045,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -7381,7 +7398,7 @@ class P115Client:
         self, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -7391,7 +7408,7 @@ class P115Client:
         self, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -7400,7 +7417,7 @@ class P115Client:
         self, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -7664,7 +7681,7 @@ class P115Client:
         payload: int | str | Iterable[int | str] | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -7675,7 +7692,7 @@ class P115Client:
         payload: int | str | Iterable[int | str] | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -7685,7 +7702,7 @@ class P115Client:
         payload: int | str | Iterable[int | str] | dict = {}, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -7712,7 +7729,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -7723,7 +7740,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -7733,7 +7750,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -7755,7 +7772,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -7766,7 +7783,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -7776,7 +7793,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -7805,7 +7822,7 @@ class P115Client:
         payload: int | str | Iterable[int | str] | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -7816,7 +7833,7 @@ class P115Client:
         payload: int | str | Iterable[int | str] | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -7826,7 +7843,7 @@ class P115Client:
         payload: int | str | Iterable[int | str] | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -8034,7 +8051,7 @@ class P115Client:
         payload: dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -8045,7 +8062,7 @@ class P115Client:
         payload: dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -8055,7 +8072,7 @@ class P115Client:
         payload: dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -8078,7 +8095,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -8089,7 +8106,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -8099,7 +8116,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -8121,7 +8138,7 @@ class P115Client:
         payload: int | dict = 0, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -8132,7 +8149,7 @@ class P115Client:
         payload: int | dict = 0, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -8142,7 +8159,7 @@ class P115Client:
         payload: int | dict = 0, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -8168,7 +8185,7 @@ class P115Client:
         payload: dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -8179,7 +8196,7 @@ class P115Client:
         payload: dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -8189,7 +8206,7 @@ class P115Client:
         payload: dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -8214,7 +8231,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -8225,7 +8242,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -8235,7 +8252,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -8272,7 +8289,7 @@ class P115Client:
         /, 
         request: None | Callable = None, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -8284,7 +8301,7 @@ class P115Client:
         /, 
         request: None | Callable = None, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -8295,7 +8312,7 @@ class P115Client:
         /, 
         request: None | Callable = None, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -8333,7 +8350,7 @@ class P115Client:
         payload: dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -8344,7 +8361,7 @@ class P115Client:
         payload: dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -8354,7 +8371,7 @@ class P115Client:
         payload: dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -9474,7 +9491,7 @@ class P115Client:
         self, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -9484,7 +9501,7 @@ class P115Client:
         self, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -9493,7 +9510,7 @@ class P115Client:
         self, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -9703,7 +9720,7 @@ class P115Client:
         self, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -9713,7 +9730,7 @@ class P115Client:
         self, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -9722,7 +9739,7 @@ class P115Client:
         self, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -9739,7 +9756,7 @@ class P115Client:
         payload: dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -9750,7 +9767,7 @@ class P115Client:
         payload: dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -9760,7 +9777,7 @@ class P115Client:
         payload: dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -9852,7 +9869,7 @@ class P115Client:
         payload: int | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -9863,7 +9880,7 @@ class P115Client:
         payload: int | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -9873,7 +9890,7 @@ class P115Client:
         payload: int | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -9899,7 +9916,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -9910,7 +9927,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -9920,7 +9937,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -9942,7 +9959,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -9953,7 +9970,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -9963,7 +9980,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -9989,7 +10006,7 @@ class P115Client:
         payload: int | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -10000,7 +10017,7 @@ class P115Client:
         payload: int | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -10010,7 +10027,7 @@ class P115Client:
         payload: int | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -10036,7 +10053,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -10047,7 +10064,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -10057,7 +10074,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         *, 
-        base_url: bool | str = False, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:

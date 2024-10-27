@@ -745,7 +745,7 @@ def make_strm(
                     async with sema:
                         return await save(attr)
                 path = normalize_path(attr)
-                url = f"{origin}/{encode(attr)}?pickcode={attr['pickcode']}"
+                url = f"{origin}/{encode(attr)}?pickcode={attr['pickcode']}&id={attr['id']}&sha1={attr['sha1']}&size={attr['size']}"
                 try:
                     try:
                         async with async_open(path, mode) as f:
@@ -858,7 +858,7 @@ def make_strm(
                 except FileNotFoundError:
                     makedirs(dirname(path), exist_ok=True)
                     f = open(path,  "w")
-                f.write(f"{origin}/{encode(attr)}?pickcode={attr['pickcode']}")
+                f.write(f"{origin}/{encode(attr)}?pickcode={attr['pickcode']}&id={attr['id']}&sha1={attr['sha1']}&size={attr['size']}")
                 if log is not None:
                     log(MakeStrmLog(
                         f"[OK] path={path!r} attr={attr!r}", 

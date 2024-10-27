@@ -21,7 +21,7 @@ if __name__ == "__main__":
     https://wsgidav.readthedocs.io/en/latest/user_guide_configure.html#sample-wsgidav-yaml
 
 """)
-    parser.add_argument("-cp", "--cookies-path", default="", help="cookies 文件保存路径，默认是此脚本同一目录下的 115-cookies.txt")
+    parser.add_argument("-cp", "--cookies-path", default="", help="cookies 文件保存路径，默认为当前工作目录下的 115-cookies.txt")
     parser.add_argument("-p1", "--predicate", help="断言，当断言的结果为 True 时，文件或目录会被显示")
     parser.add_argument(
         "-t1", "--predicate-type", default="ignore", 
@@ -181,13 +181,13 @@ def make_application(
     if cookies_path:
         cookies_path = Path(cookies_path)
     else:
-        cookies_path = Path(__file__).parent / "115-cookies.txt"
+        cookies_path = Path("115-cookies.txt")
     client = P115Client(cookies_path, app="harmony", check_for_relogin=True)
     urlopen = partial(urllib3_request, pool=PoolManager(num_pools=50))
 
     CON: Connection
     CON_FILE: Connection
-    FIELDS = ("id", "name", "path", "ctime", "mtime", "size", "pickcode", "is_dir")
+    FIELDS = ("id", "name", "path", "ctime", "mtime", "sha1", "size", "pickcode", "is_dir")
     ROOT = {"id": 0, "name": "", "path": "/", "ctime": 0, "mtime": 0, "size": 0, "pickcode": "", "is_dir": 1}
     STRM_CACHE: LRUDict = LRUDict(65536)
     WRITE_LOCK = Lock()
@@ -271,7 +271,7 @@ def make_application(
         def strm_data(self, /) -> bytes:
             attr = self.attr
             name = translate(attr["name"], transtab)
-            return bytes(f"{self.origin}/{name}?pickcode={attr['pickcode']}", "utf-8")
+            return bytes(f"{self.origin}/{name}?pickcode={attr['pickcode']}&id={attr['id']}&sha1={attr['sha1']}&size={attr['size']}", "utf-8")
 
         @cached_property
         def url(self, /) -> str:
@@ -330,7 +330,7 @@ ON CONFLICT(id) DO UPDATE SET data=excluded.data;""", (fid, self.attr["size"]))
         @cached_property
         def children(self, /) -> dict[str, FileResource | FolderResource]:
             sql = """\
-SELECT id, name, path, ctime, mtime, size, pickcode, is_dir
+SELECT id, name, path, ctime, mtime, sha1, size, pickcode, is_dir
 FROM data
 WHERE parent_id = :id AND name NOT IN ('', '.', '..') AND name NOT LIKE '%/%';
 """
@@ -377,7 +377,7 @@ WHERE parent_id = :id AND name NOT IN ('', '.', '..') AND name NOT LIKE '%/%';
                         push(item)
                 return descendants
             sql = """\
-SELECT id, name, path, ctime, mtime, size, pickcode, is_dir
+SELECT id, name, path, ctime, mtime, sha1, size, pickcode, is_dir
 FROM data
 WHERE path LIKE ? || '%' AND name NOT IN ('', '.', '..') AND name NOT LIKE '%/%'"""
             if collections and resources:
@@ -463,11 +463,11 @@ CREATE TABLE IF NOT EXISTS data (
             if path in ("/", ""):
                 return FolderResource("/", environ, ROOT)
             path = path.removesuffix("/")
-            sql = "SELECT id, name, path, ctime, mtime, size, pickcode, is_dir FROM data WHERE path = ? LIMIT 1"
+            sql = "SELECT id, name, path, ctime, mtime, sha1, size, pickcode, is_dir FROM data WHERE path = ? LIMIT 1"
             record = CON.execute(sql, (path,)).fetchone()
             if not record:
                 if path.endswith(".strm"):
-                    sql = "SELECT id, name, path, ctime, mtime, size, pickcode, is_dir FROM data WHERE path LIKE ? || '.%' AND NOT is_dir LIMIT 1"
+                    sql = "SELECT id, name, path, ctime, mtime, sha1, size, pickcode, is_dir FROM data WHERE path LIKE ? || '.%' AND NOT is_dir LIMIT 1"
                     record = CON.execute(sql, (path[:-5],)).fetchone()
                     if record:
                         attr = dict(zip(FIELDS, record))
@@ -500,7 +500,12 @@ CREATE TABLE IF NOT EXISTS data (
                 headers={"User-Agent": request.headers.get("User-Agent") or ""}, 
                 request=urlopen, 
             )
-            return redirect(next(iter(resp["data"].values()))["url"]["url"])
+            if not resp["state"]:
+                return resp, 500
+            for fid, info in resp["data"]:
+                if not info["url"]:
+                    return resp, 404
+                return redirect(info["url"]["url"])
         else:
             return redirect("/d")
 
