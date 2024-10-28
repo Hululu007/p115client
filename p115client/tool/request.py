@@ -47,7 +47,7 @@ def make_request(
                 from requests_request import request as requests_request
             session = Session()
             if cookiejar is not None:
-                session.cookies = cookiejar
+                session.cookies.__dict__ = cookiejar.__dict__
             return partial(requests_request, session=session)
         case "urllib3":
             try:
@@ -57,9 +57,9 @@ def make_request(
                 run([executable, "-m", "pip", "install", "-U", "urllib3", "urllib3_request"], check=True)
                 from urllib3.poolmanager import PoolManager
                 from urllib3_request import request as urllib3_request
-            return partial(urllib3_request, pool=PoolManager(128, headers), cookies=cookiejar)
+            return partial(urllib3_request, pool=PoolManager(128), cookies=cookiejar)
         case "urlopen":
-            # TODO: 需要实现连接池
+            # TODO: 需要实现连接池，扩展 urllib.request.AbstractHTTPHandler
             try:
                 from urlopen import request as urlopen_request
             except ImportError:
@@ -67,22 +67,25 @@ def make_request(
                 from urlopen import request as urlopen_request
             return partial(urlopen_request, cookies=cookiejar)
         case "aiohttp":
+            # TODO: 需要实现 cookiejar 的包装类，扩展 aiohttp.cookiejar.CookieJar
             try:
-                from aiohttp import ClientSession
+                from aiohttp import ClientSession as AiohttpClientSession
                 from aiohttp_client_request import request as aiohttp_request
             except ImportError:
                 run([executable, "-m", "pip", "install", "-U", "aiohttp", "aiohttp_client_request"], check=True)
-                from aiohttp import ClientSession
+                from aiohttp import ClientSession as AiohttpClientSession
                 from aiohttp_client_request import request as aiohttp_request
-            return partial(aiohttp_request, )
+            return partial(aiohttp_request, session=AiohttpClientSession())
         case "blacksheep":
+            # TODO: 需要实现 cookiejar 的包装类，扩展 blacksheep.client.cookies.CookieJar
             try:
-                from blacksheep.client import ClientSession
+                from blacksheep.client import ClientSession as BlacksheepClientSession
                 from blacksheep_client_request import request as blacksheep_request
             except ImportError:
                 run([executable, "-m", "pip", "install", "-U", "blacksheep", "blacksheep_client_request"], check=True)
-                from blacksheep.client import ClientSession
+                from blacksheep.client import ClientSession as BlacksheepClientSession
                 from blacksheep_client_request import request as blacksheep_request
+            return partial(blacksheep_request, session=BlacksheepClientSession())
         case _:
             raise ValueError(f"can't make request for {package!r}")
 
