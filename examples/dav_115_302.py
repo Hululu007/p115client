@@ -98,15 +98,13 @@ image      | string  | 否   | 文件作为图片打开
 在浏览器或 webdav 挂载软件 中输入（可以有个端口号） http://localhost/<dav
 目前没有用户名和密码就可以浏览，支持 302
 """)
+
 parser.add_argument("-c", "--cookies", help="115 登录 cookies，优先级高于 -cp/--cookies-path")
 parser.add_argument("-cp", "--cookies-path", default="", help="cookies 文件保存路径，默认为当前工作目录下的 115-cookies.txt")
-parser.add_argument("-wc", "--web-cookies", default="", help="提供一个 web 的 cookies，因为目前使用的获取 .m3u8 的接口，需要 web 的 cookies 才能正确获取数据，如不提供，则将自动扫码获取")
-parser.add_argument("-l", "--lock-dir-methods", action="store_true", help="对 115 的文件系统进行增删改查的操作（但不包括上传和下载）进行加锁，限制为单线程，这样就可减少 405 响应，以降低扫码的频率")
-parser.add_argument("-pc", "--path-persistence-commitment", action="store_true", help="路径持久性承诺，只要你能保证文件不会被移动（可新增删除，但对应的路径不可被其他文件复用），打开此选项，用路径请求直链时，可节约一半时间")
-parser.add_argument("-ci", "--cdn-image", action="store_true", help="图片走 cdn 接口而不是走下载接口")
-parser.add_argument("-ur", "--use-request", choices=("httpx", "requests", "urllib3", "urlopen"), default="urllib3", help="选择一个网络请求模块，默认值：urllib3")
+parser.add_argument("-t", "--token", default="", help="用于给链接进行签名的 token，如果不提供则无签名")
+parser.add_argument("-pcs", "--path-cache-size", type=int, default=1048576, help="路径缓存的容量大小，默认值 1048576，等于 0 时关闭，小于等于 0 时不限")
+parser.add_argument("-pct", "--path-cache-ttl", type=float, default=0, help="路径缓存的存活时间，小于等于 0 或等于 inf 或 nan 时不限，默认为不限")
 parser.add_argument("-r", "--root", default=0, help="选择一个根 路径 或 id，默认值 0")
-parser.add_argument("-P", "--password", default="", help="密码，如果提供了密码，那么每次访问必须携带请求参数 ?password={password}")
 parser.add_argument("-o", "--origin", help="origin 或者说 base_url，用来拼接路径，获取完整链接，默认行为是自行确定")
 parser.add_argument("-p1", "--predicate", help="断言，当断言的结果为 True 时，文件或目录会被显示")
 parser.add_argument(
@@ -168,7 +166,7 @@ try:
     from flask_compress import Compress
     from orjson import dumps, loads
     from path_predicate import make_predicate
-    from p115 import P115Client, P115FileSystem, P115Path, P115URL, AuthenticationError
+    from p115 import check_response, P115Client, P115FileSystem, P115Path, P115URL, AuthenticationError
     from posixpatht import escape as escape_name
     from urllib3.poolmanager import PoolManager
     from urllib3_request import request as urllib3_request
@@ -186,7 +184,7 @@ except ImportError:
     from flask import request, redirect, render_template_string, send_file, Flask, Response
     from flask_compress import Compress # type: ignore
     from orjson import dumps, loads
-    from p115 import P115Client, P115FileSystem, P115Path, P115URL, AuthenticationError
+    from p115 import check_response, P115Client, P115FileSystem, P115Path, P115URL, AuthenticationError
     from path_predicate import make_predicate
     from posixpatht import escape as escape_name
     from urllib3.poolmanager import PoolManager
@@ -228,12 +226,6 @@ if not (cookies := args.cookies):
         cookies = Path("115-cookies.txt")
 client = P115Client(cookies, check_for_relogin=True, ensure_cookies=True, app="harmony")
 
-web_cookies = args.web_cookies
-cookies_path_mtime = 0
-lock_dir_methods = args.lock_dir_methods
-path_persistence_commitment = args.path_persistence_commitment
-cdn_image = args.cdn_image
-use_request = args.use_request
 root = args.root
 password = args.password
 origin = args.origin
@@ -246,75 +238,39 @@ if predicate := args.predicate or None:
 if strm_predicate := args.strm_predicate or None:
     strm_predicate = make_predicate(strm_predicate, {"re": re}, type=args.strm_predicate_type)
 
-login_lock = Lock()
-web_login_lock = Lock()
-fs_lock = Lock() if lock_dir_methods else None
 
-def default(obj, /):
-    if isinstance(obj, UserString):
-        return str(obj)
-    return NotImplemented
+# NOTE: 
+FIELDS = (
+    "id", "parent_id", "name", "path", "relpath", "sha1", "pickcode", "is_directory", 
+    "size", "ctime", "mtime", "atime", "thumb", "url", "ancestors", 
+)
 
-
-urlopen = partial(urllib3_request, pool=PoolManager(num_pools=50))
-do_request: None | Callable = None
-match use_request:
-    case "httpx":
-        from httpx import HTTPStatusError as StatusError
-        def get_status_code(e):
-            return e.response.status_code
-    case "requests":
-        try:
-            from requests import Session
-            from requests.exceptions import HTTPError as StatusError # type: ignore
-            from requests_request import request as requests_request
-        except ImportError:
-            from sys import executable
-            from subprocess import run
-            run([executable, "-m", "pip", "install", "-U", "requests", "requests_request"], check=True)
-            from requests import Session
-            from requests.exceptions import HTTPError as StatusError # type: ignore
-            from requests_request import request as requests_request
-        do_request = partial(requests_request, session=Session())
-        def get_status_code(e):
-            return e.response.status_code
-    case "urllib3":
-        from urllib.error import HTTPError as StatusError # type: ignore
-        do_request = urlopen
-        def get_status_code(e):
-            return e.status
-    case "urlopen":
-        from urllib.error import HTTPError as StatusError # type: ignore
-        try:
-            from urlopen import request as do_request
-        except ImportError:
-            from sys import executable
-            from subprocess import run
-            run([executable, "-m", "pip", "install", "-U", "python-urlopen"], check=True)
-            from urlopen import request as do_request
-        def get_status_code(e):
-            return e.status
-
-fs = client.get_fs(client, cache_id_to_readdir=65536, cache_path_to_id=1048576, request=do_request)
+fs = client.get_fs(client, cache_id_to_readdir=65536, cache_path_to_id=1048576, request=urlopen)
 # NOTE: id 到 pickcode 的映射
-id_to_pickcode: MutableMapping[int, str] = LRUCache(65536)
+ID_TO_PICKCODE: MutableMapping[int, str] = LRUCache(65536)
 # NOTE: sha1 到 pickcode 到映射
-sha1_to_pickcode: MutableMapping[str, str] = LRUCache(65536)
+SHA1_TO_PICKCODE: MutableMapping[str, str] = LRUCache(65536)
 # NOTE: 缓存图片的 CDN 直链 1 小时
-image_url_cache: MutableMapping[str, None | P115URL] = TTLCache(65536, ttl=3600)
-# NOTE: 每个 ip 对于某个资源的某个 range 请求，一定时间范围内，分别只放行一个，可以自行设定 ttl (time-to-live)
-range_request_cooldown: MutableMapping[tuple[str, str, str, str], None] = TTLCache(1024, ttl=0.1)
+IMAGE_URL_CACHE: MutableMapping[str, None | P115URL] = TTLCache(65536, ttl=3600)
 # NOTE: webdav 的文件对象缓存
 webdav_file_cache: MutableMapping[str, DAVNonCollection] = LRUCache(65536)
 
-# TODO: 属性太多了，要删掉一些
-KEYS = (
-    "id", "parent_id", "name", "path", "relpath", "sha1", "pickcode", "is_directory", 
-    "size", "format_size", "ctime", "mtime", "atime", "thumb", "star", "labels", 
-    "score", "hidden", "has_desc", "violated", "url", "short_url", "ancestors", 
-)
+urlopen = partial(urllib3_request, pool=PoolManager(num_pools=128))
+
+transtab = {c: f"%{c:02x}" for c in b"#%/?"}
+translate = str.translate
+
+
 flask_app = Flask(__name__)
 Compress(flask_app)
+
+
+def reduce_image_url_layers(url: str, /) -> str:
+    if not url.startswith(("http://thumb.115.com/", "https://thumb.115.com/")):
+        return url
+    urlp = urlsplit(url)
+    sha1 = urlp.path.rsplit("/")[-1].split("_")[0]
+    return f"https://imgjump.115.com/?sha1={sha1}&{urlp.query}&size=0"
 
 
 class DavPathBase:
@@ -378,7 +334,7 @@ class FileResource(DavPathBase, DAVNonCollection):
     ):
         super().__init__(path, environ)
         self.attr = attr
-        if cdn_image and image_url_cache and (url := image_url_cache.get(attr["pickcode"])):
+        if cdn_image and IMAGE_URL_CACHE and (url := IMAGE_URL_CACHE.get(attr["pickcode"])):
             self.__dict__["url"] = url
             self.__dict__["size"] = url["size"]
         webdav_file_cache[path] = self
@@ -573,71 +529,44 @@ def redirect_exception_response(func, /):
     return update_wrapper(wrapper, func)
 
 
-def get_m3u8(pickcode: str):
-    global web_cookies
-    user_agent = request.headers.get("User-Agent") or ""
-    definition = request.args.get("definition") or "0"
-
-    url = f"http://115.com/api/video/m3u8/{pickcode}.m3u8?definition={definition}"
-
-    with web_login_lock:
-        if not web_cookies:
-            if device == "web":
-                web_cookies = client.cookies
-            else:
-                web_cookies = client.login_another_app("web").cookies
-    while True:
-        try:
-            data = urlopen(url, parse=False, headers={"User-Agent": user_agent, "Cookie": web_cookies})
-            break
-        except HTTPError as e:
-            if e.status not in (403, 405):
-                raise
-            with web_login_lock:
-                web_cookies = client.login_another_app("web", replace=device=="web").cookies
-    if not data:
-        raise FileNotFoundError(errno.ENOENT, f"this file does not have .m3u8, pickcode: {pickcode!r}")
-    if definition == "0":
-        return Response(data, mimetype="flask_app/x-mpegurl")
-    return redirect(data.split()[-1].decode("ascii"))
-
-
-def get_image_url(pickcode: str, user_agent: str = "") -> str:
-    if image_url_cache and (url := image_url_cache.get(pickcode)):
+def flatten_image_url(url: str, /) -> P115URL:
+    if isinstance(url, P115URL):
         return url
-    resp = client.fs_image( 
-        pickcode, 
-        headers={"User-Agent": user_agent}, 
-        request=do_request, 
-    )
-    if not resp["state"]:
-        raise FileNotFoundError(errno.ENOENT, pickcode)
-    data = resp["data"]
-    url = data["origin_url"]
-    with urlopen(url, "HEAD", headers={"User-Agent": user_agent}) as resp:
+    url = reduce_image_url_layers(url)
+    with urlopen(url, "HEAD") as resp:
+        size = int(resp.headers["Content-Length"])
         url = cast(str, resp.url)
-    url = P115URL(url, data=data, size=int(resp.headers["Content-Length"]))
-    if image_url_cache is not None:
-        image_url_cache[pickcode] = url
+    return P115Client(url, size=size)
+
+
+def get_image_url(pickcode: str, /) -> P115URL:
+    if url := IMAGE_URL_CACHE.get(pickcode):
+        return flatten_image_url(url)
+    resp = client.fs_image(pickcode, request=urlopen)
+    check_response(resp)
+    data = resp["data"]
+    url = IMAGE_URL_CACHE[pickcode] = flatten_image_url(data["origin_url"])
     return url
 
 
+def get_file_url(
+    pickcode: str, 
+    /, 
+    user_agent: str = "", 
+    use_web_api: bool = False, 
+) -> P115URL:
+    headers = {"User-Agent": user_agent}
+    return client.download_url(pickcode, headers=headers, use_web_api=use_web_api)
+
+
 def get_url(pickcode: str):
-    if request.args.get("m3u8") not in (None, "0", "false"):
-        return get_m3u8(pickcode)
-    elif (
-        cdn_image and 
-        (as_image := request.args.get("image")) not in ("0", "false") and 
-        (as_image is not None or image_url_cache and pickcode in image_url_cache)
-    ):
+    get_arg = request.args.get
+    if get_arg("image") not in (None, "0", "false"):
         return redirect(get_image_url(pickcode))
-    use_web_api = request.args.get("web") not in (None, "0", "false")
+
+    use_web_api = get_arg("web") not in (None, "0", "false")
     request_headers = request.headers
     user_agent = request_headers.get("User-Agent") or ""
-    range_request_key = (request.remote_addr or "", user_agent, pickcode, str(request.range))
-    if range_request_key in range_request_cooldown:
-        return "Too Many Requests", 429
-    range_request_cooldown[range_request_key] = None
     url = fs.get_url_from_pickcode(
         pickcode, 
         headers={"User-Agent": user_agent}, 
@@ -664,8 +593,43 @@ def get_url(pickcode: str):
         (".bmp", ".gif", ".heic", ".heif", ".jpeg", ".jpg", ".png", 
          ".raw", ".svg", ".tif", ".tiff", ".webp")
     ):
-        image_url_cache[pickcode] = None
+        IMAGE_URL_CACHE[pickcode] = None
     return redirect(url)
+
+
+def update_attr(attr):
+    relpath = attr["relpath"] = attr["path"][len(cast(str, root_dir)):]
+    path_url = "%s/%s" % (origin, translate(relpath, transtab))
+    if attr["is_directory"]:
+        attr["url"] = f"{path_url}?id={attr['id']}"
+    else:
+        pickcode = cast(str, attr["pickcode"])
+        SHA1_TO_PICKCODE[attr["sha1"]] = ID_TO_PICKCODE[attr["id"]] = pickcode
+        url = f"{path_url}?pickcode={pickcode}"
+        if thumb := attr.get("thumb"):
+            IMAGE_URL_CACHE[pickcode] = thumb
+            url += "&image=true"
+        elif attr["violated"] and attr["size"] < 1024 * 1024 * 115:
+            url += "&web=true"
+        attr["url"] = url
+    attr["ancestors"] = attr["path"].ancestors
+    return attr
+
+
+def get_attr():
+    ...
+
+def get_list():
+    ...
+
+# TODO: 找出分享文件中的被和谐的文件，看看能不能观看
+# TODO: 通过下载接口快速获取某个id对应的信息
+
+
+from p115 import P115ShareFileSystem
+
+client.sharing.list()
+
 
 
 @flask_app.get("/")
@@ -698,7 +662,6 @@ def index():
             return query("/")
 
 
-# TODO: 代码需要进行比较极致的简化
 @flask_app.get("/<path:path>")
 @redirect_exception_response
 def query(path: str):
@@ -728,10 +691,10 @@ def query(path: str):
             attr["url"] = url
             attr["short_url"] = short_url
             attr["format_size"] = format_bytes(attr["size"])
-            sha1_to_pickcode[attr["sha1"]] = id_to_pickcode[attr["id"]] = pickcode
+            SHA1_TO_PICKCODE[attr["sha1"]] = ID_TO_PICKCODE[attr["id"]] = pickcode
             if attr.get("class") == "PIC" or attr.get("thumb"):
                 if cdn_image:
-                    image_url_cache[pickcode] = None
+                    IMAGE_URL_CACHE[pickcode] = None
                 attr["url"] += "&image=true"
                 attr["short_url"] += "&image=true"
         if password:
@@ -765,7 +728,7 @@ def query(path: str):
                 if root != 0 and not any(info["id"] == root for info in attr["path"].ancestors):
                     raise PermissionError(errno.EACCES, "out of root range")
             update_attr(attr)
-            json_str = dumps({k: attr.get(k) for k in KEYS}, default=default)
+            json_str = dumps({k: attr.get(k) for k in FIELDS}, default=default)
             return Response(json_str, content_type="application/json; charset=utf-8")
         case "list":
             if not root_dir:
@@ -781,7 +744,7 @@ def query(path: str):
             if children and root != 0 and not any(info["id"] == root for info in children[0]["path"].ancestors[:-1]):
                 raise PermissionError(errno.EACCES, "out of root range")
             json_str = dumps([
-                {k: attr.get(k) for k in KEYS} 
+                {k: attr.get(k) for k in FIELDS} 
                 for attr in map(update_attr, children)
             ], default=default)
             return Response(json_str, content_type="application/json; charset=utf-8")
@@ -804,18 +767,18 @@ def query(path: str):
         return get_url(pickcode)
     if fid:
         file_id = int(fid)
-        if pickcode := id_to_pickcode.get(file_id):
+        if pickcode := ID_TO_PICKCODE.get(file_id):
             return get_url(pickcode)
         attr = fs.attr(file_id)
     elif sha1 := sha1.strip():
-        if pickcode := sha1_to_pickcode.get(sha1):
+        if pickcode := SHA1_TO_PICKCODE.get(sha1):
             return get_url(pickcode)
         try:
             attr = next(fs.search(root, search_value=sha1, limit=1, show_dir=0))
         except StopIteration:
             return f"no such file: sha1={sha1!r}", 404
     elif path_persistence_commitment and (fid := fs.path_to_id.get(path)):
-        if pickcode := id_to_pickcode.get(fid):
+        if pickcode := ID_TO_PICKCODE.get(fid):
             return get_url(pickcode)
         else:
             attr = fs.attr(fid)

@@ -2,7 +2,7 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 0, 2)
+__version__ = (0, 0, 3)
 __doc__ = """\
     🛫 115 302 微型版，仅支持用 pickcode 或 sha1 查询 🛬
 
@@ -121,8 +121,7 @@ def encrypt(data):
     cipher_data = bytearray()
     view = memoryview(xor_text)
     for l, r, _ in acc_step(0, len(view), 117):
-        p = pow(pad_pkcs1_v1_5(view[l:r]), RSA_n, RSA_e)
-        cipher_data += to_bytes(p, (p.bit_length() + 0b111) >> 3)
+        cipher_data += to_bytes(pow(pad_pkcs1_v1_5(view[l:r]), RSA_n, RSA_e), 128)
     return b64encode(cipher_data)
 
 
@@ -170,10 +169,11 @@ def get_pickcode_for_sha1(sha1):
 def get_downurl(pickcode, user_agent = ""):
     """获取文件的下载链接
     """
+    pickcode_bytes = bytes(pickcode, "ascii")
     resp = urlopen(
         "POST", 
         "https://proapi.115.com/app/chrome/downurl", 
-        fields={"data": encrypt(b'{"pickcode":"%s"}' % bytes(pickcode, "ascii")).decode("ascii")}, 
+        fields={"data": encrypt(b'{"pickcode":"%s","pick_code":"%s"}' % (pickcode_bytes, pickcode_bytes)).decode("ascii")}, 
         headers={"Cookie": cookies, "User-Agent": user_agent}, 
     ).json()
     if resp["state"]:

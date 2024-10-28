@@ -382,6 +382,7 @@ def normalize_attr(
         ("hdf", "hidden"), 
         ("issct", "is_shortcut"), 
         ("ispl", "show_play_long"), 
+        #("iv", "is_video"), 
         ("m", "star"), 
         ("c", "violated"), 
         ("sh", "is_share"), 
@@ -2156,7 +2157,7 @@ class P115Client:
         """
         if use_web_api:
             resp = self.download_url_web(
-                {"pickcode": pickcode}, 
+                pickcode, 
                 async_=async_, 
                 **request_kwargs, 
             )
@@ -2170,7 +2171,7 @@ class P115Client:
                 return P115URL(
                     resp.get("file_url", ""), 
                     id=int(resp["file_id"]), 
-                    pickcode=resp["pickcode"], 
+                    pickcode=pickcode, 
                     name=resp["file_name"], 
                     size=int(resp["file_size"]), 
                     is_directory=not resp["state"], 
@@ -2178,7 +2179,7 @@ class P115Client:
                 )
         else:
             resp = self.download_url_app(
-                {"pickcode": pickcode}, 
+                pickcode, 
                 async_=async_, 
                 **request_kwargs, 
             )
@@ -2249,7 +2250,7 @@ class P115Client:
         POST https://proapi.115.com/app/chrome/downurl
 
         :payload:
-            - pickcode: str 💡 多个用逗号 "," 隔开
+            - pickcode: str 💡 如果 `app` 为 "chrome"，则可以接受多个，多个用逗号 "," 隔开
         """
         if app == "chrome":
             api = "https://proapi.115.com/app/chrome/downurl"
@@ -2259,8 +2260,8 @@ class P115Client:
             api = f"https://proapi.115.com/{app}/2.0/ufile/download"
             if isinstance(payload, str):
                 payload = {"pick_code": payload}
-            elif "pickcode" in payload:
-                payload = {**payload, "pick_code": payload["pickcode"]}
+            else:
+                payload = {"pick_code": payload["pickcode"]}
         request_headers = request_kwargs.get("headers")
         headers = request_kwargs.get("headers")
         if headers:
@@ -2277,8 +2278,13 @@ class P115Client:
             json["headers"] = headers
             return json
         request_kwargs.setdefault("parse", parse)
-        payload = {"data": rsa_encode(dumps(payload)).decode("ascii")}
-        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+        request_kwargs["data"] = {"data": rsa_encode(dumps(payload)).decode("ascii")}
+        return self.request(
+            url=api, 
+            method="POST", 
+            async_=async_, 
+            **request_kwargs, 
+        )
 
     @overload
     def download_url_web(
@@ -7946,7 +7952,6 @@ class P115Client:
             - file_id: int | str 💡 文件 id
             - receive_code: str  💡 接收码（也就是密码）
             - share_code: str    💡 分享码
-            - user_id: int | str = <default> 💡 不需要传
 
         :param url: 分享链接，如果提供的话，会被拆解并合并到 `payload` 中，优先级较高
         :param strict: 如果为 True，当目标是目录时，会抛出 IsADirectoryError 异常
@@ -7989,6 +7994,7 @@ class P115Client:
             return P115URL(
                 url["url"] if url else "", 
                 id=int(info["fid"]), 
+                sha1=info.get("sha1", ""), 
                 name=info["fn"], 
                 size=int(info["fs"]), 
                 is_directory=not url, 
@@ -8033,7 +8039,6 @@ class P115Client:
             - file_id: int | str
             - receive_code: str
             - share_code: str
-            - user_id: int | str = <default>
         """
         api = "https://proapi.115.com/app/share/downurl"
         def parse(resp, content: bytes) -> dict:
@@ -8084,7 +8089,6 @@ class P115Client:
             - file_id: int | str
             - receive_code: str
             - share_code: str
-            - user_id: int | str = <default>
         """
         api = complete_webapi(base_url, "/share/downurl")
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
@@ -8170,7 +8174,6 @@ class P115Client:
         :payload:
             - limit: int = 32
             - offset: int = 0
-            - user_id: int | str = <default>
         """
         api = complete_webapi(base_url, "/share/slist")
         if isinstance(payload, int):
@@ -8219,7 +8222,6 @@ class P115Client:
             - receive_code: str
             - file_id: int | str             💡 有多个时，用逗号 "," 分隔
             - cid: int | str = <default>     💡 这是你网盘的目录 cid
-            - user_id: int | str = <default>
         """
         api = complete_webapi(base_url, "/share/receive")
         payload = {"cid": 0, **payload}
@@ -8273,7 +8275,6 @@ class P115Client:
               - "user_otime": 上一次打开时间
 
             - ignore_warn: 0 | 1 = 1 💡 忽略信息提示，传 1 就行了
-            - user_id: int | str = <default>
         """
         api = complete_webapi(base_url, "/share/send")
         if isinstance(payload, (int, str)):
