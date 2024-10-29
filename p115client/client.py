@@ -339,6 +339,7 @@ def normalize_attr(
     info: Mapping, 
     /, 
     keep_raw: bool = False, 
+    dict_cls: type[AttrDict] = AttrDict, 
 ) -> AttrDict[str, Any]:
     """翻译 `P115Client.fs_files`、`P115Client.fs_search`、`P115Client.share_snap` 等接口响应的文件信息数据，使之便于阅读
 
@@ -347,7 +348,7 @@ def normalize_attr(
 
     :return: 翻译后的 dict 类型数据
     """
-    attr: AttrDict[str, Any] = AttrDict()
+    attr: AttrDict[str, Any] = dict_cls()
     is_directory = attr["is_dir"] = attr["is_directory"] = "fid" not in info
     if is_directory:
         attr["id"] = int(info["cid"])        # cid => category_id
@@ -417,6 +418,7 @@ def normalize_attr_app(
     info: Mapping, 
     /, 
     keep_raw: bool = False, 
+    dict_cls: type[AttrDict] = AttrDict, 
 ) -> AttrDict[str, Any]:
     """翻译 `P115Client.fs_files_app` 等接口响应的文件信息数据，使之便于阅读
 
@@ -425,7 +427,7 @@ def normalize_attr_app(
 
     :return: 翻译后的 dict 类型数据
     """
-    attr: AttrDict[str, Any] = AttrDict()
+    attr: AttrDict[str, Any] = dict_cls()
     attr["is_dir"] = attr["is_directory"] = info["fc"] == "0" # fc => file_category
     attr["id"] = int(info["fid"])        # fid => file_id
     attr["parent_id"] = int(info["pid"]) # pid => parent_id
@@ -703,7 +705,7 @@ class P115Client:
                 "Accept": "application/json, text/plain, */*", 
                 "Accept-Encoding": "gzip, deflate", 
                 "Connection": "keep-alive", 
-                "User-Agent": "Mozilla/5.0 AppleWebKit/600 Safari/600 Chrome/124.0.0.0 115disk/99.99.99.99", 
+                "User-Agent": "Mozilla/5.0 AppleWebKit/600 Safari/600 Chrome/124.0.0.0 115disk/99.99.99.99 115Browser/99.99.99.99", 
             })
             return headers
 
@@ -2082,7 +2084,7 @@ class P115Client:
         """
         api = complete_webapi(base_url, "/user/captcha")
         if isinstance(payload, (int, str)):
-            payload = {"code": payload, "ac": "security_code", "type": "web", "ctype": "web", "client": "web"}
+            payload = {"ac": "security_code", "type": "web", "ctype": "web", "client": "web", "code": payload}
         else:
             payload = {"ac": "security_code", "type": "web", "ctype": "web", "client": "web", **payload}
         def gen_step():
@@ -5958,6 +5960,7 @@ class P115Client:
         pickcode: str, 
         definition: int = 0, 
         *, 
+        base_url: None | bool | str = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> bytes:
@@ -5969,6 +5972,7 @@ class P115Client:
         pickcode: str, 
         definition: int = 0, 
         *, 
+        base_url: None | bool | str = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, bytes]:
@@ -5979,6 +5983,7 @@ class P115Client:
         pickcode: str, 
         definition: int = 0, 
         *, 
+        base_url: None | bool | str = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> bytes | Coroutine[Any, Any, bytes]:
@@ -5998,19 +6003,25 @@ class P115Client:
 
         其它替代接口（下面只提供伪代码，相关函数并无具体实现）:
 
-        1. 需要破解里面一个 rsa 请求参数的生成方法，此接口不限设备（不强制为 web 的 cookies）
+        1. 需要破解 data 参数具体包含哪些值
+
+            POST https://proapi.115.com/android/2.0/video/play
+
+            data = {data: str = rsa_encode(payload)}
+
+        2. 需要破解里面一个 rsa 请求参数的生成方法，此接口不限设备（不强制为 web 的 cookies）
 
             GET http://videoplay.115.com/m3u8
 
             params = {filesha1: str, time: int, userid: int, rsa: str = "<md5_sign>"}
-
-        2. 需要破解 data 参数具体如何生成
-
-            POST https://proapi.115.com/android/2.0/video/play
-
-            data = {data: str = "<{b64encode(rsa_encrypt(data))>"}
         """
-        api = f"http://115.com/api/video/m3u8/{pickcode}.m3u8?definition={definition}"
+        if base_url:
+            if base_url is True:
+                api = f"https://v.anxia.com/site/api/video/m3u8/{pickcode}.m3u8?definition={definition}"
+            else:
+                api = f"{base_url}/api/video/m3u8/{pickcode}.m3u8?definition={definition}"
+        else:
+            api = f"http://115.com/api/video/m3u8/{pickcode}.m3u8?definition={definition}"
         request_kwargs.setdefault("parse", False)
         return self.request(url=api, async_=async_, **request_kwargs)
 
@@ -7176,9 +7187,57 @@ class P115Client:
     ########## Offline Download API ##########
 
     @overload
+    def _offline_lixianssp_post(
+        self, 
+        ac: str, 
+        payload: dict, 
+        /, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def _offline_lixianssp_post(
+        self, 
+        ac: str, 
+        payload: dict, 
+        /, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def _offline_lixianssp_post(
+        self, 
+        ac: str, 
+        payload: dict, 
+        /, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        api = f"https://lixian.115.com/lixianssp/?ac={ac}"
+        payload["ac"] = ac
+        payload["app_ver"] = "99.99.99.99"
+        def parse(resp, content: bytes) -> dict:
+            json = json_loads(content)
+            if data := json.get("data"):
+                try:
+                    json["data"] = json_loads(rsa_decode(data))
+                except Exception:
+                    pass
+            return json
+        request_kwargs.setdefault("parse", parse)
+        return self.request(
+            url=api, 
+            method="POST", 
+            data={"data": rsa_encode(dumps(payload)).decode("ascii")}, 
+            async_=async_, 
+            **request_kwargs, 
+        )
+
+    @overload
     def offline_add_torrent(
         self, 
-        payload: dict, 
+        payload: str | dict, 
         /, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -7187,7 +7246,7 @@ class P115Client:
     @overload
     def offline_add_torrent(
         self, 
-        payload: dict, 
+        payload: str | dict, 
         /, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -7195,38 +7254,24 @@ class P115Client:
         ...
     def offline_add_torrent(
         self, 
-        payload: dict, 
+        payload: str | dict, 
         /, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
         """添加一个种子作为离线任务
 
-        POST https://115.com/web/lixian/?ct=lixian&ac=add_task_bt
+        POST https://lixian.115.com/lixianssp/?ac=add_task_bt
 
         :payload:
             - info_hash: str 💡 种子文件的 info_hash
-            - wanted: str 💡 选择文件进行下载（是数字用 "," 分隔）
-            - sign: str = <default> 💡 来自 `offline_info` 接口
-            - time: int = <default> 💡 来自 `offline_info` 接口
+            - wanted: str = <default> 💡 选择文件进行下载（是数字用 "," 分隔）
             - savepath: str = <default> 💡 保存到目录下的相对路径
             - wp_path_id: int | str = <default> 💡 保存到目录的 id
         """
-        api = "https://115.com/web/lixian/?ct=lixian&ac=add_task_bt"
-        def gen_step():
-            if "sign" not in payload:
-                info = yield self.offline_info(async_=async_)
-                payload["sign"] = info["sign"]
-                payload["time"] = info["time"]
-            return (yield partial(
-                self.request, 
-                url=api, 
-                method="POST", 
-                data=payload, 
-                async_=async_, 
-                **request_kwargs, 
-            ))
-        return run_gen_step(gen_step, async_=async_)
+        if isinstance(payload, str):
+            payload = {"info_hash": payload}
+        return self._offline_lixianssp_post("add_task_bt", payload, async_=async_, **request_kwargs)
 
     @overload
     def offline_add_url(
@@ -7255,37 +7300,21 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """添加一个离线任务
 
-        POST https://115.com/web/lixian/?ct=lixian&ac=add_task_url
+        POST https://lixian.115.com/lixianssp/?ac=add_task_url
 
         :payload:
             - url: str 💡 链接，支持HTTP、HTTPS、FTP、磁力链和电驴链接
-            - sign: str = <default> 💡 来自 `offline_info` 接口
-            - time: int = <default> 💡 来自 `offline_info` 接口
             - savepath: str = <default> 💡 保存到目录下的相对路径
             - wp_path_id: int | str = <default> 💡 保存到目录的 id
         """
-        api = "https://115.com/web/lixian/?ct=lixian&ac=add_task_url"
         if isinstance(payload, str):
             payload = {"url": payload}
-        def gen_step():
-            if "sign" not in payload:
-                info = yield self.offline_info(async_=async_)
-                payload["sign"] = info["sign"]
-                payload["time"] = info["time"]
-            return (yield partial(
-                self.request, 
-                url=api, 
-                method="POST", 
-                data=payload, 
-                async_=async_, 
-                **request_kwargs, 
-            ))
-        return run_gen_step(gen_step, async_=async_)
+        return self._offline_lixianssp_post("add_task_url", payload, async_=async_, **request_kwargs)
 
     @overload
     def offline_add_urls(
         self, 
-        payload: Iterable[str] | dict, 
+        payload: str | Iterable[str] | dict, 
         /, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -7294,7 +7323,7 @@ class P115Client:
     @overload
     def offline_add_urls(
         self, 
-        payload: Iterable[str] | dict, 
+        payload: str | Iterable[str] | dict, 
         /, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -7302,43 +7331,29 @@ class P115Client:
         ...
     def offline_add_urls(
         self, 
-        payload: Iterable[str] | dict, 
+        payload: str | Iterable[str] | dict, 
         /, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
         """添加一组离线任务
 
-        POST https://115.com/web/lixian/?ct=lixian&ac=add_task_urls
+        POST https://lixian.115.com/lixianssp/?ac=add_task_urls
 
         :payload:
             - url[0]: str 💡 链接，支持HTTP、HTTPS、FTP、磁力链和电驴链接
             - url[1]: str
             - ...
-            - sign: str = <default> 💡 来自 `offline_info` 接口
-            - time: int = <default> 💡 来自 `offline_info` 接口
             - savepath: str = <default> 💡 保存到目录下的相对路径
             - wp_path_id: int | str = <default> 💡 保存到目录的 id
         """
-        api = "https://115.com/web/lixian/?ct=lixian&ac=add_task_urls"
+        if isinstance(payload, str):
+            payload = payload.strip().split("\n")
         if not isinstance(payload, dict):
             payload = {f"url[{i}]": url for i, url in enumerate(payload)}
             if not payload:
                 raise ValueError("no `url` specified")
-        def gen_step():
-            if "sign" not in payload:
-                info = yield self.offline_info(async_=async_)
-                payload["sign"] = info["sign"]
-                payload["time"] = info["time"]
-            return (yield partial(
-                self.request, 
-                url=api, 
-                method="POST", 
-                data=payload, 
-                async_=async_, 
-                **request_kwargs, 
-            ))
-        return run_gen_step(gen_step, async_=async_)
+        return self._offline_lixianssp_post("add_task_urls", payload, async_=async_, **request_kwargs)
 
     @overload
     def offline_clear(
@@ -7575,33 +7590,21 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """删除一组离线任务（无论是否已经完成）
 
-        POST https://lixian.115.com/lixian/?ct=lixian&ac=task_del
+        POST https://lixian.115.com/lixianssp/?ac=task_del
 
         :payload:
             - hash[0]: str
             - hash[1]: str
             - ...
-            - sign: str = <default>
-            - time: int = <default>
             - flag: 0 | 1 = <default> 💡 是否删除源文件
         """
-        api = "https://lixian.115.com/lixian/?ct=lixian&ac=task_del"
         if isinstance(payload, str):
             payload = {"hash[0]": payload}
-        def gen_step():
-            if "sign" not in payload:
-                info = yield self.offline_info(async_=async_)
-                payload["sign"] = info["sign"]
-                payload["time"] = info["time"]
-            return (yield partial(
-                self.request, 
-                url=api, 
-                method="POST", 
-                data=payload, 
-                async_=async_, 
-                **request_kwargs, 
-            ))
-        return run_gen_step(gen_step, async_=async_)
+        elif not isinstance(payload, dict):
+            payload = {f"hash[{i}]": hash for i, hash in enumerate(payload)}
+            if not payload:
+                raise ValueError("no `hash` (info_hash) specified")
+        return self._offline_lixianssp_post("task_del", payload, async_=async_, **request_kwargs)
 
     @overload
     def offline_torrent_info(
@@ -9455,7 +9458,7 @@ class P115Client:
                     async_=async_, # type: ignore
                     **request_kwargs, 
                 )
-            if resp["state"]:
+            if resp["state"] and read_range_bytes_or_hash is not None:
                 call = partial(
                     self.upload_file_init, 
                     filename=filename, 
@@ -9472,6 +9475,18 @@ class P115Client:
                     create_task(to_thread(call))
                 else:
                     start_new_thread(call, ())
+            elif close_file:
+                if isinstance(file, Generator):
+                    file.close()
+                elif isinstance(file, AsyncGenerator):
+                    yield file.aclose
+                elif async_:
+                    if hasattr(file, "aclose"):
+                        yield file.aclose
+                    elif hasattr(file, "close"):
+                        yield file.close
+                elif hasattr(file, "close"):
+                    file.close()
             return resp
         return run_gen_step(gen_step, async_=async_)
 

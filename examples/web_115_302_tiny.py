@@ -2,7 +2,7 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 0, 3)
+__version__ = (0, 0, 4)
 __doc__ = """\
     🛫 115 302 微型版，仅支持用 pickcode 或 sha1 查询 🛬
 
@@ -22,6 +22,12 @@ __doc__ = """\
     4. 带（任意）名字查询 sha1
         http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
         http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?sha1=E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
+    5. 查询分享文件（如果是你自己的分享，则无须提供密码 receive_code）
+        http://localhost:8000?share_code=sw68md23w8m&receive_code=q353&id=2580033742990999218
+        http://localhost:8000?share_code=sw68md23w8m&id=2580033742990999218
+    6. 带（任意）名字查询分享文件（如果是你自己的分享，则无须提供密码 receive_code）
+        http://localhost:8000/Cosmos.S01E01.1080p.AMZN.WEB-DL.DD+5.1.H.264-iKA.mkv?share_code=sw68md23w8m&receive_code=q353&id=2580033742990999218
+        http://localhost:8000/Cosmos.S01E01.1080p.AMZN.WEB-DL.DD+5.1.H.264-iKA.mkv?share_code=sw68md23w8m&id=2580033742990999218
 """
 __requirements__ = ["flask", "urllib3"]
 
@@ -37,17 +43,19 @@ if __name__ == "__main__":
     if args.version:
         print(".".join(map(str, __version__)))
         raise SystemExit(0)
+    cookies_path = args.cookies_path or "115-cookies.txt"
+    cookies = open(cookies_path, encoding="latin-1").read()
 else:
     cookies = open("115-cookies.txt", encoding="latin-1").read()
 
 try:
-    from flask import redirect, request, Flask, Response
+    from flask import redirect, request, Flask
     from urllib3 import PoolManager
 except ImportError:
     from sys import executable
     from subprocess import run
     run([executable, "-m", "pip", "install", "-U", *__requirements__], check=True)
-    from flask import redirect, request, Flask, Response
+    from flask import redirect, request, Flask
     from urllib3 import PoolManager
 
 from base64 import b64decode, b64encode
@@ -63,6 +71,7 @@ G_kts = b"\xf0\xe5i\xae\xbf\xdc\xbf\x8a\x1aE\xe8\xbe}\xa6s\xb8\xde\x8f\xe7\xc4E\
 RSA_e = 0x8686980c0f5a24c4b9d43020cd2c22703ff3f450756529058b1cf88f09b8602136477198a6e2683149659bd122c33592fdb5ad47944ad1ea4d36c6b172aad6338c3bb6ac6227502d010993ac967d1aef00f0c8e038de2e4d3bc2ec368af2e9f10a6f1eda4f7262f136420c07c331b871bf139f74f3010e3c4fe57df3afb71683 
 RSA_n = 0x10001
 SHA1_TO_PICKCODE = {} # type: dict[str, str]
+RECEIVE_CODE_MAP = {} # type: dict[str, str]
 
 to_bytes = partial(int.to_bytes, byteorder="big", signed=False)
 from_bytes = partial(int.from_bytes, byteorder="big", signed=False)
@@ -139,18 +148,6 @@ def decrypt(cipher_data):
     return xor(tmp, b"\x8d\xa5\xa5\x8d")
 
 
-def find_query_value(query, key):
-    index = query.find(key+"=")
-    if index >= 0:
-        start = index + len(key) + 1
-        stop = query.find("&", start)
-        if stop == -1:
-            return query[start:].strip()
-        else:
-            return query[start:stop].strip()
-    return ""
-
-
 def get_pickcode_for_sha1(sha1):
     pickcode = SHA1_TO_PICKCODE.get(sha1)
     if pickcode:
@@ -169,12 +166,25 @@ def get_pickcode_for_sha1(sha1):
 def get_downurl(pickcode, user_agent = ""):
     """获取文件的下载链接
     """
-    pickcode_bytes = bytes(pickcode, "ascii")
     resp = urlopen(
         "POST", 
-        "https://proapi.115.com/app/chrome/downurl", 
-        fields={"data": encrypt(b'{"pickcode":"%s","pick_code":"%s"}' % (pickcode_bytes, pickcode_bytes)).decode("ascii")}, 
+        "https://proapi.115.com/android/2.0/ufile/download", 
+        fields={"data": encrypt(b'{"pick_code":"%s"}' % bytes(pickcode, "ascii")).decode("ascii")}, 
         headers={"Cookie": cookies, "User-Agent": user_agent}, 
+    ).json()
+    if resp["state"]:
+        resp["data"] = loads(decrypt(resp["data"]))
+    return resp
+
+
+def get_share_downurl(share_code, receive_code, file_id):
+    """获取分享文件的下载链接
+    """
+    resp = urlopen(
+        "POST", 
+        "https://proapi.115.com/app/share/downurl", 
+        fields={"data": encrypt(f'{{"share_code":"{share_code}","receive_code":"{receive_code}","file_id":{file_id}}}'.encode("utf-8")).decode("ascii")}, 
+        headers={"Cookie": cookies}, 
     ).json()
     if resp["state"]:
         resp["data"] = loads(decrypt(resp["data"]))
@@ -184,35 +194,61 @@ def get_downurl(pickcode, user_agent = ""):
 @app.route("/", methods=["GET", "HEAD"])
 @app.route("/<path:name>", methods=["GET", "HEAD"])
 def index(name=""):
-    query_string = request.query_string.decode().strip()
-    pickcode = find_query_value(query_string, "pickcode")
-    if not pickcode:
-        sha1 = find_query_value(query_string, "sha1")
-        if sha1:
-            if sha1.strip(hexdigits):
-                return Response(f"bad sha1: {sha1!r}", 400)
-        elif len(query_string) == 40 and not query_string.strip(hexdigits):
-            sha1 = query_string
-        if sha1:
-            pickcode = get_pickcode_for_sha1(sha1.upper())
-            if not pickcode:
-                return Response(f"no file with sha1: {sha1!r}", 404)
-    if not pickcode:
-        pickcode = query_string
-    if not pickcode.isalnum():
-        return Response(f"bad pickcode: {pickcode!r}", 400)
-    user_agent = request.headers.get("user-agent", "")
-    resp = get_downurl(pickcode.lower(), user_agent)
-    if resp["state"]:
-        item = next(iter(resp["data"].values()))
-        if item["url"]:
-            return redirect(item["url"]["url"])
-    return Response(f"no file with pickcode: {pickcode!r}", 404)
+    get_arg = request.args.get
+    share_code = get_arg("share_code", "").strip()
+    if share_code:
+        receive_code = get_arg("receive_code", "").strip().lower()
+        is_your_own_share = not receive_code
+        if is_your_own_share:
+            receive_code = RECEIVE_CODE_MAP.get(share_code, "").lower()
+            if not receive_code:
+                resp = urlopen("GET", f"https://webapi.115.com/share/shareinfo?share_code={share_code}", headers={"Cookie": cookies}).json()
+                if not resp["state"]:
+                    return "`receive_code` not specified", 400
+                receive_code = RECEIVE_CODE_MAP[share_code] = resp["data"]["receive_code"]
+        if len(receive_code) != 4:
+            return f"bad receive_code: {receive_code!r}", 400
+        file_id = get_arg("id", "").strip()
+        if not file_id.isdecimal():
+            return f"bad id: {file_id!r}", 400
+        resp = get_share_downurl(share_code, receive_code, file_id)
+        if not resp["state"] and is_your_own_share and resp.get("errno") == 4100008:
+            resp = urlopen("GET", f"https://webapi.115.com/share/shareinfo?share_code={share_code}", headers={"Cookie": cookies}).json()
+            if not resp["state"]:
+                return resp, 400
+            receive_code = RECEIVE_CODE_MAP[share_code] = resp["data"]["receive_code"]
+            resp = get_share_downurl(share_code, receive_code, file_id)
+        if resp["state"]:
+            item = resp["data"]["url"]
+            if item:
+                return redirect(item["url"])
+        return resp, 400
+    else:
+        query_string = request.query_string.decode().strip()
+        pickcode = get_arg("pickcode", "").strip()
+        if not pickcode:
+            sha1 = get_arg("sha1", "").strip()
+            if sha1:
+                if sha1.strip(hexdigits):
+                    return f"bad sha1: {sha1!r}", 400
+            elif len(query_string) == 40 and not query_string.strip(hexdigits):
+                sha1 = query_string
+            if sha1:
+                pickcode = get_pickcode_for_sha1(sha1.upper())
+                if not pickcode:
+                    return f"no file with sha1: {sha1!r}", 404
+        if not pickcode:
+            pickcode = query_string
+        if not pickcode.isalnum():
+            return f"bad pickcode: {pickcode!r}", 400
+        user_agent = request.headers.get("user-agent", "")
+        resp = get_downurl(pickcode.lower(), user_agent)
+        if resp["state"]:
+            return redirect(resp["data"]["url"])
+        return resp, 400
 
 
 if __name__ == "__main__":
-    cookies_path = args.cookies_path or "115-cookies.txt"
-    cookies = open(cookies_path, encoding="latin-1").read()
     print(__doc__)
     app.run(
         host=args.host, 

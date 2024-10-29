@@ -823,11 +823,13 @@ def oss_multipart_upload(
         if callable(make_reporthook):
             reporthook = make_reporthook(None if filesize < 0 else filesize)
             if isinstance(reporthook, Generator):
-                reporthook.send(None)
                 close_reporthook = reporthook.close
+                reporthook = reporthook.send
+                reporthook(None)
             elif isinstance(reporthook, AsyncGenerator):
-                yield partial(reporthook.asend, None)
                 close_reporthook = reporthook.aclose
+                reporthook = reporthook.asend
+                yield partial(reporthook, None)
         if async_:
             batch: Callable = partial(async_foreach, threaded=False)
         else:
