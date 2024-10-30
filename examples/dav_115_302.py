@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 2, 5)
+__version__ = (0, 3)
 __requirements__ = ["cachetools", "flask", "Flask-Compress", "path_predicate", "python-115", "urllib3_request", "werkzeug", "wsgidav"]
 __doc__ = """\
     🕸️ 获取你的 115 网盘账号上文件信息和下载链接 🕷️
@@ -33,7 +33,7 @@ parser = ArgumentParser(
 
     GET ?path={path}
 
-也可以通过 pickcode 查询
+也可以通过 pickcode 查询（对于分享无效）
 
     GET ?pickcode={pickcode}
 
@@ -41,7 +41,7 @@ parser = ArgumentParser(
 
     GET ?id={id}
 
-也可以通过 sha1 查询（必是文件）
+也可以通过 sha1 查询（必是文件）（对于分享无效）
 
     GET ?sha1={sha1}
 
@@ -57,11 +57,13 @@ parser = ArgumentParser(
 
     GET ?method=url
 
-5. 查询文件或文件夹的备注
+5. 强制视为文件下载（而不进行多余的检测）
 
-    GET ?method=desc
+    GET ?method=file
 
 6. 支持的查询参数
+
+💡 如果是分享 （路由路径以 /<share 开始），则只有 id 和 method 有效，其它参数自动忽略
 
  参数      | 类型    | 必填 | 说明
 ---------  | ------- | ---- | ----------
@@ -69,70 +71,88 @@ pickcode   | string  | 否   | 文件或文件夹的 pickcode，优先级高于 
 id         | integer | 否   | 文件或文件夹的 id，优先级高于 sha1
 sha1       | string  | 否   | 文件或文件夹的 id，优先级高于 path
 path       | string  | 否   | 文件或文件夹的路径，优先级高于 url 中的路径部分
-method     | string  | 否   | 0. '':     缺省值，直接下载
+method     | string  | 否   | 0. '':     缺省值，下载文件或显示目录列表
            |         |      | 2. 'url':  这个文件的下载链接和请求头，JSON 格式
            |         |      | 2. 'attr': 这个文件或文件夹的信息，JSON 格式
            |         |      | 3. 'list': 这个文件夹内所有文件和文件夹的信息，JSON 格式
-           |         |      | 4. 'desc': 这个文件或文件夹的备注，text/html
+           |         |      | 4. 'file': 下载文件
 
 当文件被下载时，可以有其它查询参数
 
  参数      | 类型    | 必填 | 说明
 ---------  | ------- | ---- | ----------
 web        | string  | 否   | 使用 web 接口获取下载链接（文件由服务器代理转发，不走 302）
-m3u8       | string  | 否   | 文件作为 m3u8 打开，需要用到 web 的 cookies（如不提供则自动扫码）
-definition | integer | 否   | m3u8 的分辨率，默认值 0，即所有分辨率，其它的选项：3 - HD（标清），4 - UD（高清）
 image      | string  | 否   | 文件作为图片打开
 
 7. 支持 webdav
 
-在浏览器或 webdav 挂载软件 中输入（可以有个端口号） http://localhost/<dav
+在浏览器或 webdav 挂载软件 中输入
+    http://localhost:8000/<dav
 目前没有用户名和密码就可以浏览，支持 302
+
+8. 支持分享列表
+
+在浏览器中输入
+    http://localhost:8000/<share
+在浏览器或 webdav 挂载软件 中输入
+    http://localhost:8000/<dav/<share
 """)
 
 parser.add_argument("-c", "--cookies", help="115 登录 cookies，优先级高于 -cp/--cookies-path")
 parser.add_argument("-cp", "--cookies-path", default="", help="cookies 文件保存路径，默认为当前工作目录下的 115-cookies.txt")
-parser.add_argument("-t", "--token", default="", help="用于给链接进行签名的 token，如果不提供则无签名")
 parser.add_argument("-pcs", "--path-cache-size", type=int, default=1048576, help="路径缓存的容量大小，默认值 1048576，等于 0 时关闭，小于等于 0 时不限")
-parser.add_argument("-pct", "--path-cache-ttl", type=float, default=0, help="路径缓存的存活时间，小于等于 0 或等于 inf 或 nan 时不限，默认为不限")
-parser.add_argument("-r", "--root", default=0, help="选择一个根 路径 或 id，默认值 0")
-parser.add_argument("-o", "--origin", help="origin 或者说 base_url，用来拼接路径，获取完整链接，默认行为是自行确定")
-parser.add_argument("-p1", "--predicate", help="断言，当断言的结果为 True 时，文件或目录会被显示")
+parser.add_argument("-r", "--root", default="0", help="选择一个根 路径 或 id，默认值 0")
+parser.add_argument("-o", "--origin", help="[webdav] origin 或者说 base_url，用来拼接路径，获取完整链接，默认行为是自行确定")
+parser.add_argument("-p1", "--predicate", help="[webdav] 断言，当断言的结果为 True 时，文件或目录会被显示")
 parser.add_argument(
     "-t1", "--predicate-type", default="ignore", 
     choices=("ignore", "ignore-file", "expr", "lambda", "stmt", "module", "file", "re"), 
-    help="""断言类型，默认值为 'ignore'
+    help="""[webdav] 断言类型，默认值为 'ignore'
     - ignore       （默认值）gitignore 配置文本（有多个时用空格隔开），在文件路径上执行模式匹配，匹配成功则断言为 False
                    NOTE: https://git-scm.com/docs/gitignore#_pattern_format
     - ignore-file  接受一个文件路径，包含 gitignore 的配置文本（一行一个），在文件路径上执行模式匹配，匹配成功则断言为 False
                    NOTE: https://git-scm.com/docs/gitignore#_pattern_format
-    - expr         表达式，会注入一个名为 path 的 p115.P115Path 对象
-    - lambda       lambda 函数，接受一个 p115.P115Path 对象作为参数
-    - stmt         语句，当且仅当不抛出异常，则视为 True，会注入一个名为 path 的 p115.P115Path 对象
-    - module       模块，运行后需要在它的全局命名空间中生成一个 check 或 predicate 函数用于断言，接受一个 p115.P115Path 对象作为参数
-    - file         文件路径，运行后需要在它的全局命名空间中生成一个 check 或 predicate 函数用于断言，接受一个 p115.P115Path 对象作为参数
+    - expr         表达式，会注入一个名为 path 的 p115.P115PathBase 对象
+    - lambda       lambda 函数，接受一个 p115.P115PathBase 对象作为参数
+    - stmt         语句，当且仅当不抛出异常，则视为 True，会注入一个名为 path 的 p115.P115PathBase 对象
+    - module       模块，运行后需要在它的全局命名空间中生成一个 check 或 predicate 函数用于断言，接受一个 p115.P115PathBase 对象作为参数
+    - file         文件路径，运行后需要在它的全局命名空间中生成一个 check 或 predicate 函数用于断言，接受一个 p115.P115PathBase 对象作为参数
     - re           正则表达式，模式匹配，如果文件的名字匹配此模式，则断言为 True
 """)
-parser.add_argument("-p2", "--strm-predicate", help="strm 断言（优先级高于 -p1/--predicate），当断言的结果为 True 时，文件会被显示为带有 .strm 后缀的文本文件，打开后是链接")
+parser.add_argument("-p2", "--strm-predicate", help="[webdav] strm 断言（优先级高于 -p1/--predicate），当断言的结果为 True 时，文件会被显示为带有 .strm 后缀的文本文件，打开后是链接")
 parser.add_argument(
     "-t2", "--strm-predicate-type", default="filter", 
     choices=("filter", "filter-file", "expr", "lambda", "stmt", "module", "file", "re"), 
-    help="""断言类型，默认值为 'filter'
+    help="""[webdav] 断言类型，默认值为 'filter'
     - filter       （默认值）gitignore 配置文本（有多个时用空格隔开），在文件路径上执行模式匹配，匹配成功则断言为 True
                    请参考：https://git-scm.com/docs/gitignore#_pattern_format
     - filter-file  接受一个文件路径，包含 gitignore 的配置文本（一行一个），在文件路径上执行模式匹配，匹配成功则断言为 True
                    请参考：https://git-scm.com/docs/gitignore#_pattern_format
-    - expr         表达式，会注入一个名为 path 的 p115.P115Path 对象
-    - lambda       lambda 函数，接受一个 p115.P115Path 对象作为参数
-    - stmt         语句，当且仅当不抛出异常，则视为 True，会注入一个名为 path 的 p115.P115Path 对象
-    - module       模块，运行后需要在它的全局命名空间中生成一个 check 或 predicate 函数用于断言，接受一个 p115.P115Path 对象作为参数
-    - file         文件路径，运行后需要在它的全局命名空间中生成一个 check 或 predicate 函数用于断言，接受一个 p115.P115Path 对象作为参数
+    - expr         表达式，会注入一个名为 path 的 p115.P115PathBase 对象
+    - lambda       lambda 函数，接受一个 p115.P115PathBase 对象作为参数
+    - stmt         语句，当且仅当不抛出异常，则视为 True，会注入一个名为 path 的 p115.P115PathBase 对象
+    - module       模块，运行后需要在它的全局命名空间中生成一个 check 或 predicate 函数用于断言，接受一个 p115.P115PathBase 对象作为参数
+    - file         文件路径，运行后需要在它的全局命名空间中生成一个 check 或 predicate 函数用于断言，接受一个 p115.P115PathBase 对象作为参数
     - re           正则表达式，模式匹配，如果文件的名字匹配此模式，则断言为 True
+""")
+parser.add_argument("-fs", "--fast-strm", action="store_true", help="""快速实现 媒体筛选 和 虚拟 strm，此命令优先级较高，相当于命令行指定
+
+    --strm-predicate-type expr \\
+    --strm-predicate '(
+        path.media_type.startswith(("video/", "audio/")) and
+        path.suffix.lower() != ".ass"
+    )' \\
+    --predicate-type expr \\
+    --predicate '(
+        path.is_dir() or
+        path.media_type.startswith("image/") or
+        path.suffix.lower() in (".nfo", ".ass", ".ssa", ".srt", ".idx", ".sub", ".txt", ".vtt", ".smi")
+    )'
 """)
 
 if __name__ == "__main__":
     parser.add_argument("-H", "--host", default="0.0.0.0", help="ip 或 hostname，默认值：'0.0.0.0'")
-    parser.add_argument("-p", "--port", default=8000, type=int, help="端口号，默认值：8000")
+    parser.add_argument("-P", "--port", default=8000, type=int, help="端口号，默认值：8000")
     parser.add_argument("-d", "--debug", action="store_true", help="启用 debug 模式，当文件变动时自动重启 + 输出详细的错误信息")
     parser.add_argument("-v", "--version", action="store_true", help="输出版本号")
 
@@ -155,63 +175,73 @@ else:
 try:
     from cachetools import LRUCache, TTLCache
     from flask import request, redirect, render_template_string, send_file, Flask, Response
-    from flask_compress import Compress
-    from path_predicate import make_predicate
+    from flask_compress import Compress # type: ignore
     from p115 import check_response, AuthenticationError, P115URL
-    from p115.component import P115Client, P115FileSystem, P115Path
-    from posixpatht import escape as escape_name
+    from p115.component import P115Client, P115FileSystem, P115ShareFileSystem
+    from p115.tool import type_of_attr
+    from path_predicate import make_predicate
+    from posixpatht import escape as escape_name, path_is_dir_form
     from urllib3.poolmanager import PoolManager
     from urllib3_request import request as urllib3_request
     from werkzeug.middleware.dispatcher import DispatcherMiddleware
-    from werkzeug.serving import run_simple
-    from wsgidav.wsgidav_app import WsgiDAVApp
-    from wsgidav.dav_error import DAVError
-    from wsgidav.dav_provider import DAVCollection, DAVNonCollection, DAVProvider
+    from wsgidav.wsgidav_app import WsgiDAVApp # type: ignore
+    from wsgidav.dav_error import DAVError # type: ignore
+    from wsgidav.dav_provider import DAVCollection, DAVNonCollection, DAVProvider # type: ignore
 except ImportError:
     from sys import executable
     from subprocess import run
     run([executable, "-m", "pip", "install", "-U", *__requirements__], check=True)
-    import posixpatht
     from cachetools import LRUCache, TTLCache
     from flask import request, redirect, render_template_string, send_file, Flask, Response
     from flask_compress import Compress # type: ignore
     from p115 import check_response, AuthenticationError, P115URL
-    from p115.component import P115Client, P115FileSystem, P115Path
+    from p115.component import P115Client, P115FileSystem, P115ShareFileSystem
+    from p115.tool import type_of_attr
     from path_predicate import make_predicate
-    from posixpatht import escape as escape_name
+    from posixpatht import escape as escape_name, path_is_dir_form
     from urllib3.poolmanager import PoolManager
     from urllib3_request import request as urllib3_request
     from werkzeug.middleware.dispatcher import DispatcherMiddleware
-    from werkzeug.serving import run_simple
     from wsgidav.wsgidav_app import WsgiDAVApp # type: ignore
     from wsgidav.dav_error import DAVError # type: ignore
     from wsgidav.dav_provider import DAVCollection, DAVNonCollection, DAVProvider # type: ignore
 
-import errno
-
-from collections import UserString
 from collections.abc import Callable, Mapping, MutableMapping
 from datetime import datetime
 from functools import cached_property, partial, update_wrapper
-from hashlib import sha1
 from html import escape
 from io import BytesIO
-from os import stat
-from os.path import exists, expanduser, dirname, join as joinpath, realpath
 from pathlib import Path
 from posixpath import splitext
-from socket import getdefaulttimeout, setdefaulttimeout
-from string import hexdigits
-from sys import exc_info
-from threading import Lock
-from time import localtime, strftime
+from string import digits, hexdigits
 from typing import cast
-from urllib.error import HTTPError
-from urllib.parse import quote, unquote, urljoin, urlsplit
+from urllib.parse import unquote, urlsplit
 
 
-if getdefaulttimeout() is None:
-    setdefaulttimeout(30)
+TRANSTAB3 = {c: f"%{c:02x}" for c in b"#%?"}
+TRANSTAB4 = {c: f"%{c:02x}" for c in b"#%/?"}
+translate = str.translate
+urlopen = partial(urllib3_request, pool=PoolManager(num_pools=128))
+
+origin = args.origin
+root = args.root
+
+if args.fast_strm:
+    predicate = make_predicate("""(
+    path.is_dir() or
+    path.media_type.startswith("image/") or
+    path.suffix.lower() in (".nfo", ".ass", ".ssa", ".srt", ".idx", ".sub", ".txt", ".vtt", ".smi")
+)""", type="expr")
+elif predicate := args.predicate or None:
+    predicate = make_predicate(predicate, {"re": __import__("re")}, type=args.predicate_type)
+
+if args.fast_strm:
+    strm_predicate = make_predicate("""(
+    path.media_type.startswith(("video/", "audio/")) and
+    path.suffix.lower() != ".ass"
+)""", type="expr")
+elif strm_predicate := args.strm_predicate or None:
+    strm_predicate = make_predicate(strm_predicate, {"re": __import__("re")}, type=args.strm_predicate_type)
 
 if not (cookies := args.cookies):
     if cookies_path := args.cookies_path:
@@ -219,49 +249,47 @@ if not (cookies := args.cookies):
     else:
         cookies = Path("115-cookies.txt")
 client = P115Client(cookies, check_for_relogin=True, ensure_cookies=True, app="harmony")
+fs = client.get_fs(cache_id_to_readdir=65536, cache_path_to_id=args.path_cache_size, request=urlopen)
 
-root = args.root
-origin = args.origin
-
-import re
-
-if predicate := args.predicate or None:
-    predicate = make_predicate(predicate, {"re": re}, type=args.predicate_type)
-
-if strm_predicate := args.strm_predicate or None:
-    strm_predicate = make_predicate(strm_predicate, {"re": re}, type=args.strm_predicate_type)
-
-transtab = {c: f"%{c:02x}" for c in b"#%/?"}
-translate = str.translate
-urlopen = partial(urllib3_request, pool=PoolManager(num_pools=128))
-
-fs = client.get_fs(cache_id_to_readdir=65536, cache_path_to_id=1048576, request=urlopen)
-path_to_id = cast(dict, fs.path_to_id)
 # NOTE: id 到 pickcode 的映射
 ID_TO_PICKCODE: MutableMapping[int, str] = LRUCache(65536)
 # NOTE: sha1 到 pickcode 到映射
 SHA1_TO_PICKCODE: MutableMapping[str, str] = LRUCache(65536)
 # NOTE: 缓存图片的 CDN 直链 1 小时
 IMAGE_URL_CACHE: MutableMapping[str, None | P115URL] = TTLCache(65536, ttl=3600)
+# NOTE: 缓存 115 分享的文件系统对象
+SHARE_FS_MAP: dict[str, P115ShareFileSystem] = {}
 # NOTE: webdav 的文件对象缓存
-webdav_file_cache: MutableMapping[str, DAVNonCollection] = LRUCache(65536)
+DAV_FILE_CACHE: MutableMapping[str, DAVNonCollection] = LRUCache(65536)
+
+root_dir: str = ""
+if root in ("0", "", "/") or fs.abspath(root) == "/":
+    root = 0
+    root_dir = "/"
+else:
+    if not (root.startswith("0") or root.strip(digits)):
+        root = int(root)
+    try:
+        fs.chdir(root)
+    except NotADirectoryError:
+        root_attr = fs.attr(root)
+        root = root_attr["id"]
+        root_pickcode = root_attr["pickcode"]
+    else:
+        root = fs.id
+        if root == 0:
+            root_dir = "/"
+        else:
+            root_dir = str(fs.path) + "/"
 
 flask_app = Flask(__name__)
 Compress(flask_app)
 setattr(flask_app.json, "ensure_ascii", False)
 
 
-def reduce_image_url_layers(url: str, /) -> str:
-    if not url.startswith(("http://thumb.115.com/", "https://thumb.115.com/")):
-        return url
-    urlp = urlsplit(url)
-    sha1 = urlp.path.rsplit("/")[-1].split("_")[0]
-    return f"https://imgjump.115.com/?sha1={sha1}&{urlp.query}&size=0"
-
-
 class DavPathBase:
 
-    def __getattr__(self, attr, /):
+    def __getattr__(self, attr: str, /):
         try:
             return self.attr[attr]
         except KeyError as e:
@@ -273,11 +301,11 @@ class DavPathBase:
 
     @cached_property
     def ctime(self, /) -> float:
-        return self.attr["ctime"]
+        return self.attr.get("ctime") or self.attr.get("time", 0)
 
     @cached_property
     def mtime(self, /) -> float:
-        return self.attr["mtime"]
+        return self.attr.get("mtime") or self.attr.get("time", 0)
 
     @cached_property
     def name(self, /) -> str:
@@ -291,7 +319,7 @@ class DavPathBase:
 
     def get_etag(self, /) -> str:
         return "%s-%s-%s" % (
-            self.attr["pickcode"], 
+            self.attr["id"], 
             self.mtime, 
             self.size, 
         )
@@ -316,14 +344,18 @@ class FileResource(DavPathBase, DAVNonCollection):
         /, 
         path: str, 
         environ: dict, 
-        attr: P115Path, 
+        attr: Mapping, 
+        is_strm: bool = False, 
     ):
         super().__init__(path, environ)
         self.attr = attr
-        if url := IMAGE_URL_CACHE.get(attr["pickcode"]):
-            self.__dict__["url"] = url
+        self.is_strm = is_strm
+        pickcode = attr.get("pickcode")
+        if pickcode and (url := IMAGE_URL_CACHE.get(pickcode)) and isinstance(url, P115URL):
+            self.__dict__["url"] = str(url)
             self.__dict__["size"] = url["size"]
-        webdav_file_cache[path] = self
+        if is_strm:
+            DAV_FILE_CACHE[path] = self
 
     @cached_property
     def origin(self, /) -> str:
@@ -333,37 +365,40 @@ class FileResource(DavPathBase, DAVNonCollection):
 
     @cached_property
     def size(self, /) -> int:
-        if self.path.endswith(".strm"):
+        if self.is_strm:
             return len(self.strm_data)
         return self.attr["size"]
 
     @cached_property
     def strm_data(self, /) -> bytes:
         attr = self.attr
-        name = attr["name"].translate({0x23: "%23", 0x2F: "%2F", 0x3F: "%3F"})
-        url = joinpath(
-            self.origin, 
-            f"{name}?pickcode={attr['pickcode']}&id={attr['id']}&sha1={attr['sha1']}", 
-        )
-        if attr.get("class") == "PIC" or attr.get("thumb"):
-            url += "&image=true"
+        origin = self.origin
+        name = translate(attr["name"], TRANSTAB4)
+        if share_code := attr.get("share_code"):
+            url = f"{origin}/{name}?method=file&share_code={share_code}&id={attr['id']}"
+        else:
+            url = f"{origin}/{name}?method=file&pickcode={attr['pickcode']}&id={attr['id']}&sha1={attr['sha1']}"
+            if attr.get("class") == "PIC" or attr.get("thumb"):
+                url += "&image=true"
         return bytes(url, "utf-8")
 
     @property
     def url(self, /) -> str:
-        if (url := self.__dict__.get("url", "")):
-            return str(url)
+        if url := self.__dict__.get("url", ""):
+            return url
         attr = self.attr
-        if attr.get("class") == "PIC" or attr.get("thumb"):
-            url = get_image_url(attr["pickcode"])
-            self.__dict__["url"] = url
-            self.__dict__["size"] = url["size"]
-            return url["data"]["source_url"]
+        if share_code := attr.get("share_code"):
+            return f"/<share?method=file&share_code={share_code}&id={attr['id']}"
         else:
-            return f"/{quote(attr['name'], safe='')}?id={attr['id']}"
+            pickcode = attr.get("pickcode")
+            if attr.get("class") == "PIC" or attr.get("thumb"):
+                resp = get_image_url(attr["pickcode"])
+                self.__dict__["url"] = str(resp)
+                self.__dict__["size"] = resp["size"]
+            return f"/?method=file&pickcode={pickcode}"
 
     def get_content(self, /):
-        if self.path.endswith(".strm"):
+        if self.is_strm:
             return BytesIO(self.strm_data)
         raise DAVError(302, add_headers=[("Location", self.url)])
 
@@ -384,33 +419,63 @@ class FolderResource(DavPathBase, DAVCollection):
         /, 
         path: str, 
         environ: dict, 
-        attr: P115Path, 
+        attr: Mapping, 
     ):
         super().__init__(path, environ)
         self.attr = attr
 
     @cached_property
-    def children(self, /) -> dict[str, P115Path]:
-        children: dict[str, P115Path] = {}
-        for attr in self.attr.listdir_path():
-            name = attr["name"]
-            if not attr.is_dir() and strm_predicate and strm_predicate(attr):
-                name = splitext(name)[0] + ".strm"
-            elif predicate and not predicate(attr):
-                continue
-            children[name] = attr
+    def children(self, /) -> dict[str, FileResource | FolderResource]:
+        children: dict[str, FileResource | FolderResource] = {}
+        environ = self.environ
+        dir_ = self.path
+        if dir_ != "/":
+            dir_ += "/"
+        if dir_ == "/<share/":
+            for share in list_shares():
+                share_code = share["share_code"]
+                children[share["share_code"]] = FolderResource(
+                    "/<share/" + share_code, 
+                    environ, 
+                    {
+                        "id": 0, 
+                        "parent_id": 0, 
+                        "is_directory": True, 
+                        "time": int(share["create_time"]), 
+                        "size": int(share["file_size"]), 
+                        "name": share["share_title"], 
+                        "ico": "folder", 
+                        "share_code": share_code, 
+                    }, 
+                )
+        else:
+            if dir_.startswith("/<share/"):
+                share_code = self.attr["share_code"]
+                listdir_path: Callable = get_share_fs(share_code).listdir_path
+            else:
+                listdir_path = fs.listdir_path
+                if dir_ == "/":
+                    children["<share"] = FolderResource("/<share", environ, {"name": "<share"})
+            for attr in listdir_path(self.attr):
+                name = attr["name"]
+                is_strm = False
+                is_dir = attr["is_directory"]
+                if not is_dir and strm_predicate and strm_predicate(attr):
+                    is_strm = True
+                    name = splitext(name)[0] + ".strm"
+                elif predicate and not predicate(attr):
+                    continue
+                path = dir_ + name
+                if is_dir:
+                    children[name] = FolderResource(path, environ, attr)
+                else:
+                    children[name] = FileResource(path, environ, attr, is_strm=is_strm)
         return children
 
     def get_member(self, /, name: str) -> FileResource | FolderResource:
         if not (attr := self.children.get(name)):
             raise DAVError(404, self.path + "/" + name)
-        relpath = attr["path"][len(root_dir)-1:]
-        if attr.is_dir():
-            return FolderResource(relpath, self.environ, attr)
-        else:
-            if name.endswith(".strm"):
-                relpath = splitext(relpath)[0] + ".strm"
-            return FileResource(relpath, self.environ, attr)
+        return attr
 
     def get_member_list(self, /) -> list[FileResource | FolderResource]:
         return list(map(self.get_member, self.get_member_names()))
@@ -428,66 +493,51 @@ class FolderResource(DavPathBase, DAVCollection):
 
 class P115FileSystemProvider(DAVProvider):
 
-    def __init__(self, /, fs: P115FileSystem):
-        super().__init__()
-        self.fs = fs
-
     def get_resource_inst(
         self, 
         /, 
         path: str, 
         environ: dict, 
     ) -> FolderResource | FileResource:
-        if path in webdav_file_cache:
-            return webdav_file_cache[path]
-        id_or_path: int | str = self.fs.abspath(path.lstrip("/"))
-        if id_or_path == "/":
-            id_or_path = 0
-        elif fid := path_to_id.get(id_or_path):
-            id_or_path = fid
-        try:
-            attr = self.fs.as_path(id_or_path)
-        except FileNotFoundError:
-            raise DAVError(404, path)
-        if attr.is_dir():
-            return FolderResource(path, environ, attr)
+        path = path.strip("/")
+        if inst := DAV_FILE_CACHE.get(path):
+            return inst
+        if path == "<share":
+            return FolderResource("/<share", environ, {"name": "<share"})
         else:
-            if strm_predicate and strm_predicate(attr):
+            path_full = "/" + path
+            if path.startswith("<share/"):
+                share_code, _, path = path[7:].partition("/")
+                share_fs = get_share_fs(share_code)
+                get_attr: Callable = share_fs.as_path
+            else:
+                get_attr = partial(fs.as_path, refresh=False)
+            try:
+                attr = get_attr(path)
+            except FileNotFoundError:
+                raise DAVError(404, path)
+            is_strm = False
+            is_dir = attr["is_directory"]
+            if not is_dir and strm_predicate and strm_predicate(attr):
+                is_strm = True
                 path = splitext(path)[0] + ".strm"
             elif predicate and not predicate(attr):
                 raise DAVError(404, path)
-            return FileResource(path, environ, attr)
+            if is_dir:
+                return FolderResource(path_full, environ, attr)
+            else:
+                return FileResource(path_full, environ, attr, is_strm=is_strm)
 
     def is_readonly(self, /) -> bool:
         return True
 
 
-@flask_app.template_filter("format_size")
-def format_size(
-    n: int, 
-    /, 
-    unit: str = "", 
-    precision: int = 2, 
-) -> str:
-    "scale bytes to its proper byte format"
-    if unit == "B" or not unit and n < 1024:
-        return f"{n} B"
-    b = 1
-    b2 = 1024
-    for u in ["K", "M", "G", "T", "P", "E", "Z", "Y"]:
-        b, b2 = b2, b2 << 10
-        if u == unit if unit else n < b2:
-            break
-    return f"%.{precision}f {u}B" % (n / b)
-
-
-@flask_app.template_filter("format_timestamp")
-def format_timestamp(ts: int | float, /) -> str:
-    return str(datetime.fromtimestamp(ts))
-
-
 def get_status_code(e: BaseException, /) -> None | int:
-    status = getattr(e, "status", None) or getattr(e, "code", None) or getattr(e, "status_code", None)
+    status = (
+        getattr(e, "status", None) or 
+        getattr(e, "code", None) or 
+        getattr(e, "status_code", None)
+    )
     if status is None and hasattr(e, "response"):
         response = e.response
         status = (
@@ -498,7 +548,33 @@ def get_status_code(e: BaseException, /) -> None | int:
     return status
 
 
-def redirect_exception_response(func, /):
+def reduce_image_url_layers(url: str, /) -> str:
+    if not url.startswith(("http://thumb.115.com/", "https://thumb.115.com/")):
+        return url
+    urlp = urlsplit(url)
+    sha1 = urlp.path.rsplit("/")[-1].split("_")[0]
+    return f"https://imgjump.115.com/?sha1={sha1}&{urlp.query}&size=0"
+
+
+def flatten_image_url(url: str, /) -> P115URL:
+    if isinstance(url, P115URL):
+        return url
+    url = reduce_image_url_layers(url)
+    with urlopen(url, "HEAD") as resp:
+        size = int(resp.headers["Content-Length"])
+        url = cast(str, resp["url"])
+    return P115URL(url, size=size)
+
+
+def get_image_url(pickcode: str, /) -> P115URL:
+    if url := IMAGE_URL_CACHE.get(pickcode):
+        return flatten_image_url(url)
+    resp = check_response(client.fs_image(pickcode, request=urlopen))
+    url = IMAGE_URL_CACHE[pickcode] = flatten_image_url(resp["data"]["origin_url"])
+    return url
+
+
+def redirect_exception_response(func: Callable, /) -> Callable:
     def wrapper(*args, **kwds):
         try:
             return func(*args, **kwds)
@@ -523,23 +599,28 @@ def redirect_exception_response(func, /):
     return update_wrapper(wrapper, func)
 
 
-def flatten_image_url(url: str, /) -> P115URL:
-    if isinstance(url, P115URL):
-        return url
-    url = reduce_image_url_layers(url)
-    with urlopen(url, "HEAD") as resp:
-        size = int(resp.headers["Content-Length"])
-        url = cast(str, resp.url)
-    return P115URL(url, size=size)
+def list_shares() -> list[dict]:
+    global SHARE_FS_MAP
+    share_fs_map_new: dict[str, P115ShareFileSystem] = {}
+    shares = client.sharing.list()
+    for item in shares:
+        share_code = item["share_code"]
+        receive_code = item["receive_code"]
+        if fs := SHARE_FS_MAP.get(share_code):
+            fs.__dict__["receive_code"] = receive_code
+            share_fs_map_new[share_code] = fs
+        else:
+            share_fs_map_new[share_code] = P115ShareFileSystem(client, share_code, receive_code, request=urlopen)
+    SHARE_FS_MAP = share_fs_map_new
+    return shares
 
 
-def get_image_url(pickcode: str, /) -> P115URL:
-    if url := IMAGE_URL_CACHE.get(pickcode):
-        return flatten_image_url(url)
-    resp = check_response(client.fs_image(pickcode, request=urlopen))
-    data = resp["data"]
-    url = IMAGE_URL_CACHE[pickcode] = flatten_image_url(data["origin_url"])
-    return url
+def get_share_fs(share_code: str, /) -> P115ShareFileSystem:
+    try:
+        return SHARE_FS_MAP[share_code]
+    except KeyError:
+        list_shares()
+        return SHARE_FS_MAP[share_code]
 
 
 def get_file_url(
@@ -548,117 +629,142 @@ def get_file_url(
     user_agent: str = "", 
     use_web_api: bool = False, 
 ) -> P115URL:
-    headers = {"User-Agent": user_agent}
-    return client.download_url(pickcode, headers=headers, use_web_api=use_web_api)
+    return client.download_url(
+        pickcode, 
+        headers={"User-Agent": user_agent}, 
+        use_web_api=use_web_api, 
+    )
 
 
-def get_origin():
+def get_share_file_url(
+    share_code: str, 
+    receive_code: str, 
+    file_id: int | str, 
+    /, 
+    use_web_api: bool = False, 
+) -> P115URL:
+    return client.share_download_url(
+        {"share_code": share_code, "receive_code": receive_code, "file_id": file_id}, 
+        use_web_api=use_web_api, 
+    )
+
+
+def get_origin() -> str:
     scheme = request.environ.get("HTTP_X_FORWARDED_PROTO") or "http"
     netloc = unquote(urlsplit(request.url).netloc)
     return f"{scheme}://{netloc}"
 
 
-def normalize_attr(info: Mapping, /, origin: str = "") -> dict:
+def normalize_attr(
+    info: Mapping, 
+    /, 
+    origin: str = "", 
+) -> dict:
     if not origin:
         origin = get_origin()
     attr = {
         k: info[k] for k in (
-            "is_directory", "id", "parent_id", "pickcode", "sha1", "size", "name", 
-            "path", "ancestors", "ctime", "mtime", "atime", "time", "thumb", "ico", 
+            "is_directory", "id", "parent_id", "pickcode", "sha1", "size", "name", "path", 
+            "ancestors", "ctime", "mtime", "atime", "time", "thumb", "ico", "share_code",  
         ) if k in info
     }
-    relpath = attr["relpath"] = attr["path"][len(cast(str, root_dir)):]
-    path_url = "%s/%s" % (origin, translate(relpath, transtab))
-    if attr["is_directory"]:
-        attr["url"] = f"{path_url}?id={attr['id']}"
+    if share_code := attr.get("share_code"):
+        attr["url"] = f"{origin}/<share/{share_code}{translate(attr['path'], TRANSTAB3)}?share_code={share_code}&id={attr['id']}"
+        if not attr["is_directory"]:
+            attr["url"] += "&method=file"
+            attr["is_media"] = bool(info.get("play_long")) or type_of_attr(info) in (3, 4)
     else:
-        pickcode = cast(str, attr["pickcode"])
-        SHA1_TO_PICKCODE[attr["sha1"]] = ID_TO_PICKCODE[attr["id"]] = pickcode
-        url = f"{path_url}?pickcode={pickcode}"
-        if thumb := attr.get("thumb"):
-            IMAGE_URL_CACHE[pickcode] = thumb
-            url += "&image=true"
-        elif info["violated"] and attr["size"] < 1024 * 1024 * 115:
-            url += "&web=true"
-        attr["url"] = url
-        attr["is_media"] = info.get("play_long") or info.get("class") in ("AVI", "JG_AVI", "MUS", "JG_MUS")
+        relpath = attr["relpath"] = attr["path"][len(cast(str, root_dir)):]
+        path_url = "%s/%s" % (origin, translate(relpath, TRANSTAB3))
+        if attr["is_directory"]:
+            attr["url"] = f"{path_url}?id={attr['id']}"
+        else:
+            pickcode = cast(str, attr["pickcode"])
+            SHA1_TO_PICKCODE[attr["sha1"]] = ID_TO_PICKCODE[attr["id"]] = pickcode
+            url = f"{path_url}?pickcode={pickcode}"
+            if thumb := attr.get("thumb"):
+                IMAGE_URL_CACHE[pickcode] = thumb
+                url += "&image=true"
+            elif info["violated"] and attr["size"] < 1024 * 1024 * 115:
+                url += "&web=true"
+            attr["url"] = url + "&method=file"
+            attr["is_media"] = bool(info.get("play_long")) or info.get("class") in ("AVI", "JG_AVI", "MUS", "JG_MUS")
     return attr
 
 
-def get_attr(path: str = "", /, use_path_cache: bool = False, id: None | int = None):
+def get_attr(
+    path: str = "", 
+    id: None | int = None, 
+    /, 
+):
     if not root_dir:
         return normalize_attr(fs.attr(root))
+    id_or_path: int | str
+    ensure_dir = False
     if id is None:
         get_arg = request.args.get
-        id_or_path: None | int | str = None
         if pickcode := get_arg("pickcode", "").strip().lower():
             if not pickcode.isalnum():
                 return Response(f"bad pickcode: {pickcode!r}", 400)
             id_or_path = fs.get_id_from_pickcode(pickcode)
-        elif fid := request.args.get("id", "").strip():
+        elif fid := get_arg("id", "").strip():
             try:
                 id_or_path = int(fid)
             except ValueError:
                 return Response(f"bad id: {fid!r}", 400)
-        elif sha1 := request.args.get("sha1", "").strip().upper():
+        elif sha1 := get_arg("sha1", "").strip().upper():
             if not len(sha1) == 40 or sha1.strip(hexdigits):
                 return Response(f"bad sha1: {sha1!r}", 400)
-            id_or_path = check_response(client.fs_shasearch(sha1))["data"]["file_id"]
-        if id_or_path is None:
-            path = unquote(request.args.get("path", "")) or path
-            is_dir = path.endswith("/")
-            if path := path.lstrip("/"):
-                path = fs.abspath(path)
-                if use_path_cache:
-                    if is_dir:
-                        id_or_path = path_to_id.get(path + "/", path)
-                    else:
-                        id_or_path = path_to_id.get(path) or path_to_id.get(path + "/", path)
-                else:
-                    id_or_path = path
-                if isinstance(id_or_path, str):
-                    id_or_path = id_or_path[len(fs.path)+1:]
-            else:
-                path = root
+            resp = check_response(client.fs_shasearch(sha1))
+            id_or_path = int(resp["data"]["file_id"])
+        else:
+            path = unquote(get_arg("path", "")) or path
+            ensure_dir = path_is_dir_form(path)
+            id_or_path = path.lstrip("/")
     else:
         id_or_path = id
-    id_or_path = cast(int | str, id_or_path)
-    attr = fs.attr(id_or_path)
+    attr = fs.attr(id_or_path, ensure_dir=ensure_dir, refresh=False)
     if root and not any(info["id"] == root for info in attr["ancestors"]):
         return Response("out of root range", 403)
     return normalize_attr(attr)
 
 
-def get_list(path: str = "", /, use_path_cache: bool = False, id: None | int = None):
-    if not root_dir:
-        raise NotADirectoryError(errno.ENOTDIR, "root is not directory")
-    if id is None:
-        get_arg = request.args.get
-        id_or_path: None | int | str = None
-        if pickcode := get_arg("pickcode", "").strip().lower():
-            if not pickcode.isalnum():
-                return Response(f"bad pickcode: {pickcode!r}", 400)
-            id_or_path = fs.get_id_from_pickcode(pickcode)
-        elif fid := request.args.get("id", "").strip():
-            try:
-                id_or_path = int(fid)
-            except ValueError:
-                return Response(f"bad id: {fid!r}", 400)
-        if id_or_path is None:
-            path = unquote(request.args.get("path", "")) or path
-            if path := path.lstrip("/"):
-                path = fs.abspath(path)
-                if use_path_cache:
-                    id_or_path = path_to_id.get(path + "/", path)
-                else:
-                    id_or_path = path
-                if isinstance(id_or_path, str):
-                    id_or_path = id_or_path[len(fs.path)+1:]
-            else:
-                path = root
+def get_share_attr(path: str = "", /, share_code: str = ""):
+    get_arg = request.args.get
+    if not share_code:
+        share_code = get_arg("share_code", "")
+    if not share_code:
+        return {"share_code": "", "id": 0, "is_directory": True}
+    fs = get_share_fs(share_code)
+    id_or_path: int | str
+    if fid := get_arg("id", "").strip():
+        try:
+            id_or_path = int(fid)
+        except ValueError:
+            return Response(f"bad id: {fid!r}", 400)
     else:
-        id_or_path = id
-    id_or_path = cast(int | str, id_or_path)
+        id_or_path = unquote(get_arg("path", "")) or path
+    attr = fs.attr(id_or_path)
+    return normalize_attr(attr)
+
+
+def get_list(path: str = "", /):
+    if not root_dir:
+        return Response("root is not directory", 403)
+    id_or_path: int | str
+    get_arg = request.args.get
+    if pickcode := get_arg("pickcode", "").strip().lower():
+        if not pickcode.isalnum():
+            return Response(f"bad pickcode: {pickcode!r}", 400)
+        id_or_path = fs.get_id_from_pickcode(pickcode)
+    elif fid := get_arg("id", "").strip():
+        try:
+            id_or_path = int(fid)
+        except ValueError:
+            return Response(f"bad id: {fid!r}", 400)
+    else:
+        path = unquote(get_arg("path", "")) or path
+        id_or_path = path.lstrip("/")
     children = fs.listdir_attr(id_or_path, page_size=10_000)
     if children and root and not any(int(info["id"]) == root for info in children[0]["ancestors"]):
         return Response("out of root range", 403)
@@ -666,97 +772,147 @@ def get_list(path: str = "", /, use_path_cache: bool = False, id: None | int = N
     return [normalize_attr(attr, origin) for attr in children]
 
 
-def get_url(path: str = "", /, use_path_cache: bool = False, pickcode: str = ""):
+def get_share_list(path: str = "", /, share_code: str = ""):
     get_arg = request.args.get
-    is_image = get_arg("image") not in (None, "0", "false")
-    use_web_api = get_arg("web") not in (None, "0", "false")
-    if not root_dir:
-        id_or_path = root
+    if not share_code:
+        share_code = get_arg("share_code", "")
+    if not share_code:
+        shares = list_shares()
+        origin = get_origin()
+        return [{
+            "id": 0, 
+            "parent_id": 0, 
+            "is_directory": True, 
+            "time": int(s["create_time"]), 
+            "size": int(s["file_size"]), 
+            "name": s["share_title"], 
+            "ico": "folder", 
+            "share_code": s["share_code"], 
+            "url": f"{origin}/<share?share_code={s['share_code']}&id=0", 
+        } for s in shares]
+    fs = get_share_fs(share_code)
+    id_or_path: int | str
+    if fid := get_arg("id", "").strip():
+        try:
+            id_or_path = int(fid)
+        except ValueError:
+            return Response(f"bad id: {fid!r}", 400)
     else:
-        if not pickcode:
-            if pickcode := get_arg("pickcode", "").strip().lower():
-                if not pickcode.isalnum():
-                    return Response(f"bad pickcode: {pickcode!r}", 400)
-            elif fid := request.args.get("id", "").strip():
-                try:
-                    file_id = int(fid)
-                except ValueError:
-                    return Response(f"bad id: {file_id!r}", 400)
-                attr = fs.attr(file_id, ensure_dir=True)
-                pickcode = normalize_attr(attr)["pickcode"]
-            elif sha1 := request.args.get("sha1", "").strip().upper():
-                if not len(sha1) == 40 or sha1.strip(hexdigits):
-                    return Response(f"bad sha1: {sha1!r}", 400)
-                pickcode = check_response(client.fs_shasearch(sha1))["data"]["pick_code"]
-            else:
-                path = unquote(request.args.get("path", "")) or path
-                path = fs.abspath(path.lstrip("/"))
-                if use_path_cache:
-                    id_or_path = path_to_id.get(path, path)
-                else:
-                    id_or_path = path
-                if isinstance(id_or_path, str):
-                    id_or_path = id_or_path[len(fs.path)+1:]
-                attr = fs.attr(id_or_path, ensure_dir=True)
-                normalize_attr(attr)
-                if root and not any(info["id"] == root for info in attr["ancestors"]):
-                    return Response("out of root range", 403)
-        if is_image:
-            return {"type": "image", "url": get_image_url(pickcode)}
-        user_agent = request.headers.get("User-Agent") or ""
-        url = get_file_url(pickcode, user_agent, use_web_api)
-        return {"type": "file", "url": str(url), "headers": url["headers"], "web": use_web_api}
+        id_or_path = unquote(get_arg("path", "")) or path
+    children = fs.listdir_attr(id_or_path, page_size=10_000)
+    origin = get_origin()
+    return [normalize_attr(attr, origin) for attr in children]
 
 
-# def get_url(pickcode: str):
-#     headers["Content-Encoding"] = "identity"
-#     if use_web_api:
-#         if bytes_range := request_headers.get("Range"):
-#             headers["Range"] = bytes_range
-#         resp = urlopen(url, headers=headers)
-#         resp_headers = {
-#             k: v for k, v in resp.headers.items() 
-#             if k.lower() not in ("connection", "date")
-#         }
-#         return Response(
-#             resp, 
-#             headers=resp_headers, 
-#             status=resp.status, 
-#         )
-#     if cdn_image and url["file_name"].lower().endswith(
-#         (".bmp", ".gif", ".heic", ".heif", ".jpeg", ".jpg", ".png", 
-#          ".raw", ".svg", ".tif", ".tiff", ".webp")
-#     ):
-#         IMAGE_URL_CACHE[pickcode] = None
-#     return redirect(url)
+def get_url(path: str = "", /, pickcode: str = ""):
+    get_arg = request.args.get
+    attr: dict
+    if root_dir:
+        if pickcode or (pickcode := get_arg("pickcode", "").strip().lower()):
+            if not pickcode.isalnum():
+                return Response(f"bad pickcode: {pickcode!r}", 400)
+        elif fid := get_arg("id", "").strip():
+            try:
+                file_id = int(fid)
+            except ValueError:
+                return Response(f"bad id: {file_id!r}", 400)
+            attr = fs.attr(file_id, refresh=False)
+            pickcode = normalize_attr(attr)["pickcode"]
+        elif sha1 := get_arg("sha1", "").strip().upper():
+            if not len(sha1) == 40 or sha1.strip(hexdigits):
+                return Response(f"bad sha1: {sha1!r}", 400)
+            resp = check_response(client.fs_shasearch(sha1))
+            pickcode = resp["data"]["pick_code"]
+        else:
+            path = unquote(get_arg("path", "")) or path
+            attr = fs.attr(path.lstrip("/"), ensure_dir=False, refresh=False)
+            attr = normalize_attr(attr)
+            if root and not any(info["id"] == root for info in attr["ancestors"]):
+                return Response("out of root range", 403)
+            pickcode = attr["pickcode"]
+    else:
+        pickcode = root_pickcode
+    if is_image := get_arg("image") not in (None, "0", "false"):
+        return {"type": "image", "url": get_image_url(pickcode)}
+    user_agent = request.headers.get("User-Agent") or ""
+    use_web_api = get_arg("web") not in (None, "0", "false")
+    url = get_file_url(pickcode, user_agent=user_agent, use_web_api=use_web_api)
+    return {"type": "file", "url": str(url), "headers": url["headers"], "web": use_web_api}
 
 
+def get_share_url(path: str = "", /, share_code: str = "", file_id: int | str = ""):
+    get_arg = request.args.get
+    if not share_code:
+        share_code = get_arg("share_code", "")
+    if not share_code:
+        return Response("`share_code` not provided", 400)
+    fs = get_share_fs(share_code)
+    if file_id or (file_id := get_arg("id", "").strip()):
+        try:
+            file_id = int(file_id)
+        except ValueError:
+            return Response(f"bad id: {file_id!r}", 400)
+    else:
+        path = unquote(get_arg("path", "")) or path
+        attr: dict = fs.attr(path, ensure_dir=False)
+        attr = normalize_attr(attr)
+        file_id = attr["id"]
+    use_web_api = get_arg("web") not in (None, "0", "false")
+    url = get_share_file_url(fs.share_code, fs.receive_code, file_id, use_web_api=use_web_api)
+    return {"type": "file", "url": str(url), "headers": url.get("headers"), "web": use_web_api}
 
-def get_page(path: str = "", /, use_path_cache: bool = False):
-    if not root_dir or (pickcode := request.args.get("pickcode", "").strip()):
-        url = get_url(path, use_path_cache)
-        if isinstance(url, Response):
-            return url
-        # TODO: 如果使用 web api，则返回 。。。
-        return redirect(url["url"])
-    attr = get_attr(path, use_path_cache)
-    if isinstance(attr, Response):
-        return attr
-    if not attr["is_directory"]:
-        # TODO: 如果使用 web api，则返回 。。。
-        url = get_url(path, use_path_cache, attr["pickcode"])
-        if isinstance(url, Response):
-            return url
-        return redirect(url["url"])
-    children = get_list(path, use_path_cache, attr["id"])
-    if isinstance(children, Response):
-        return children
-    fid = attr["id"]
-    if fid == root:
+
+def open_file(url, /, headers: None | Mapping = None):
+    if headers is None:
+        headers = {}
+    else:
+        headers = dict(headers)
+    headers["Content-Encoding"] = "identity"
+    if bytes_range := request.headers.get("Range"):
+        headers["Range"] = bytes_range
+    resp = urlopen(url, headers=headers)
+    return Response(
+        resp, 
+        headers={
+            k: v for k, v in resp.headers.items() 
+            if k.lower() not in ("connection", "date")
+        }, 
+        status=resp.status, 
+    )
+
+
+def get_page(path: str = "", /, as_file: bool = False):
+    if not root_dir or as_file or request.args.get("pickcode", "").strip():
+        resp = get_url(path)
+        if isinstance(resp, Response):
+            return resp
+        if resp.get("web"):
+            return open_file(resp["url"], resp.get("headers"))
+        return redirect(resp["url"])
+    try:
+        children = get_list(path)
+        if isinstance(children, Response):
+            return children
+    except NotADirectoryError:
+        resp = get_url(path)
+        if isinstance(resp, Response):
+            return resp
+        if resp.get("web"):
+            return open_file(resp["url"], resp.get("headers"))
+        return redirect(resp["url"])
+    if children:
+        ancestors = children[0]["ancestors"][:-1]
+    else:
+        attr = get_attr(path)
+        if isinstance(attr, Response):
+            return attr
+        ancestors = attr["ancestors"]
+    last_info = ancestors[-1]
+    is_root = last_info["id"] == root
+    parent_id = last_info["parent_id"]
+    if is_root:
         header = f'<strong><a href="/?id={root}&method=list" style="border: 1px solid black; text-decoration: none">/</a></strong>'
     else:
-        ancestors = attr["ancestors"]
-        last_info = ancestors[-1]
         for i, info in enumerate(ancestors):
             if info["id"] == root:
                 break
@@ -911,11 +1067,11 @@ def get_page(path: str = "", /, use_path_cache: bool = False):
     </thead>
     <tbody>
       <tr>
-        {%- if attr["id"] == root %}
+        {%- if is_root %}
         <td style="width: 0px"><i class="file-type tp-folder-receive" folder-type="shared"></i></td>
-        <td colspan="5"><a href="/<share }}" style="display: block; text-align: center; text-decoration: none; font-size: 30px">分享列表</a></td>
+        <td colspan="5"><a href="/<share" style="display: block; text-align: center; text-decoration: none; font-size: 30px">分享列表</a></td>
         {%- else %}
-        <td colspan="6"><a href="/?id={{ attr["parent_id"] }}" style="display: block; text-align: center; text-decoration: none; font-size: 30px">..</a></td>
+        <td colspan="6"><a href="/?id={{ parent_id }}" style="display: block; text-align: center; text-decoration: none; font-size: 30px">..</a></td>
         {%- endif %}
       </tr>
       {%- for attr in children %}
@@ -951,21 +1107,266 @@ def get_page(path: str = "", /, use_path_cache: bool = False):
   </table>
 </body>
 </html>""", 
-        attr=attr, 
+        is_root=is_root, 
+        parent_id=parent_id, 
         children=children, 
         header=header, 
-        root=root, 
     )
 
 
+def get_share_page(path: str = "", /, share_code: str = "", as_file: bool = False):
+    if as_file:
+        resp = get_share_url(path, share_code)
+        if isinstance(resp, Response):
+            return resp
+        if resp.get("web"):
+            return open_file(resp["url"], resp.get("headers"))
+        return redirect(resp["url"])
+    attr = get_share_attr(path, share_code)
+    if isinstance(attr, Response):
+        return attr
+    if not attr["is_directory"]:
+        resp = get_share_url(path, share_code, attr["id"])
+        if isinstance(resp, Response):
+            return resp
+        if resp.get("web"):
+            return open_file(resp["url"], resp.get("headers"))
+        return redirect(resp["url"])
+    children = get_share_list(path, share_code)
+    if isinstance(children, Response):
+        return children
+    share_code = attr["share_code"]
+    parts = [f'<strong><a href="/?id=0" style="border: 1px solid black; text-decoration: none">/</a></strong>']
+    add_part = parts.append
+    if not share_code:
+       add_part(f'<strong><a href="/<share?id=0&share_code=&method=list" style="border: 1px solid black; text-decoration: none">&lt;share</a></strong>')
+    else:
+        add_part(f'<strong><a href="/<share?id=0&share_code=" style="border: 1px solid black; text-decoration: none">&lt;share</a></strong>/')
+        ancestors = attr["ancestors"]
+        if len(ancestors) > 1:
+            add_part(f'<strong><a href="/<share?id=0&share_code={share_code}" style="border: 1px solid black; text-decoration: none">{share_code}</a></strong>')
+            for info in ancestors[1:-1]:
+                add_part(f'/<strong><a href="/<share?id={info["id"]}&share_code={share_code}" style="border: 1px solid black; text-decoration: none">{escape(escape_name(info["name"]))}</a></strong>')
+            info = ancestors[-1]
+            add_part(f'/<strong><a href="/<share?id={info["id"]}&share_code={share_code}&method=list" style="border: 1px solid black; text-decoration: none">{escape(escape_name(info["name"]))}</a></strong>')
+        else:
+            add_part(f'<strong><a href="/<share?id=0&share_code={share_code}&method=list" style="border: 1px solid black; text-decoration: none">{share_code}</a></strong>')
+    return render_template_string(
+        """\
+<!DOCTYPE html>
+<html>
+<head>
+  <title>115 File List</title>
+  <link rel="shortcut icon" href="/?pic=favicon" type="image/x-icon">
+  <link href="//cdnres.115.com/site/static/style_v10.0/file/css/file_type.css?_vh=bf604a2_70" rel="stylesheet" type="text/css">
+  <style>
+    a:hover {
+      color: red;
+    }
+    .file-type {
+      flex: 1;
+      min-width: 0;
+      position: relative;
+      height: 32px;
+      padding-left: 47px;
+      flex-direction: column;
+      justify-content: center;
+    }
+    td {
+      vertical-align: middle;
+    }
+    img {
+      height: 32px;
+      width: 32px; 
+    }
 
-# TODO: 找出分享文件中的被和谐的文件，看看能不能观看
-# TODO: 通过下载接口快速获取某个id对应的信息
+    table {
+      border-collapse: collapse;
+      margin: 25px 0;
+      font-size: 0.9em;
+      font-family: sans-serif;
+      min-width: 1200px;
+      box-shadow: 0 0 20px rgba(0, 0, 0, 0.15);
+    }
+    thead tr {
+      font-family: Lato-Bold;
+      font-size: 18px;
+      color: #3636f0;
+      line-height: 1.4;
+      background-color: #f0f0f0;
+      position: sticky;
+      top: 0;
+    }
+    th, td:not(:first-child) {
+      padding: 12px 15px;
+    }
+    tbody tr {
+      border-bottom: 1px solid #dddddd;
+      background-color: #fff;
+      transition: background-color 0.3s, transform 0.3s;
+    }
+    tbody tr:last-of-type {
+      border-bottom: 2px solid #009879;
+    }
+    tbody tr:hover {
+      color: #009879;
+      font-weight: bold;
+      background-color: rgba(230, 230, 230, 0.5);
+      transform: scale(1.02);
+    }
 
-# from p115 import P115ShareFileSystem
+    .icon {
+      border-radius: 10px;
+      display: inline-block;
+      padding: 8px;
+      transition: background-color 0.5s;
+    }
+    .icon:hover {
+        background-color: #d2d2d2;
+    }
 
-# client.sharing.list()
+    /* Popup container - can be anything you want */
+    .popup {
+      position: relative;
+      display: inline-block;
+      cursor: pointer;
+      -webkit-user-select: none;
+      -moz-user-select: none;
+      -ms-user-select: none;
+      user-select: none;
+    }
+  
+    /* The actual popup */
+    .popup .popuptext {
+      visibility: hidden;
+      width: 160px;
+      background-color: #555;
+      color: #fff;
+      text-align: center;
+      border-radius: 6px;
+      padding: 8px 0;
+      position: absolute;
+      z-index: 1;
+      bottom: 125%;
+      left: 50%;
+      margin-left: -80px;
+    }
+  
+    /* Popup arrow */
+    .popup .popuptext::after {
+      content: "";
+      position: absolute;
+      top: 100%;
+      left: 50%;
+      margin-left: -5px;
+      border-width: 5px;
+      border-style: solid;
+      border-color: #555 transparent transparent transparent;
+    }
+  
+    /* Toggle this class - hide and show the popup */
+    .popup:hover .popuptext {
+      visibility: visible;
+      -webkit-animation: fadeIn 1s;
+      animation: fadeIn 1s;
+    }
+  
+    /* Add animation (fade in the popup) */
+    @-webkit-keyframes fadeIn {
+      from {opacity: 0;} 
+      to {opacity: 1;}
+    }
+  
+    @keyframes fadeIn {
+      from {opacity: 0;}
+      to {opacity:1 ;}
+    }
+  </style>
+</head>
+<body>
+  {{ header | safe }}
+  <table>
+    <thead>
+      <tr>
+        <th></th>
+        <th>Name</th>
+        <th>Open</th>
+        <th>Size</th>
+        <th>Attr</th>
+        <th>Last Modified</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        {%- if not attr["share_code"] %}
+        <td colspan="6"><a href="/" style="display: block; text-align: center; text-decoration: none; font-size: 30px">..</a></td>
+        {%- elif attr["id"] == 0 %}
+        <td colspan="6"><a href="/<share" style="display: block; text-align: center; text-decoration: none; font-size: 30px">..</a></td>
+        {%- else %}
+        <td colspan="6"><a href="/<share?share_code={{ attr["share_code"] }}&id={{ attr["parent_id"] }}" style="display: block; text-align: center; text-decoration: none; font-size: 30px">..</a></td>
+        {%- endif %}
+      </tr>
+      {%- for attr in children %}
+      <tr>
+        {%- set name = attr["name"] %}
+        {%- set url = attr["url"] %}
+        <td style="width: 0px"><i class="file-type tp-{{ attr.get("ico") or "" }}"></i></td>
+        <td style="max-width: 600px; word-wrap: break-word"><a href="{{ url }}" style="text-decoration: none">{{ name }}</a></td>
+        <td style="width: 160px; word-wrap: break-word">
+          {%- if attr.get("is_media") %}
+          <a class="popup" href="iina://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=iina" /><span class="popuptext">IINA</span></a>
+          <a class="popup" href="potplayer://{{ url }}"><img class="icon" src="/?pic=potplayer" /><span class="popuptext">PotPlayer</span></a>
+          <a class="popup" href="vlc://{{ url }}"><img class="icon" src="/?pic=vlc" /><span class="popuptext">VLC</span></a>
+          <a class="popup" href="filebox://play?url={{ url | urlencode }}"><img class="icon" src="/?pic=fileball" /><span class="popuptext">Fileball</span></a>
+          <a class="popup" href="intent:{{ attr["short_url"] | urlencode }}#Intent;package=com.mxtech.videoplayer.pro;S.title={{ name }};end"><img class="icon" src="/?pic=mxplayer" /><span class="popuptext">MX Player</span></a>
+          <a class="popup" href="infuse://x-callback-url/play?url={{ url | urlencode }}"><img class="icon" src="/?pic=infuse" /><span class="popuptext">infuse</span></a>
+          <a class="popup" href="nplayer-{{ url }}"><img class="icon" src="/?pic=nplayer" /><span class="popuptext">nPlayer</span></a>
+          <a class="popup" href="omniplayer://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=omniplayer" /><span class="popuptext">OmniPlayer</span></a>
+          <a class="popup" href="figplayer://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=figplayer" /><span class="popuptext">Fig Player</span></a>
+          <a class="popup" href="mpv://{{ url }}"><img class="icon" src="/?pic=mpv" /><span class="popuptext">MPV</span></a>
+          {%- endif %}
+        </td>
+        {%- if attr["is_directory"] and not attr["size"] %}
+        <td style="text-align: center">--</td>
+        {%- else %}
+        <td style="text-align: right"><span class="popup">{{ attr["size"] | format_size }}<span class="popuptext">{{ attr["size"] }}</span></span></td>
+        {%- endif %}
+        <td style="text-align: center"><a href="{{ url }}&method=attr">attr</a></td>
+        <td style="text-align: center">{{ (attr.get("mtime") or attr["time"]) | format_timestamp }}</td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table>
+</body>
+</html>""", 
+        attr=attr, 
+        children=children, 
+        header="".join(parts), 
+    )
 
+
+@flask_app.template_filter("format_size")
+def format_size(
+    n: int, 
+    /, 
+    unit: str = "", 
+    precision: int = 2, 
+) -> str:
+    "scale bytes to its proper byte format"
+    if unit == "B" or not unit and n < 1024:
+        return f"{n} B"
+    b = 1
+    b2 = 1024
+    for u in ["K", "M", "G", "T", "P", "E", "Z", "Y"]:
+        b, b2 = b2, b2 << 10
+        if u == unit if unit else n < b2:
+            break
+    return f"%.{precision}f {u}B" % (n / b)
+
+
+@flask_app.template_filter("format_timestamp")
+def format_timestamp(ts: int | float, /) -> str:
+    return str(datetime.fromtimestamp(ts))
 
 
 @flask_app.get("/")
@@ -1001,52 +1402,54 @@ def index():
 @flask_app.get("/<path:path>")
 @redirect_exception_response
 def query(path: str = ""):
-    match request.args.get("method"):
-        case "attr":
-            return get_attr(path, True)
-        case "list":
-            return get_list(path, True)
-        case "url":
-            return get_url(path, True)
-        case _:
-            return get_page(path, True)
+    get_arg = request.args.get
+    method = get_arg("method")
+    path = path.lstrip("/")
+    if path == "<share" or path.startswith("<share/") or get_arg("share_code"):
+        share_code = ""
+        if path.startswith("<share/"):
+            path = path.removeprefix("<share/")
+            share_code, _, path = path.partition("/")
+            if get_arg("share_code"):
+                share_code = ""
+        elif path == "<share":
+            path = ""
+        match method:
+            case "attr":
+                return get_share_attr(path, share_code)
+            case "list":
+                return get_share_list(path, share_code)
+            case "url":
+                return get_share_url(path, share_code)
+            case _:
+                return get_share_page(path, share_code, as_file=method=="file")
+    else:
+        match method:
+            case "attr":
+                return get_attr(path)
+            case "list":
+                return get_list(path)
+            case "url":
+                return get_url(path)
+            case _:
+                return get_page(path, as_file=method=="file")
 
 
 # NOTE: https://wsgidav.readthedocs.io/en/latest/user_guide_configure.html
 WSGIDAV_CONFIG = {
-    "host": args.host, 
-    "port": args.port, 
+    "host": "0.0.0.0", 
+    "port": 0, 
     "mount_path": "/<dav", 
-    "provider_mapping": {"/": P115FileSystemProvider(fs)}, 
+    "provider_mapping": {"/": P115FileSystemProvider()}, 
     "simple_dc": {"user_mapping": {"*": True}}, 
 }
 wsgidav_app = WsgiDAVApp(WSGIDAV_CONFIG)
 application = DispatcherMiddleware(flask_app, {"/<dav": wsgidav_app})
 
-root_dir: str = ""
-if root == 0:
-    root_dir = "/"
-elif not root.strip("./"):
-    root = 0
-    root_dir = "/"
-else:
-    if not root.startswith("0") and root.isascii() and root.isdecimal():
-        root = int(root)
-    try:
-        fs.chdir(root)
-    except NotADirectoryError:
-        root_attr = fs.attr(root)
-        root = root_attr["id"]
-        root_pickcode = root_attr["pickcode"]
-    else:
-        root = fs.id
-        if root == 0:
-            root_dir = "/"
-        else:
-            root_dir = str(fs.path) + "/"
-
 
 if __name__ == "__main__":
+    from werkzeug.serving import run_simple
+
     debug = args.debug
     kwargs = dict(
         hostname=args.host, 
@@ -1059,21 +1462,11 @@ if __name__ == "__main__":
     )
     run_simple(**kwargs)
 
-
-# TODO: 增加 115 自己的 115 分享，在专门的路径下
 # TODO: 如果某个目录正在获取中，返回 concurrent.futures.Future，另一个线程如果也需要获取此目录，则直接获取此 future，对 web 和 webdav 都如此
 # TODO: 可能是 wsgidav 的问题，propfind 响应太慢了，即使给文件夹做了缓存，需要看看怎么优化，可能需要对 propfind 的结果做缓存
 # TODO: 完整的 wsgidav 配置文件支持
 # TODO: 更完整信息的支持，类似 xattr
-
-# TODO: 多应用共用 cookies
 # TODO: 401 报错检查 cookies 是否被更新，如果是，则重跑
-
 # TODO: 改用 blacksheep 框架
-
-# TODO: 如果是 分享，则显示两行
-# TODO: 缓存下所有的 sharing.list_fs()，如果遇到没有的，再去查
-# TODO: <share 目录为分享
-# TODO: 如果携带 share_code 参数，则视为分享，分享只支持用 id 查询
-
 # TODO: 研究一下，压缩包是否有 app 解压方法（这样就可以免 web 接口限制）
+# TODO: 虽然115分享的图片也能获去cdn图片，但是并不能单独获取某个文件的属性，因此并不能给图片更新，除非这张图片被转存了，然后缓存转存后的pickcode，以后就可以反复更新了

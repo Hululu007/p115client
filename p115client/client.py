@@ -9139,7 +9139,7 @@ class P115Client:
                         from collections import deque
                         from time import perf_counter
 
-                        def progress(total: None | int = None):
+                        def make_report(total: None | int = None):
                             dq: deque[tuple[int, float]] = deque(maxlen=64)
                             push = dq.append
                             read_num = 0
@@ -9304,7 +9304,7 @@ class P115Client:
                         from collections import deque
                         from time import perf_counter
 
-                        def progress(total: None | int = None):
+                        def make_report(total: None | int = None):
                             dq: deque[tuple[int, float]] = deque(maxlen=64)
                             push = dq.append
                             read_num = 0
