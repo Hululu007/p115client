@@ -9118,39 +9118,42 @@ class P115Client:
 
             .. note::
                 - 如果为 None，则不推送进度
-                - 否则，必须是 Callable，可接受 int 或 None 作为总文件大小，如果为 None 或者不传，则不确定文件大小。返回值作为实际的更新器，暂名为 `update`，假设一次的更新值为 `step`
+                - 否则，必须是 Callable。可接受 int 或 None 作为总文件大小，如果为 None 或者不传，则不确定文件大小。返回值作为实际的更新器，暂名为 `update`，假设一次的更新值为 `step`
+
                     - 如果返回值为 Callable，则更新时调用 `update(step)`
                     - 如果返回值为 Generator，则更新时调用 `update.send(step)`
                     - 如果返回值为 AsyncGenerator，则更新时调用 `await update.asend(step)`
 
                 1. 你可以直接用第三方的进度条
 
-                .. code:: python
-                    from tqdm import tqdm
+                    .. code:: python
 
-                    make_report = lambda total=None: tqdm(total=total).update
+                        from tqdm import tqdm
+
+                        make_report = lambda total=None: tqdm(total=total).update
 
                 2. 或者你也可以自己写一个进度条
 
-                .. code:: python
-                    from collections import deque
-                    from time import perf_counter
+                    .. code:: python
 
-                    def progress(total: None | int = None):
-                        dq: deque[tuple[int, float]] = deque(maxlen=64)
-                        push = dq.append
-                        read_num = 0
-                        push((read_num, perf_counter()))
-                        while True:
-                            read_num += yield
-                            cur_t = perf_counter()
-                            speed = (read_num - dq[0][0]) / 1024 / 1024 / (cur_t - dq[0][1])
-                            if total:
-                                percentage = read_num / total * 100
-                                print(f"\\r\\x1b[K{read_num} / {total} | {speed:.2f} MB/s | {percentage:.2f} %", end="", flush=True)
-                            else:
-                                print(f"\\r\\x1b[K{read_num} | {speed:.2f} MB/s", end="", flush=True)
-                            push((read_num, cur_t))
+                        from collections import deque
+                        from time import perf_counter
+
+                        def progress(total: None | int = None):
+                            dq: deque[tuple[int, float]] = deque(maxlen=64)
+                            push = dq.append
+                            read_num = 0
+                            push((read_num, perf_counter()))
+                            while True:
+                                read_num += yield
+                                cur_t = perf_counter()
+                                speed = (read_num - dq[0][0]) / 1024 / 1024 / (cur_t - dq[0][1])
+                                if total:
+                                    percentage = read_num / total * 100
+                                    print(f"\\r\\x1b[K{read_num} / {total} | {speed:.2f} MB/s | {percentage:.2f} %", end="", flush=True)
+                                else:
+                                    print(f"\\r\\x1b[K{read_num} | {speed:.2f} MB/s", end="", flush=True)
+                                push((read_num, cur_t))
 
         :param async_: 是否异步
         :param request_kwargs: 其它请求参数
@@ -9280,39 +9283,42 @@ class P115Client:
 
             .. note::
                 - 如果为 None，则不推送进度
-                - 否则，必须是 Callable，可接受 int 或 None 作为总文件大小，如果为 None 或者不传，则不确定文件大小。返回值作为实际的更新器，暂名为 `update`，假设一次的更新值为 `step`
+                - 否则，必须是 Callable。可接受 int 或 None 作为总文件大小，如果为 None 或者不传，则不确定文件大小。返回值作为实际的更新器，暂名为 `update`，假设一次的更新值为 `step`
+
                     - 如果返回值为 Callable，则更新时调用 `update(step)`
                     - 如果返回值为 Generator，则更新时调用 `update.send(step)`
                     - 如果返回值为 AsyncGenerator，则更新时调用 `await update.asend(step)`
 
                 1. 你可以直接用第三方的进度条
 
-                .. code:: python
-                    from tqdm import tqdm
+                    .. code:: python
 
-                    make_report = lambda total=None: tqdm(total=total).update
+                        from tqdm import tqdm
+
+                        make_report = lambda total=None: tqdm(total=total).update
 
                 2. 或者你也可以自己写一个进度条
 
-                .. code:: python
-                    from collections import deque
-                    from time import perf_counter
+                    .. code:: python
 
-                    def progress(total: None | int = None):
-                        dq: deque[tuple[int, float]] = deque(maxlen=64)
-                        push = dq.append
-                        read_num = 0
-                        push((read_num, perf_counter()))
-                        while True:
-                            read_num += yield
-                            cur_t = perf_counter()
-                            speed = (read_num - dq[0][0]) / 1024 / 1024 / (cur_t - dq[0][1])
-                            if total:
-                                percentage = read_num / total * 100
-                                print(f"\\r\\x1b[K{read_num} / {total} | {speed:.2f} MB/s | {percentage:.2f} %", end="", flush=True)
-                            else:
-                                print(f"\\r\\x1b[K{read_num} | {speed:.2f} MB/s", end="", flush=True)
-                            push((read_num, cur_t))
+                        from collections import deque
+                        from time import perf_counter
+
+                        def progress(total: None | int = None):
+                            dq: deque[tuple[int, float]] = deque(maxlen=64)
+                            push = dq.append
+                            read_num = 0
+                            push((read_num, perf_counter()))
+                            while True:
+                                read_num += yield
+                                cur_t = perf_counter()
+                                speed = (read_num - dq[0][0]) / 1024 / 1024 / (cur_t - dq[0][1])
+                                if total:
+                                    percentage = read_num / total * 100
+                                    print(f"\\r\\x1b[K{read_num} / {total} | {speed:.2f} MB/s | {percentage:.2f} %", end="", flush=True)
+                                else:
+                                    print(f"\\r\\x1b[K{read_num} | {speed:.2f} MB/s", end="", flush=True)
+                                push((read_num, cur_t))
 
         :param close_file: 是否要在上传结束后关闭文件
         :param async_: 是否异步
