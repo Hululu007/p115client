@@ -1331,7 +1331,7 @@ def get_share_page(path: str = "", /, share_code: str = "", as_file: bool = Fals
         {%- else %}
         <td style="text-align: right"><span class="popup">{{ attr["size"] | format_size }}<span class="popuptext">{{ attr["size"] }}</span></span></td>
         {%- endif %}
-        <td style="text-align: center"><a href="{{ url }}&method=attr">attr</a></td>
+        <td style="text-align: center"><a href="/<share?share_code={{ attr['share_code'] }}&id={{ attr["id"] }}&method=attr">attr</a></td>
         <td style="text-align: center">{{ (attr.get("mtime") or attr["time"]) | format_timestamp }}</td>
       </tr>
       {%- endfor %}
