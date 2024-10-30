@@ -4,11 +4,14 @@
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __version__ = (0, 0, 4)
 __doc__ = """\
-    🛫 115 302 微型版，仅支持用 pickcode 或 sha1 查询 🛬
+    🛫 115 302 微型版 🛬
 
-此版本不依赖于 p115client 和 pycryptodome，且 Python 版本可低于 3.10
+> 网盘文件仅支持用 pickcode 或 sha1 查询
+> 分享文件仅支持用 id 查询
 
-查询示例：
+⏰ 此版本不依赖于 p115client 和 pycryptodome，且 Python 版本可低于 3.10
+
+🌰 查询示例：
 
     1. 查询 pickcode
         http://localhost:8000?ecjq9ichcb40lzlvx

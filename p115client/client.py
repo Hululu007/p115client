@@ -7710,7 +7710,7 @@ class P115Client:
         POST https://webapi.115.com/rb/clean
 
         :payload:
-            - rid[0]: int | str 💡 NOTE: 如果没有指定任一 rid，就是清空回收站
+            - rid[0]: int | str 💡 如果没有指定任一 rid，就是清空回收站
             - rid[1]: int | str
             - ...
             - password: int | str = <default> 💡 密码，是 6 位数字
@@ -7869,6 +7869,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        base_url: bool | str = "https://proapi.115.com/app", 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -7878,6 +7880,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        base_url: bool | str = "https://proapi.115.com/app", 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -7886,6 +7890,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        base_url: bool | str = "https://proapi.115.com/app", 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -7898,7 +7904,7 @@ class P115Client:
             - receive_code: str
             - cid: int | str = 0
         """
-        api = "https://proapi.115.com/app/share/downlist"
+        api = complete_webapi(base_url, "/share/downlist")
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -7970,7 +7976,7 @@ class P115Client:
             resp = self.share_download_url_web(payload, async_=async_, **request_kwargs)
         else:
             resp = self.share_download_url_app(payload, async_=async_, **request_kwargs)
-        def get_url(resp: dict) -> P115URL:
+        def get_url(resp: dict, /) -> P115URL:
             info = check_response(resp)["data"]
             file_id = payload["file_id"]
             if not info:
@@ -8034,7 +8040,7 @@ class P115Client:
             - share_code: str
         """
         api = "https://proapi.115.com/app/share/downurl"
-        def parse(resp, content: bytes) -> dict:
+        def parse(resp, content: bytes, /) -> dict:
             resp = json_loads(content)
             if resp["state"]:
                 resp["data"] = json_loads(rsa_decode(resp["data"]))
@@ -8624,10 +8630,11 @@ class P115Client:
 
         GET https://115.com/?ct=tool&ac=space
 
-        1、校验空间需全局进行扫描，请谨慎操作;
-        2、扫描出无父目录的文件将统一放入到"/修复文件"的目录中;
-        3、"/修复文件"的目录若超过存放文件数量限制，将创建多个目录存放，避免无法操作。
-        4、此接口一天只能使用一次
+        .. hint::
+            1. 校验空间需全局进行扫描，请谨慎操作;
+            2. 扫描出无父目录的文件将统一放入到"/修复文件"的目录中;
+            3. "/修复文件"的目录若超过存放文件数量限制，将创建多个目录存放，避免无法操作。
+            4. 此接口一天只能使用一次
         """
         api = "https://115.com/?ct=tool&ac=space"
         return self.request(url=api, async_=async_, **request_kwargs)
@@ -8643,6 +8650,14 @@ class P115Client:
         object: str, 
         endpoint: None | str = None, 
     ) -> str:
+        """构造上传时的 url
+
+        :param bucket: 存储桶
+        :param object: 存储对象 id
+        :param endpoint: 终点 url
+
+        :return: 上传时所用的 url
+        """
         if endpoint is None:
             endpoint = self.upload_endpoint
         urlp = urlsplit(endpoint)
@@ -8903,6 +8918,17 @@ class P115Client:
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
         """秒传接口，此接口是对 `upload_init` 的封装
+
+        :param filename: 文件名
+        :param filesize: 文件大小
+        :param filesha1: 文件的 sha1
+        :param target: 保存到目录，格式为 f"U_{area_id}_{parent_id}"
+        :param sign_key: 二次验证时读取文件的范围
+        :param sign_val: 二次验证的签名值
+        :param async_: 是否异步
+        :param request_kwargs: 其它请求参数
+
+        :return: 接口响应
         """
         data = {
             "appid": 0, 
@@ -8976,9 +9002,21 @@ class P115Client:
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
         """秒传接口，此接口是对 `upload_init` 的封装。
-        NOTE: 
+        
+        .. note::
+
             - 文件大小 和 sha1 是必需的，只有 sha1 是没用的。
             - 如果文件大于等于 1 MB (1048576 B)，就需要 2 次检验一个范围哈希，就必须提供 `read_range_bytes_or_hash`
+
+        :param filename: 文件名
+        :param filesize: 文件大小
+        :param filesha1: 文件的 sha1
+        :param read_range_bytes_or_hash: 调用以获取二次验证的数据或计算 sha1，接受一个数据范围，格式符合 `HTTP Range Requests <https://developer.mozilla.org/en-US/docs/Web/HTTP/Range_requests>`_，返回值如果是 str，则视为计算好的 sha1，如果为 Buffer，则视为数据（之后会被计算 sha1）
+        :param pid: 上传文件到此目录的 id
+        :param async_: 是否异步
+        :param request_kwargs: 其它请求参数
+
+        :return: 接口响应
         """
         if filesize >= 1 << 20 and read_range_bytes_or_hash is None:
             raise ValueError("filesize >= 1 MB, thus need pass the `read_range_bytes_or_hash` argument")
@@ -9071,6 +9109,53 @@ class P115Client:
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
         """网页端的上传接口，注意：不支持秒传，但也不需要文件大小和 sha1
+
+        :param file: 待上传的文件，只接受二进制数据或者迭代器
+        :param filename: 文件名
+        :param filesize: 文件大小，如果为 -1，则会自动确定
+        :param pid: 上传文件到此目录的 id
+        :param make_reporthook: 调用以推送上传进度
+
+            .. note::
+                - 如果为 None，则不推送进度
+                - 否则，必须是 Callable，可接受 int 或 None 作为总文件大小，如果为 None 或者不传，则不确定文件大小。返回值作为实际的更新器，暂名为 `update`，假设一次的更新值为 `step`
+                    - 如果返回值为 Callable，则更新时调用 `update(step)`
+                    - 如果返回值为 Generator，则更新时调用 `update.send(step)`
+                    - 如果返回值为 AsyncGenerator，则更新时调用 `await update.asend(step)`
+
+                1. 你可以直接用第三方的进度条
+
+                .. code:: python
+                    from tqdm import tqdm
+
+                    make_report = lambda total=None: tqdm(total=total).update
+
+                2. 或者你也可以自己写一个进度条
+
+                .. code:: python
+                    from collections import deque
+                    from time import perf_counter
+
+                    def progress(total: None | int = None):
+                        dq: deque[tuple[int, float]] = deque(maxlen=64)
+                        push = dq.append
+                        read_num = 0
+                        push((read_num, perf_counter()))
+                        while True:
+                            read_num += yield
+                            cur_t = perf_counter()
+                            speed = (read_num - dq[0][0]) / 1024 / 1024 / (cur_t - dq[0][1])
+                            if total:
+                                percentage = read_num / total * 100
+                                print(f"\\r\\x1b[K{read_num} / {total} | {speed:.2f} MB/s | {percentage:.2f} %", end="", flush=True)
+                            else:
+                                print(f"\\r\\x1b[K{read_num} | {speed:.2f} MB/s", end="", flush=True)
+                            push((read_num, cur_t))
+
+        :param async_: 是否异步
+        :param request_kwargs: 其它请求参数
+
+        :return: 接口响应
         """
         def gen_step():
             dataiter = make_dataiter(file, async_=async_)
@@ -9175,6 +9260,65 @@ class P115Client:
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
         """文件上传，这是高层封装，推荐使用
+
+        :param file: 待上传的文件
+
+            - 如果为 `collections.abc.Buffer`，则作为二进制数据上传
+            - 如果为 `filewrap.SupportsRead` (`pip install python-filewrap`)，则作为文件上传
+            - 如果为 `str` 或 `os.PathLike`，则视为路径，打开后作为文件上传
+            - 如果为 `yarl.URL` 或 `http_request.SupportsGeturl` (`pip install python-http_request`)，则视为超链接，打开后作为文件上传
+            - 如果为 `collections.abc.Iterable[collections.abc.Buffer]` 或 `collections.abc.AsyncIterable[collections.abc.Buffer]`，则迭代以获取二进制数据，逐步上传
+
+        :param filename: 文件名，如果为 None，则会自动确定
+        :param pid: 上传文件到此目录的 id
+        :param filesize: 文件大小，如果为 -1，则会自动确定
+        :param filesha1: 文件的 sha1，如果为 None，则会自动确定
+        :param partsize: 分块上传的分块大小，如果 <= 0，则不进行分块上传
+        :param upload_directly: 如果为 True，则使用网页版接口直接上传（优先级高于 `partsize`）
+        :param multipart_resume_data: 如果不为 None，则断点续传，并且恢复相关参数（优先级高于 `upload_directly`）
+        :param make_reporthook: 调用以推送上传进度
+
+            .. note::
+                - 如果为 None，则不推送进度
+                - 否则，必须是 Callable，可接受 int 或 None 作为总文件大小，如果为 None 或者不传，则不确定文件大小。返回值作为实际的更新器，暂名为 `update`，假设一次的更新值为 `step`
+                    - 如果返回值为 Callable，则更新时调用 `update(step)`
+                    - 如果返回值为 Generator，则更新时调用 `update.send(step)`
+                    - 如果返回值为 AsyncGenerator，则更新时调用 `await update.asend(step)`
+
+                1. 你可以直接用第三方的进度条
+
+                .. code:: python
+                    from tqdm import tqdm
+
+                    make_report = lambda total=None: tqdm(total=total).update
+
+                2. 或者你也可以自己写一个进度条
+
+                .. code:: python
+                    from collections import deque
+                    from time import perf_counter
+
+                    def progress(total: None | int = None):
+                        dq: deque[tuple[int, float]] = deque(maxlen=64)
+                        push = dq.append
+                        read_num = 0
+                        push((read_num, perf_counter()))
+                        while True:
+                            read_num += yield
+                            cur_t = perf_counter()
+                            speed = (read_num - dq[0][0]) / 1024 / 1024 / (cur_t - dq[0][1])
+                            if total:
+                                percentage = read_num / total * 100
+                                print(f"\\r\\x1b[K{read_num} / {total} | {speed:.2f} MB/s | {percentage:.2f} %", end="", flush=True)
+                            else:
+                                print(f"\\r\\x1b[K{read_num} | {speed:.2f} MB/s", end="", flush=True)
+                            push((read_num, cur_t))
+
+        :param close_file: 是否要在上传结束后关闭文件
+        :param async_: 是否异步
+        :param request_kwargs: 其它请求参数
+
+        :return: 接口响应
         """
         def gen_step():
             nonlocal file, filename, filesize, filesha1
