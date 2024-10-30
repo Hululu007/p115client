@@ -455,7 +455,7 @@ class FolderResource(DavPathBase, DAVCollection):
             else:
                 listdir_path = fs.listdir_path
                 if dir_ == "/":
-                    children["<share"] = FolderResource("/<share", environ, {"name": "<share"})
+                    children["<share"] = FolderResource("/<share", environ, {"id": 0, "name": "<share"})
             for attr in listdir_path(self.attr):
                 name = attr["name"]
                 is_strm = False
@@ -503,7 +503,7 @@ class P115FileSystemProvider(DAVProvider):
         if inst := DAV_FILE_CACHE.get(path):
             return inst
         if path == "<share":
-            return FolderResource("/<share", environ, {"name": "<share"})
+            return FolderResource("/<share", environ, {"id": 0, "name": "<share"})
         else:
             path_full = "/" + path
             if path.startswith("<share/"):
