@@ -113,7 +113,7 @@ from functools import cached_property, partial
 from io import BytesIO
 from os import fsdecode, PathLike
 from pathlib import Path
-from posixpath import dirname, splitext
+from posixpath import dirname, splitext, split as splitpath
 from sqlite3 import connect, Connection, OperationalError
 from threading import Lock
 from typing import Literal
@@ -189,7 +189,8 @@ def make_application(
     CON_FILE: Connection
     FIELDS = ("id", "name", "path", "ctime", "mtime", "sha1", "size", "pickcode", "is_dir")
     ROOT = {"id": 0, "name": "", "path": "/", "ctime": 0, "mtime": 0, "size": 0, "pickcode": "", "is_dir": 1}
-    STRM_CACHE: LRUDict = LRUDict(65536)
+    if strm_predicate:
+        STRM_CACHE: LRUDict = LRUDict(65536)
     WRITE_LOCK = Lock()
 
     class DavPathBase:
@@ -458,11 +459,19 @@ CREATE TABLE IF NOT EXISTS data (
             path: str, 
             environ: dict, 
         ) -> FolderResource | FileResource:
-            if strm := STRM_CACHE.get(path):
-                return strm
-            if path in ("/", ""):
+            is_dir = path.endswith("/")
+            path = "/" + path.strip("/")
+            if strm_predicate:
+                if strm := STRM_CACHE.get(path):
+                    return strm
+                if path.endswith(".strm") and not is_dir:
+                    dir_, name = splitpath(path)
+                    inst = self.get_resource_inst(dir_, environ)
+                    if not isinstance(inst, FolderResource):
+                        raise DAVError(404, path)
+                    return inst.get_member(name)
+            if path == "/":
                 return FolderResource("/", environ, ROOT)
-            path = path.removesuffix("/")
             sql = "SELECT id, name, path, ctime, mtime, sha1, size, pickcode, is_dir FROM data WHERE path = ? LIMIT 1"
             record = CON.execute(sql, (path,)).fetchone()
             if not record:

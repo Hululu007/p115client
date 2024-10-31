@@ -899,24 +899,21 @@ def get_page(path: str = "", /, as_file: bool = False):
         if resp.get("web"):
             return open_file(resp["url"], resp.get("headers"))
         return redirect(resp["url"])
-    try:
+    attr = get_attr(path)
+    if isinstance(attr, Response):
+        return attr
+    if attr["is_directory"]:
         children = get_list(path)
         if isinstance(children, Response):
             return children
-    except NotADirectoryError:
-        resp = get_url(path)
+    else:
+        resp = get_url(path, attr["pickcode"])
         if isinstance(resp, Response):
             return resp
         if resp.get("web"):
             return open_file(resp["url"], resp.get("headers"))
         return redirect(resp["url"])
-    if children:
-        ancestors = children[0]["ancestors"][:-1]
-    else:
-        attr = get_attr(path)
-        if isinstance(attr, Response):
-            return attr
-        ancestors = attr["ancestors"]
+    ancestors = attr["ancestors"]
     last_info = ancestors[-1]
     is_root = last_info["id"] == root
     parent_id = last_info["parent_id"]
