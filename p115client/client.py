@@ -9192,9 +9192,9 @@ class P115Client:
                 "signature": resp["signature"], 
             }
             if async_:
-                headers, request_kwargs["data"] = encode_multipart_data_async(data, {"file": file})
+                headers, request_kwargs["data"] = encode_multipart_data_async(data, {"file": dataiter})
             else:
-                headers, request_kwargs["data"] = encode_multipart_data(data, {"file": file})
+                headers, request_kwargs["data"] = encode_multipart_data(data, {"file": dataiter})
             request_kwargs["headers"] = {**request_kwargs.get("headers", {}), **headers}
             return (yield self.request(
                 url=api, 

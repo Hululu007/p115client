@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 3)
+__version__ = (0, 3, 1)
 __requirements__ = ["cachetools", "flask", "Flask-Compress", "path_predicate", "python-115", "urllib3_request", "werkzeug", "wsgidav"]
 __doc__ = """\
     🕸️ 获取你的 115 网盘账号上文件信息和下载链接 🕷️
@@ -212,7 +212,7 @@ from functools import cached_property, partial, update_wrapper
 from html import escape
 from io import BytesIO
 from pathlib import Path
-from posixpath import splitext
+from posixpath import split as splitpath, splitext
 from string import digits, hexdigits
 from typing import cast
 from urllib.parse import unquote, urlsplit
@@ -260,7 +260,8 @@ IMAGE_URL_CACHE: MutableMapping[str, None | P115URL] = TTLCache(65536, ttl=3600)
 # NOTE: 缓存 115 分享的文件系统对象
 SHARE_FS_MAP: dict[str, P115ShareFileSystem] = {}
 # NOTE: webdav 的文件对象缓存
-DAV_FILE_CACHE: MutableMapping[str, DAVNonCollection] = LRUCache(65536)
+if strm_predicate:
+    DAV_FILE_CACHE: MutableMapping[str, DAVNonCollection] = LRUCache(65536)
 
 root_dir: str = ""
 if root in ("0", "", "/") or fs.abspath(root) == "/":
@@ -463,9 +464,11 @@ class FolderResource(DavPathBase, DAVCollection):
                 if not is_dir and strm_predicate and strm_predicate(attr):
                     is_strm = True
                     name = splitext(name)[0] + ".strm"
+                    path = dir_ + name
                 elif predicate and not predicate(attr):
                     continue
-                path = dir_ + name
+                else:
+                    path = dir_ + name
                 if is_dir:
                     children[name] = FolderResource(path, environ, attr)
                 else:
@@ -499,21 +502,28 @@ class P115FileSystemProvider(DAVProvider):
         path: str, 
         environ: dict, 
     ) -> FolderResource | FileResource:
-        path = path.strip("/")
-        if inst := DAV_FILE_CACHE.get(path):
-            return inst
-        if path == "<share":
+        is_dir = path.endswith("/")
+        path = "/" + path.strip("/")
+        if strm_predicate:
+            if inst := DAV_FILE_CACHE.get(path):
+                return inst
+            if path.endswith(".strm") and not is_dir:
+                dir_, name = splitpath(path)
+                inst = self.get_resource_inst(dir_, environ)
+                if not isinstance(inst, FolderResource):
+                    raise DAVError(404, path)
+                return inst.get_member(name)
+        if path == "/<share":
             return FolderResource("/<share", environ, {"id": 0, "name": "<share", "size": 0})
         else:
-            path_full = "/" + path
-            if path.startswith("<share/"):
-                share_code, _, path = path[7:].partition("/")
+            if path.startswith("/<share/"):
+                share_code, _, share_path = path[7:].partition("/")
                 share_fs = get_share_fs(share_code)
-                get_attr: Callable = share_fs.as_path
+                get_attr: Callable = partial(share_fs.as_path, share_path)
             else:
-                get_attr = partial(fs.as_path, refresh=False)
+                get_attr = partial(fs.as_path, path, refresh=False)
             try:
-                attr = get_attr(path)
+                attr = get_attr()
             except FileNotFoundError:
                 raise DAVError(404, path)
             is_strm = False
@@ -524,9 +534,9 @@ class P115FileSystemProvider(DAVProvider):
             elif predicate and not predicate(attr):
                 raise DAVError(404, path)
             if is_dir:
-                return FolderResource(path_full, environ, attr)
+                return FolderResource(path, environ, attr)
             else:
-                return FileResource(path_full, environ, attr, is_strm=is_strm)
+                return FileResource(path, environ, attr, is_strm=is_strm)
 
     def is_readonly(self, /) -> bool:
         return True
