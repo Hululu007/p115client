@@ -9469,7 +9469,8 @@ class P115Client:
                 else:
                     url = file.geturl()
                 if async_:
-                    file = yield AsyncHTTPFileReader.new(url)
+                    from httpfile import AsyncHttpxFileReader
+                    file = yield AsyncHttpxFileReader.new(url)
                 else:
                     file = HTTPFileReader(url)
                 if not filename:

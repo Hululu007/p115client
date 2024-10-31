@@ -72,7 +72,11 @@ class MultipartUploadAbort(P115OSError):
     """当分块上传失败时抛出，有个 ticket 属性，下次可用以继续任务
     """
     def __init__(self, ticket: MultipartResumeData, /):
+        super().__init__(ticket)
         self.ticket = ticket
+
+    def __repr__(self, /) -> str:
+        return f"{type(self).__module__}.{type(self).__qualname__}({self.ticket})"
 
 
 class NotSupportedError(P115OSError):

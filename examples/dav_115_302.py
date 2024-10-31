@@ -562,7 +562,7 @@ def flatten_image_url(url: str, /) -> P115URL:
     url = reduce_image_url_layers(url)
     with urlopen(url, "HEAD") as resp:
         size = int(resp.headers["Content-Length"])
-        url = cast(str, resp["url"])
+        url = cast(str, resp.url)
     return P115URL(url, size=size)
 
 

@@ -10,7 +10,8 @@ __all__ = [
 
 from base64 import b64encode
 from collections.abc import (
-    AsyncGenerator, AsyncIterable, AsyncIterator, Callable, Coroutine, Generator, Iterable, Iterator, Mapping, Sequence
+    AsyncGenerator, AsyncIterable, AsyncIterator, Callable, Coroutine, Generator, ItemsView, Iterable, 
+    Iterator, Mapping, Sequence
 )
 from datetime import datetime
 from email.utils import formatdate
@@ -140,21 +141,21 @@ def oss_upload_sign(
     """计算认证信息，返回带认证信息的请求头
     """
     # subresource_keys = (
-    #     "acl", "append", "asyncFetch", "bucketInfo", "callback", "callback-var", 
-    #     "cname", "comp", "continuation-token", "cors", "delete", "encryption", 
-    #     "endTime", "group", "inventory", "inventoryId", "lifecycle", "link", 
-    #     "live", "location", "logging", "metaQuery", "objectInfo", "objectMeta", 
-    #     "partNumber", "policy", "position", "qos", "qosInfo", "referer", 
-    #     "regionList", "replication", "replicationLocation", "replicationProgress", 
-    #     "requestPayment", "resourceGroup", "response-cache-control", 
-    #     "response-content-disposition", "response-content-encoding", 
-    #     "response-content-language", "response-content-type", "response-expires", 
-    #     "restore", "security-token", "sequential", "startTime", "stat", "status", 
-    #     "style", "styleName", "symlink", "tagging", "transferAcceleration", "uploadId", 
-    #     "uploads", "versionId", "versioning", "versions", "vod", "website", "worm", 
-    #     "wormExtend", "wormId", "x-oss-ac-forward-allow", "x-oss-ac-source-ip", 
-    #     "x-oss-ac-subnet-mask", "x-oss-ac-vpc-id", "x-oss-async-process", 
-    #     "x-oss-process", "x-oss-request-payer", "x-oss-traffic-limit", 
+    #     "accessPoint", "accessPointPolicy", "acl", "append", "asyncFetch", "bucketArchiveDirectRead", 
+    #     "bucketInfo", "callback", "callback-var", "cname", "comp", "continuation-token", "cors", 
+    #     "delete", "encryption", "endTime", "group", "httpsConfig", "inventory", "inventoryId", 
+    #     "lifecycle", "link", "live", "location", "logging", "metaQuery", "objectInfo", "objectMeta", 
+    #     "partNumber", "policy", "position", "publicAccessBlock", "qos", "qosInfo", "qosRequester", 
+    #     "redundancyTransition", "referer", "regionList", "replication", "replicationLocation", 
+    #     "replicationProgress", "requestPayment", "requesterQosInfo", "resourceGroup", "resourcePool", 
+    #     "resourcePoolBuckets", "resourcePoolInfo", "response-cache-control", "response-content-disposition", 
+    #     "response-content-encoding", "response-content-language", "response-content-type", "response-expires", 
+    #     "restore", "security-token", "sequential", "startTime", "stat", "status", "style", "styleName", "symlink", 
+    #     "tagging", "transferAcceleration", "uploadId", "uploads", "versionId", "versioning", "versions", "vod", 
+    #     "website", "worm", "wormExtend", "wormId", "x-oss-ac-forward-allow", "x-oss-ac-source-ip", 
+    #     "x-oss-ac-subnet-mask", "x-oss-ac-vpc-id", "x-oss-access-point-name", "x-oss-async-process", "x-oss-process", 
+    #     "x-oss-redundancy-transition-taskid", "x-oss-request-payer", "x-oss-target-redundancy-type", 
+    #     "x-oss-traffic-limit", "x-oss-write-get-object-response", 
     # )
     date = formatdate(usegmt=True)
     if params is None:
@@ -163,32 +164,38 @@ def oss_upload_sign(
         params = urlencode(params)
     if params:
         params = "?" + params
-    headers = dict(headers) if headers else {}
-    header_pairs = [(k2, v) for k, v in headers.items()
-                    if (k2 := k.lower()).startswith("x-oss-")]
+    if headers:
+        if isinstance(headers, Mapping):
+            headers = ItemsView(headers)
+        headers = {k.lower(): v for k, v in headers}
+    else:
+        headers = {}
+    header_pairs = [(k, v) for k, v in headers.items() if k.startswith("x-oss-")]
     if header_pairs:
         header_pairs.sort()
         headers_str = "\n".join(map("%s:%s".__mod__, header_pairs))
     else:
         headers_str = ""
+    content_md5 = headers.setdefault("content-md5", "")
+    content_type = headers.setdefault("content-type", "")
+    date = headers.get("x-oss-date") or headers.get("date", "")
+    if not date:
+        date = headers["date"] = formatdate(usegmt=True)
     signature_data = f"""\
 {method.upper()}
-
-
+{content_md5}
+{content_type}
 {date}
 {headers_str}
 /{bucket}/{object}{params}""".encode("utf-8")
     signature = to_base64(hmac_digest(bytes(token["AccessKeySecret"], "utf-8"), signature_data, "sha1"))
-    headers.update({
-        "date": date, 
-        "authorization": "OSS {0}:{1}".format(token["AccessKeyId"], signature), 
-        "Content-Type": "", 
-    })
+    headers["authorization"] = "OSS {0}:{1}".format(token["AccessKeyId"], signature)
     return headers, params
 
 
 def oss_upload_request(
     request: Callable[..., T], 
+    /, 
     url: str, 
     bucket: str, 
     object: str, 
@@ -221,6 +228,7 @@ def oss_upload_request(
 @overload
 def oss_multipart_part_iter(
     request: Callable, 
+    /, 
     url: str, 
     bucket: str, 
     object: str, 
@@ -233,6 +241,7 @@ def oss_multipart_part_iter(
 @overload
 def oss_multipart_part_iter(
     request: Callable, 
+    /, 
     url: str, 
     bucket: str, 
     object: str, 
@@ -244,6 +253,7 @@ def oss_multipart_part_iter(
     ...
 def oss_multipart_part_iter(
     request: Callable, 
+    /, 
     url: str, 
     bucket: str, 
     object: str, 
@@ -281,6 +291,7 @@ def oss_multipart_part_iter(
 @overload
 def oss_multipart_upload_init(
     request: Callable, 
+    /, 
     url: str, 
     bucket: str, 
     object: str, 
@@ -292,6 +303,7 @@ def oss_multipart_upload_init(
 @overload
 def oss_multipart_upload_init(
     request: Callable, 
+    /, 
     url: str, 
     bucket: str, 
     object: str, 
@@ -302,6 +314,7 @@ def oss_multipart_upload_init(
     ...
 def oss_multipart_upload_init(
     request: Callable, 
+    /, 
     url: str, 
     bucket: str, 
     object: str, 
@@ -313,7 +326,7 @@ def oss_multipart_upload_init(
     """
     request_kwargs.setdefault("parse", parse_upload_id)
     request_kwargs["method"] = "POST"
-    request_kwargs["params"] = "uploads"
+    request_kwargs["params"] = {"sequential": "1", "uploads": "1"}
     request_kwargs["headers"] = {"x-oss-security-token": token["SecurityToken"]}
     return oss_upload_request(
         request, 
@@ -329,6 +342,7 @@ def oss_multipart_upload_init(
 @overload
 def oss_multipart_upload_complete(
     request: Callable, 
+    /, 
     url: str, 
     bucket: str, 
     object: str, 
@@ -343,6 +357,7 @@ def oss_multipart_upload_complete(
 @overload
 def oss_multipart_upload_complete(
     request: Callable, 
+    /, 
     url: str, 
     bucket: str, 
     object: str, 
@@ -356,6 +371,7 @@ def oss_multipart_upload_complete(
     ...
 def oss_multipart_upload_complete(
     request: Callable, 
+    /, 
     url: str, 
     bucket: str, 
     object: str, 
@@ -374,11 +390,12 @@ def oss_multipart_upload_complete(
         "x-oss-security-token": token["SecurityToken"], 
         "x-oss-callback": to_base64(callback["callback"]), 
         "x-oss-callback-var": to_base64(callback["callback_var"]), 
+        "content-type": "text/xml"
     }
     request_kwargs["data"] = ("<CompleteMultipartUpload>%s</CompleteMultipartUpload>" % "".join(map(
         "<Part><PartNumber>{PartNumber}</PartNumber><ETag>{ETag}</ETag></Part>".format_map, 
         parts, 
-    ))).encode("utf-8")
+    ))).encode()
     return oss_upload_request(
         request, 
         url=url, 
@@ -393,6 +410,7 @@ def oss_multipart_upload_complete(
 @overload
 def oss_multipart_upload_cancel(
     request: Callable, 
+    /, 
     url: str, 
     bucket: str, 
     object: str, 
@@ -405,6 +423,7 @@ def oss_multipart_upload_cancel(
 @overload
 def oss_multipart_upload_cancel(
     request: Callable, 
+    /, 
     url: str, 
     bucket: str, 
     object: str, 
@@ -416,6 +435,7 @@ def oss_multipart_upload_cancel(
     ...
 def oss_multipart_upload_cancel(
     request: Callable, 
+    /, 
     url: str, 
     bucket: str, 
     object: str, 
@@ -444,6 +464,7 @@ def oss_multipart_upload_cancel(
 @overload
 def oss_multipart_upload_part(
     request: Callable, 
+    /, 
     file: Buffer | SupportsRead[Buffer] | Iterable[Buffer], 
     url: str, 
     bucket: str, 
@@ -461,6 +482,7 @@ def oss_multipart_upload_part(
 @overload
 def oss_multipart_upload_part(
     request: Callable, 
+    /, 
     file: Buffer | SupportsRead[Buffer] | Iterable[Buffer] | AsyncIterable[Buffer], 
     url: str, 
     bucket: str, 
@@ -477,6 +499,7 @@ def oss_multipart_upload_part(
     ...
 def oss_multipart_upload_part(
     request: Callable, 
+    /, 
     file: Buffer | SupportsRead[Buffer] | Iterable[Buffer] | AsyncIterable[Buffer], 
     url: str, 
     bucket: str, 
@@ -542,6 +565,7 @@ def oss_multipart_upload_part(
 @overload
 def oss_multipart_upload_part_iter(
     request: Callable, 
+    /, 
     file: Buffer | SupportsRead[Buffer] | Iterable[Buffer], 
     url: str, 
     bucket: str, 
@@ -559,6 +583,7 @@ def oss_multipart_upload_part_iter(
 @overload
 def oss_multipart_upload_part_iter(
     request: Callable, 
+    /, 
     file: Buffer | SupportsRead[Buffer] | Iterable[Buffer] | AsyncIterable[Buffer], 
     url: str, 
     bucket: str, 
@@ -575,6 +600,7 @@ def oss_multipart_upload_part_iter(
     ...
 def oss_multipart_upload_part_iter(
     request: Callable, 
+    /, 
     file: Buffer | SupportsRead[Buffer] | Iterable[Buffer] | AsyncIterable[Buffer], 
     url: str, 
     bucket: str, 
@@ -642,6 +668,7 @@ def oss_multipart_upload_part_iter(
 @overload
 def oss_upload(
     request: Callable, 
+    /, 
     file: Buffer | SupportsRead[Buffer] | Iterable[Buffer], 
     url: str, 
     bucket: str, 
@@ -658,6 +685,7 @@ def oss_upload(
 @overload
 def oss_upload(
     request: Callable, 
+    /, 
     file: Buffer | SupportsRead[Buffer] | Iterable[Buffer] | AsyncIterable[Buffer], 
     url: str, 
     bucket: str, 
@@ -673,6 +701,7 @@ def oss_upload(
     ...
 def oss_upload(
     request: Callable, 
+    /, 
     file: Buffer | SupportsRead[Buffer] | Iterable[Buffer] | AsyncIterable[Buffer], 
     url: str, 
     bucket: str, 
@@ -721,6 +750,7 @@ def oss_upload(
 @overload
 def oss_multipart_upload(
     request: Callable, 
+    /, 
     file: Buffer | SupportsRead[Buffer] | Iterable[Buffer], 
     url: str, 
     bucket: str, 
@@ -740,6 +770,7 @@ def oss_multipart_upload(
 @overload
 def oss_multipart_upload(
     request: Callable, 
+    /, 
     file: Buffer | SupportsRead[Buffer] | Iterable[Buffer] | AsyncIterable[Buffer], 
     url: str, 
     bucket: str, 
@@ -758,6 +789,7 @@ def oss_multipart_upload(
     ...
 def oss_multipart_upload(
     request: Callable, 
+    /, 
     file: Buffer | SupportsRead[Buffer] | Iterable[Buffer] | AsyncIterable[Buffer], 
     url: str, 
     bucket: str, 
@@ -867,7 +899,7 @@ def oss_multipart_upload(
         except BaseException as e:
             raise MultipartUploadAbort({
                 "bucket": bucket, "object": object, "token": token, "callback": callback, 
-                "upload_id": upload_id, "partsize": partsize, "parts": parts, "filesize": filesize, 
+                "upload_id": upload_id, "partsize": partsize, "filesize": filesize, "parts": parts, 
             }) from e
         finally:
             if close_reporthook is not None:
