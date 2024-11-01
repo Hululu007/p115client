@@ -47,9 +47,9 @@ if __name__ == "__main__":
         print(".".join(map(str, __version__)))
         raise SystemExit(0)
     cookies_path = args.cookies_path or "115-cookies.txt"
-    cookies = open(cookies_path, encoding="latin-1").read()
+    cookies = open(cookies_path, encoding="latin-1").read().strip()
 else:
-    cookies = open("115-cookies.txt", encoding="latin-1").read()
+    cookies = open("115-cookies.txt", encoding="latin-1").read().strip()
 
 try:
     from flask import redirect, request, Flask
@@ -96,16 +96,14 @@ def bytes_xor(v1, v2):
 
 
 def gen_key(rand_key, sk_len) -> bytearray:
-    xor_key = bytearray()
-    append = xor_key.append
-    if rand_key and sk_len > 0:
-        length = sk_len * (sk_len - 1)
-        index = 0
-        for i in range(sk_len):
-            x = (rand_key[i] + G_kts[index]) & 0xff
-            append(G_kts[length] ^ x)
-            length -= sk_len
-            index += sk_len
+    xor_key = bytearray(sk_len)
+    length = sk_len * (sk_len - 1)
+    index = 0
+    for i in range(sk_len):
+        x = (rand_key[i] + G_kts[index]) & 0xff
+        xor_key[i] = G_kts[length] ^ x
+        length -= sk_len
+        index += sk_len
     return xor_key
 
 

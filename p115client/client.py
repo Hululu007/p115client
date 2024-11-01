@@ -9059,6 +9059,7 @@ class P115Client:
                 )
             resp["state"] = True
             resp["data"] = {
+                "target": target, 
                 "file_name": filename, 
                 "file_size": filesize, 
                 "sha1": filesha1, 
