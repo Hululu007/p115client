@@ -517,7 +517,7 @@ class P115FileSystemProvider(DAVProvider):
             return FolderResource("/<share", environ, {"id": 0, "name": "<share", "size": 0})
         else:
             if path.startswith("/<share/"):
-                share_code, _, share_path = path[7:].partition("/")
+                share_code, _, share_path = path[8:].partition("/")
                 share_fs = get_share_fs(share_code)
                 get_attr: Callable = partial(share_fs.as_path, share_path)
             else:

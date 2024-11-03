@@ -132,9 +132,9 @@ function pow(base, exponent, modulus) {
     if (modulus === 1n)
         return 0n;
     let result = 1n;
-    base = base % modulus;
+    base %= modulus;
     while (exponent) {
-        if (exponent % 2n)
+        if (exponent & 1n)
             result = (result * base) % modulus;
         exponent = exponent >> 1n;
         base = (base * base) % modulus;
