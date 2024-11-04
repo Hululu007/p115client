@@ -2,7 +2,7 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 0, 3)
+__version__ = (0, 0, 4)
 __all__ = ["make_application"]
 __requirements__ = ["blacksheep", "blacksheep_client_request", "cachetools", "p115client", "posixpatht", "uvicorn"]
 __doc__ = """\
@@ -159,6 +159,10 @@ def make_application(
             PATH_TO_PICKCODE = {}
     # NOTE: 缓存图片的 CDN 直链 1 小时
     IMAGE_URL_CACHE: MutableMapping[str, bytes] = TTLCache(inf, ttl=3600)
+    # NOTE: 限制请求频率，以一组请求信息为 key，0.5 秒内相同的 key 只放行一个
+    URL_COOLDOWN: MutableMapping[tuple, None] = TTLCache(1024, ttl=0.5)
+    # NOTE: 下载链接缓存，以减少接口调用频率，只需缓存很短时间
+    URL_CACHE: MutableMapping[tuple, str] = TTLCache(64, ttl=1)
     # NOTE: 缓存字幕的 CDN 直链 1 小时
     SUBTITLE_URL_CACHE: MutableMapping[str, bytes] = TTLCache(inf, ttl=3600)
     # 排队任务（一次性运行，不在周期性运行的 cids 列表中）
@@ -619,7 +623,19 @@ def make_application(
                 return redirect(await get_subtitle_url(p115client, pickcode, do_request))
             case _:
                 user_agent = (request.get_first_header(b"User-agent") or b"").decode("latin-1")
-                return redirect(await get_url(p115client, pickcode, user_agent, do_request))
+                bytes_range = (request.get_first_header(b"Range") or b"").decode("latin-1")
+                if bytes_range and not user_agent.startswith(("VLC/", "OPlayer/")):
+                    remote_addr = request.original_client_ip
+                    cooldown_key = (pickcode, remote_addr, user_agent, bytes_range)
+                    if cooldown_key in URL_COOLDOWN:
+                        return text("too many requests", 429)
+                    URL_COOLDOWN[cooldown_key] = None
+                    key = (pickcode, remote_addr, user_agent)
+                    if not (url := URL_CACHE.get(key)):
+                        URL_CACHE[key] = url = await get_url(p115client, pickcode, user_agent, do_request)
+                else:
+                    url = await get_url(p115client, pickcode, user_agent, do_request)
+                return redirect(url)
 
     @app.router.route("/run", methods=["POST"])
     async def do_run(request: Request, cid: str = "0", type: int = 2, password: str = ""):

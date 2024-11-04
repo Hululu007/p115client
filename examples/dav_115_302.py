@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 3, 1)
+__version__ = (0, 3, 2)
 __requirements__ = ["cachetools", "flask", "Flask-Compress", "path_predicate", "python-115", "urllib3_request", "werkzeug", "wsgidav"]
 __doc__ = """\
     🕸️ 获取你的 115 网盘账号上文件信息和下载链接 🕷️
@@ -259,6 +259,10 @@ SHA1_TO_PICKCODE: MutableMapping[str, str] = LRUCache(65536)
 IMAGE_URL_CACHE: MutableMapping[str, None | P115URL] = TTLCache(65536, ttl=3600)
 # NOTE: 缓存 115 分享的文件系统对象
 SHARE_FS_MAP: dict[str, P115ShareFileSystem] = {}
+# NOTE: 限制请求频率，以一组请求信息为 key，0.5 秒内相同的 key 只放行一个
+URL_COOLDOWN: MutableMapping[tuple, None] = TTLCache(1024, ttl=0.5)
+# NOTE: 下载链接缓存，以减少接口调用频率，只需缓存很短时间
+URL_CACHE: MutableMapping[tuple, P115URL] = TTLCache(64, ttl=1)
 # NOTE: webdav 的文件对象缓存
 if strm_predicate:
     DAV_FILE_CACHE: MutableMapping[str, DAVNonCollection] = LRUCache(65536)
@@ -844,9 +848,21 @@ def get_url(path: str = "", /, pickcode: str = ""):
         pickcode = root_pickcode
     if is_image := get_arg("image") not in (None, "0", "false"):
         return {"type": "image", "url": get_image_url(pickcode)}
-    user_agent = request.headers.get("User-Agent") or ""
     use_web_api = get_arg("web") not in (None, "0", "false")
-    url = get_file_url(pickcode, user_agent=user_agent, use_web_api=use_web_api)
+    user_agent = request.headers.get("User-Agent", "")
+    bytes_range = request.headers.get("Range", "")
+    url: None | P115URL
+    if bytes_range and not user_agent.startswith(("VLC/", "OPlayer/")):
+        remote_addr = request.remote_addr or ""
+        cooldown_key = (pickcode, remote_addr, user_agent, bytes_range)
+        if cooldown_key in URL_COOLDOWN:
+            return Response("too many requests", 429)
+        URL_COOLDOWN[cooldown_key] = None
+        key = (pickcode, remote_addr, user_agent, use_web_api)
+        if not (url := URL_CACHE.get(key)):
+            URL_CACHE[key] = url = get_file_url(pickcode, user_agent=user_agent, use_web_api=use_web_api)
+    else:
+        url = get_file_url(pickcode, user_agent=user_agent, use_web_api=use_web_api)
     return {"type": "file", "url": str(url), "headers": url["headers"], "web": use_web_api}
 
 
@@ -868,7 +884,22 @@ def get_share_url(path: str = "", /, share_code: str = "", file_id: int | str = 
         attr = normalize_attr(attr)
         file_id = attr["id"]
     use_web_api = get_arg("web") not in (None, "0", "false")
-    url = get_share_file_url(fs.share_code, fs.receive_code, file_id, use_web_api=use_web_api)
+    user_agent = request.headers.get("User-Agent", "")
+    bytes_range = request.headers.get("Range", "")
+    share_code = fs.share_code
+    receive_code = fs.receive_code
+    url: None | P115URL
+    if bytes_range and not user_agent.startswith(("VLC/", "OPlayer/")):
+        remote_addr = request.remote_addr or ""
+        cooldown_key = (share_code, receive_code, file_id, remote_addr, user_agent, bytes_range)
+        if cooldown_key in URL_COOLDOWN:
+            return Response("too many requests", 429)
+        URL_COOLDOWN[cooldown_key] = None
+        key = (share_code, receive_code, file_id, remote_addr, user_agent, use_web_api)
+        if not (url := URL_CACHE.get(key)):
+            URL_CACHE[key] = url = get_share_file_url(share_code, receive_code, file_id, use_web_api=use_web_api)
+    else:
+        url = get_share_file_url(share_code, receive_code, file_id, use_web_api=use_web_api)
     return {"type": "file", "url": str(url), "headers": url.get("headers"), "web": use_web_api}
 
 

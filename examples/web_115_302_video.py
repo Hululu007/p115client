@@ -45,7 +45,7 @@ __doc__ = """\
 
     \x1b[4m\x1b[34mhttps://pypi.org/project/httpie/\x1b[0m
 """
-__requirements__ = ["blacksheep", "blacksheep_client_request", "p115client", "uvicorn"]
+__requirements__ = ["blacksheep", "blacksheep_client_request", "cachetools", "p115client", "uvicorn"]
 
 if __name__ == "__main__":
     from argparse import ArgumentParser, RawTextHelpFormatter
@@ -67,7 +67,7 @@ if __name__ == "__main__":
         raise SystemExit(0)
 
 try:
-    from p115client import P115Client
+    from p115client import P115Client, P115OSError
     from p115.tool import get_id_to_path
     from blacksheep import json, redirect, text, Application, FromJSON, Request, Router
     from blacksheep.client import ClientSession
@@ -76,12 +76,13 @@ try:
     from blacksheep.server.openapi.v3 import OpenAPIHandler
     from blacksheep.server.remotes.forwarding import ForwardedHeadersMiddleware
     from blacksheep_client_request import request as blacksheep_request
+    from cachetools import TTLCache
     from openapidocs.v3 import Info
 except ImportError:
     from sys import executable
     from subprocess import run
     run([executable, "-m", "pip", "install", "-U", *__requirements__], check=True)
-    from p115client import P115Client
+    from p115client import P115Client, P115OSError
     from p115.tool import get_id_to_path
     from blacksheep import json, redirect, text, Application, FromJSON, Request, Router
     from blacksheep.client import ClientSession
@@ -90,6 +91,7 @@ except ImportError:
     from blacksheep.server.openapi.v3 import OpenAPIHandler
     from blacksheep.server.remotes.forwarding import ForwardedHeadersMiddleware
     from blacksheep_client_request import request as blacksheep_request
+    from cachetools import TTLCache
     from openapidocs.v3 import Info # type: ignore
 
 import logging
@@ -102,6 +104,7 @@ from math import isinf, isnan, nan
 from pathlib import Path
 from string import hexdigits
 from time import time
+from typing import cast
 from urllib.parse import unquote
 
 
@@ -122,6 +125,10 @@ def make_application(
     ID_TO_PICKCODE: dict[str, str] = {}
     # NOTE: sha1 到 pickcode 的映射
     SHA1_TO_PICKCODE: dict[str, str] = {}
+    # NOTE: 限制请求频率，以一组请求信息为 key，0.5 秒内相同的 key 只放行一个
+    URL_COOLDOWN: MutableMapping[tuple, None] = TTLCache(1024, ttl=0.5)
+    # NOTE: 下载链接缓存，以减少接口调用频率，只需缓存很短时间
+    URL_CACHE: MutableMapping[tuple, str] = TTLCache(64, ttl=1)
     # NOTE: 用来保存【视频名称】对应的【pickcode】
     if store_file:
         from shelve import open as open_shelve
@@ -388,21 +395,34 @@ def make_application(
                 pickcode = NAME_TO_PICKCODE[name]
             except KeyError:
                 return json({"state": False, "message": f"name not found: {name!r}"}, 404)
-        user_agent = (request.get_first_header(b"User-agent") or b"").decode("utf-8")
-        resp = await p115client.download_url_app(
-            pickcode, 
-            headers={"User-Agent": user_agent}, 
-            request=blacksheep_request, 
-            session=client, 
-            async_=True, 
-        )
-        if not resp["state"]:
-            return json(resp, 404)
-        id, info = next(iter(resp["data"].items()))
-        if not info["url"]:
-            json(resp, 404)
-        NAME_TO_PICKCODE[info["file_name"]] = ID_TO_PICKCODE[id] = SHA1_TO_PICKCODE[info["sha1"]] = info["pick_code"]
-        return redirect(info["url"]["url"])
+        user_agent = (request.get_first_header(b"User-agent") or b"").decode("latin-1")
+        bytes_range = (request.get_first_header(b"Range") or b"").decode("latin-1")
+        key: tuple = ()
+        if bytes_range and not user_agent.startswith(("VLC/", "OPlayer/")):
+            remote_addr = request.original_client_ip
+            cooldown_key = (pickcode, remote_addr, user_agent, bytes_range)
+            if cooldown_key in URL_COOLDOWN:
+                return text("too many requests", 429)
+            URL_COOLDOWN[cooldown_key] = None
+            key = (pickcode, remote_addr, user_agent)
+            if url := URL_CACHE.get(key):
+                return redirect(url)
+        try:
+            url = await p115client.download_url(
+                pickcode, 
+                headers={"User-Agent": user_agent}, 
+                request=blacksheep_request, 
+                session=client, 
+                async_=True, 
+            )
+        except P115OSError as e:
+            return json(e.args[1], 500)
+        except (FileNotFoundError, IsADirectoryError) as e:
+            return json(e.args[1], 404)
+        NAME_TO_PICKCODE[url["name"]] = ID_TO_PICKCODE[id] = SHA1_TO_PICKCODE[url["sha1"]] = url["pickcode"]
+        if key:
+            URL_CACHE[key] = url
+        return redirect(url)
 
     @app.router.route("/", methods=["GET", "HEAD"])
     async def get_url_by_pickcode(

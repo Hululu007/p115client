@@ -2,9 +2,9 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 0, 1)
+__version__ = (0, 0, 2)
 __doc__ = "115 302 迷你版，仅支持用 pickcode、id 或 sha1 查询（排名越前，优先级越高）"
-__requirements__ = ["blacksheep", "p115client", "uvicorn"]
+__requirements__ = ["blacksheep", "cachetools", "p115client", "uvicorn"]
 
 if __name__ == "__main__":
     from argparse import ArgumentParser, RawTextHelpFormatter
@@ -20,14 +20,16 @@ if __name__ == "__main__":
         raise SystemExit(0)
 
 try:
-    from blacksheep import route, redirect, text, Application, Request
-    from p115client import P115Client
+    from blacksheep import route, redirect, json, text, Application, Request
+    from cachetools import TTLCache
+    from p115client import P115Client, P115OSError
 except ImportError:
     from sys import executable
     from subprocess import run
     run([executable, "-m", "pip", "install", "-U", *__requirements__], check=True)
-    from blacksheep import route, redirect, text, Application, Request
-    from p115client import P115Client
+    from blacksheep import route, redirect, json, text, Application, Request
+    from cachetools import TTLCache
+    from p115client import P115Client, P115OSError
 
 from pathlib import Path
 from string import hexdigits
@@ -40,8 +42,14 @@ else:
 client = P115Client(cookies_path, app="harmony", check_for_relogin=True)
 
 app = Application()
+# NOTE: id 到 pickcode 的映射
 ID_TO_PICKCODE: dict[int, str] = {}
+# NOTE: sha1 到 pickcode 的映射
 SHA1_TO_PICKCODE: dict[str, str] = {}
+# NOTE: 限制请求频率，以一组请求信息为 key，0.5 秒内相同的 key 只放行一个
+URL_COOLDOWN: TTLCache[tuple, None] = TTLCache(1024, ttl=0.5)
+# NOTE: 下载链接缓存，以减少接口调用频率，只需缓存很短时间
+URL_CACHE: TTLCache[tuple, str] = TTLCache(64, ttl=1)
 
 
 @route("/", methods=["GET", "HEAD"])
@@ -68,16 +76,29 @@ async def index(
                 pickcode = SHA1_TO_PICKCODE[sha1] = resp["data"]["pick_code"]
     if not pickcode:
         return text("Bad Request: Missing or bad query parameter: `pickcode`, `id` nor `sha1`", 400)
-    user_agent = request.headers.get_first(b"user-agent") or b""
-    try:
-        return redirect(await client.download_url(
-            pickcode, 
-            headers={"user-agent": user_agent.decode("latin-1")}, 
-            async_=True, 
-        ))
-    except FileNotFoundError:
-        pass
-    return text(f"bad pickcode: {pickcode!r}", 400)
+    user_agent = (request.get_first_header(b"User-agent") or b"").decode("latin-1")
+    bytes_range = (request.get_first_header(b"Range") or b"").decode("latin-1")
+    url = ""
+    if bytes_range and not user_agent.startswith(("VLC/", "OPlayer/")):
+        remote_addr = request.original_client_ip
+        cooldown_key = (pickcode, remote_addr, user_agent, bytes_range)
+        if cooldown_key in URL_COOLDOWN:
+            return text("too many requests", 429)
+        URL_COOLDOWN[cooldown_key] = None
+        key = (pickcode, remote_addr, user_agent)
+        url = URL_CACHE.get(key, "")
+    if not url:
+        try:
+            url = await client.download_url(
+                pickcode, 
+                headers={"user-agent": user_agent}, 
+                async_=True, 
+            )
+        except P115OSError as e:
+            return json(e.args[1], 500)
+        except (FileNotFoundError, IsADirectoryError) as e:
+            return json(e.args[1], 404)
+    return redirect(url)
 
 
 if __name__ == "__main__":

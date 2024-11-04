@@ -31,7 +31,7 @@ from urlopen import urlopen
 from .iterdir import get_id_to_path
 
 
-CRE_TREE_PREFIX_match: Final = re_compile("^(?:\| )+\|-(.*)").match
+CRE_TREE_PREFIX_match: Final = re_compile(r"^(?:\| )+\|-(.*)").match
 
 
 def format_time(t: int | float, /) -> str:
