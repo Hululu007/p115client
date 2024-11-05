@@ -1395,8 +1395,8 @@ def get_page(path: str = "", /, as_file: bool = False):
         {%- set url = attr["url"] %}
         <td><i class="file-type tp-{{ attr.get("ico") or "" }}"></i></td>
         <td style="word-wrap: break-word"><a {% if not attr["is_directory"] and attr.get("thumb") %}class="is-image" data-fancybox="gallery" data-src="{{ IMAGE_URL_CACHE[attr["pickcode"]] }}" data-thumb-src="{{ attr["thumb"].replace("_100?", "_200?") }}"{% endif %} href="{{ url }}" style="text-decoration: none">{{ name }}</a></td>
-        <td style="word-wrap: break-word">
-          {%- if attr.get("is_media") %}
+        {%- if attr.get("is_media") %}
+        <td style="min-width: 160px">
           <a class="popup" href="iina://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=iina" /><span class="popuptext">IINA</span></a>
           <a class="popup" href="potplayer://{{ url | escape_url | safe }}"><img class="icon" src="/?pic=potplayer" /><span class="popuptext">PotPlayer</span></a>
           <a class="popup" href="vlc://{{ url | escape_url | safe }}"><img class="icon" src="/?pic=vlc" /><span class="popuptext">VLC</span></a>
@@ -1408,7 +1408,9 @@ def get_page(path: str = "", /, as_file: bool = False):
           <a class="popup" href="omniplayer://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=omniplayer" /><span class="popuptext">OmniPlayer</span></a>
           <a class="popup" href="figplayer://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=figplayer" /><span class="popuptext">Fig Player</span></a>
           <a class="popup" href="mpv://{{ url | escape_url | safe }}"><img class="icon" src="/?pic=mpv" /><span class="popuptext">MPV</span></a>
-          {%- endif %}
+        {%- else %}
+        <td>
+        {%- endif %}
         </td>
         {%- if attr["is_directory"] %}
         <td style="text-align: center">--</td>
@@ -1499,8 +1501,8 @@ def get_share_page(path: str = "", /, share_code: str = "", as_file: bool = Fals
         {%- set url = attr["url"] %}
         <td><i class="file-type tp-{{ attr.get("ico") or "" }}"></i></td>
         <td style="word-wrap: break-word"><a href="{{ url }}" style="text-decoration: none">{{ name }}</a></td>
-        <td>
-          {%- if attr.get("is_media") %}
+        {%- if attr.get("is_media") %}
+        <td style="min-width: 160px">
           <a class="popup" href="iina://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=iina" /><span class="popuptext">IINA</span></a>
           <a class="popup" href="potplayer://{{ url | escape_url | safe }}"><img class="icon" src="/?pic=potplayer" /><span class="popuptext">PotPlayer</span></a>
           <a class="popup" href="vlc://{{ url | escape_url | safe }}"><img class="icon" src="/?pic=vlc" /><span class="popuptext">VLC</span></a>
@@ -1512,7 +1514,9 @@ def get_share_page(path: str = "", /, share_code: str = "", as_file: bool = Fals
           <a class="popup" href="omniplayer://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=omniplayer" /><span class="popuptext">OmniPlayer</span></a>
           <a class="popup" href="figplayer://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=figplayer" /><span class="popuptext">Fig Player</span></a>
           <a class="popup" href="mpv://{{ url | escape_url | safe }}"><img class="icon" src="/?pic=mpv" /><span class="popuptext">MPV</span></a>
-          {%- endif %}
+        {%- else %}
+        <td>
+        {%- endif %}
         </td>
         {%- if attr["is_directory"] and not attr["size"] %}
         <td style="text-align: center">--</td>
