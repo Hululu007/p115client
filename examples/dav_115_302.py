@@ -1205,7 +1205,7 @@ def get_list(path: str = "", /):
     if children and root and not any(int(info["id"]) == root for info in children[0]["ancestors"]):
         return Response("out of root range", 403)
     earliest_thumb_ts = min((int(attr["thumb"].rsplit("=", 1)[1]) for attr in children if not attr["is_directory"] and attr.get("thumb")), default=0)
-    if earliest_thumb_ts - time() < 600:
+    if earliest_thumb_ts and earliest_thumb_ts - time() < 600:
         children = fs.listdir_attr(id_or_path, page_size=10_000, refresh=True)
     origin = get_origin()
     return [normalize_attr(attr, origin) for attr in children]
@@ -1241,7 +1241,7 @@ def get_share_list(path: str = "", /, share_code: str = ""):
     children = fs.listdir_attr(id_or_path, page_size=10_000)
     if children:
         earliest_thumb_ts = min((int(attr["thumb"].rsplit("=", 1)[1]) for attr in children if not attr["is_directory"] and attr.get("thumb")), default=0)
-        if earliest_thumb_ts - time() < 600:
+        if earliest_thumb_ts and earliest_thumb_ts - time() < 600:
             children = fs.listdir_attr(id_or_path, page_size=10_000, refresh=True)
     origin = get_origin()
     return [normalize_attr(attr, origin) for attr in children]
