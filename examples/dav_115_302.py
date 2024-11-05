@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 3, 2)
+__version__ = (0, 3, 3)
 __requirements__ = ["cachetools", "flask", "Flask-Compress", "path_predicate", "python-115", "urllib3_request", "werkzeug", "wsgidav"]
 __doc__ = """\
     🕸️ 获取你的 115 网盘账号上文件信息和下载链接 🕷️
@@ -1402,7 +1402,7 @@ def get_page(path: str = "", /, as_file: bool = False):
         {%- set name = attr["name"] %}
         {%- set url = attr["url"] %}
         <td style="width: 0px"><i class="file-type tp-{{ attr.get("ico") or "" }}"></i></td>
-        <td style="max-width: 600px; word-wrap: break-word"><a {% if not attr["is_directory"] and attr.get("thumb") %}class="is-image" data-fancybox="gallery" data-src="{{ IMAGE_URL_CACHE[attr["pickcode"]] }}"{% endif %} href="{{ url }}" style="text-decoration: none">{{ name }}</a></td>
+        <td style="max-width: 600px; word-wrap: break-word"><a {% if not attr["is_directory"] and attr.get("thumb") %}class="is-image" data-fancybox="gallery" data-src="{{ IMAGE_URL_CACHE[attr["pickcode"]] }}" data-thumb-src="{{ attr["thumb"].replace("_100?", "_200?") }}"{% endif %} href="{{ url }}" style="text-decoration: none">{{ name }}</a></td>
         <td style="width: 160px; word-wrap: break-word">
           {%- if attr.get("is_media") %}
           <a class="popup" href="iina://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=iina" /><span class="popuptext">IINA</span></a>
