@@ -426,8 +426,6 @@ setattr(flask_app, "jinja_env", Environment(loader=DictLoader({
   </style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/particles.js/2.0.0/particles.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/progressbar.js/1.1.1/progressbar.min.js"></script>
-  <script src="https://unpkg.com/@popperjs/core@2"></script>
-  <script src="https://unpkg.com/tippy.js@6"></script>
   <script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/fancybox/fancybox.umd.js"></script>
   <link
     rel="stylesheet"
@@ -671,12 +669,6 @@ window.addEventListener("load", function () {
       top: document.documentElement.scrollHeight,
       behavior: 'smooth'
     });
-  });
-
-  tippy('#progress-container', {
-    content: 'Jump to bottom',
-    theme: 'light',
-    placement: 'left',
   });
 
   updateScroll();
