@@ -176,6 +176,7 @@ try:
     from cachetools import LRUCache, TTLCache
     from flask import request, redirect, render_template_string, send_file, Flask, Response
     from flask_compress import Compress # type: ignore
+    from jinja2 import Environment, DictLoader
     from p115 import check_response, AuthenticationError, P115URL
     from p115.component import P115Client, P115FileSystem, P115ShareFileSystem
     from p115.tool import type_of_attr
@@ -194,6 +195,7 @@ except ImportError:
     from cachetools import LRUCache, TTLCache
     from flask import request, redirect, render_template_string, send_file, Flask, Response
     from flask_compress import Compress # type: ignore
+    from jinja2 import Environment, DictLoader
     from p115 import check_response, AuthenticationError, P115URL
     from p115.component import P115Client, P115FileSystem, P115ShareFileSystem
     from p115.tool import type_of_attr
@@ -220,7 +222,7 @@ from urllib.parse import unquote, urlsplit
 
 TRANSTAB3 = {c: f"%{c:02x}" for c in b"#%?"}
 TRANSTAB4 = {c: f"%{c:02x}" for c in b"#%/?"}
-TRANSTAB6_URL = {c: f"%{c:02x}" for c in b"{}<>'\""}
+TRANSTAB7_URL = {c: f"%{c:02x}" for c in b"{}<>'\" "}
 translate = str.translate
 urlopen = partial(urllib3_request, pool=PoolManager(num_pools=128))
 
@@ -291,6 +293,417 @@ else:
 flask_app = Flask(__name__)
 Compress(flask_app)
 setattr(flask_app.json, "ensure_ascii", False)
+setattr(flask_app, "jinja_env", Environment(loader=DictLoader({
+    "base_template": """\
+<!DOCTYPE html>
+<html>
+<head>
+  <title>115 File List</title>
+  <link rel="shortcut icon" href="/?pic=favicon" type="image/x-icon">
+  <link href="//cdnres.115.com/site/static/style_v10.0/file/css/file_type.css?_vh=bf604a2_70" rel="stylesheet" type="text/css">
+  <style>
+    a:hover {
+      color: red;
+    }
+    .file-type {
+      flex: 1;
+      min-width: 0;
+      position: relative;
+      height: 32px;
+      padding-left: 47px;
+      flex-direction: column;
+      justify-content: center;
+    }
+    td {
+      vertical-align: middle;
+    }
+    img {
+      height: 32px;
+      width: 32px; 
+    }
+
+    table {
+      border-collapse: collapse;
+      margin: 25px 0;
+      font-size: 0.9em;
+      font-family: sans-serif;
+      min-width: 1200px;
+      box-shadow: 0 0 20px rgba(0, 0, 0, 0.15);
+    }
+    thead tr {
+      font-family: Lato-Bold;
+      font-size: 18px;
+      color: #3636f0;
+      line-height: 1.4;
+      background-color: #f0f0f0;
+      position: sticky;
+      top: 0;
+    }
+    th, td:not(:first-child) {
+      padding: 12px 15px;
+    }
+    tbody tr {
+      border-bottom: 1px solid #dddddd;
+      background-color: #fff;
+      transition: background-color 0.3s, transform 0.3s;
+    }
+    tbody tr:last-of-type {
+      border-bottom: 2px solid #009879;
+    }
+    tbody tr:hover {
+      color: #009879;
+      font-weight: bold;
+      background-color: rgba(230, 230, 230, 0.5);
+      transform: scale(1.02);
+    }
+
+    .icon {
+      border-radius: 10px;
+      display: inline-block;
+      padding: 8px;
+      transition: background-color 0.5s;
+    }
+    .icon:hover {
+        background-color: #d2d2d2;
+    }
+
+    /* Popup container - can be anything you want */
+    .popup {
+      position: relative;
+      display: inline-block;
+      cursor: pointer;
+      -webkit-user-select: none;
+      -moz-user-select: none;
+      -ms-user-select: none;
+      user-select: none;
+    }
+  
+    /* The actual popup */
+    .popup .popuptext {
+      visibility: hidden;
+      width: 160px;
+      background-color: #555;
+      color: #fff;
+      text-align: center;
+      border-radius: 6px;
+      padding: 8px 0;
+      position: absolute;
+      z-index: 1;
+      bottom: 125%;
+      left: 50%;
+      margin-left: -80px;
+    }
+  
+    /* Popup arrow */
+    .popup .popuptext::after {
+      content: "";
+      position: absolute;
+      top: 100%;
+      left: 50%;
+      margin-left: -5px;
+      border-width: 5px;
+      border-style: solid;
+      border-color: #555 transparent transparent transparent;
+    }
+  
+    /* Toggle this class - hide and show the popup */
+    .popup:hover .popuptext {
+      visibility: visible;
+      -webkit-animation: fadeIn 1s;
+      animation: fadeIn 1s;
+    }
+  
+    /* Add animation (fade in the popup) */
+    @-webkit-keyframes fadeIn {
+      from {opacity: 0;} 
+      to {opacity: 1;}
+    }
+  
+    @keyframes fadeIn {
+      from {opacity: 0;}
+      to {opacity:1 ;}
+    }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/particles.js/2.0.0/particles.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/progressbar.js/1.1.1/progressbar.min.js"></script>
+  <script src="https://unpkg.com/@popperjs/core@2"></script>
+  <script src="https://unpkg.com/tippy.js@6"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/fancybox/fancybox.umd.js"></script>
+  <link
+    rel="stylesheet"
+    href="https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/fancybox/fancybox.css"
+  />
+  <script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/carousel/carousel.umd.js"></script>
+  <link
+    rel="stylesheet"
+    href="https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/carousel/carousel.css"
+  />
+  <script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/carousel/carousel.thumbs.umd.js"></script>
+  <link
+    rel="stylesheet"
+    href="https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/carousel/carousel.thumbs.css"
+  />
+</head>
+<body>
+  {%- block content %}{% endblock %}
+  <script>
+window.addEventListener("load", function () {
+  // startup for particles.js
+  // color picker tool: https://www.w3cschool.cn/tools/index?name=cpicker
+  const particlesColorDark = ["#1a0000", "#1a1100", "#191a00", "#001a00", "#00001a", "#0f001a", "#160316", "#0d0d0d"];
+  const particlesColorLight = ["#ffe5e5", "#fff6e5", "#ffffe5", "#e5ffe5", "#e5e5ff", "#f4e5ff", "#fce9fc", "#f2f2f2"];
+  let startThemeColor = document.body.dataset["theme"];
+  const particlesConfig = {
+    particles: {
+      number: {
+        value: 80,
+        density: {
+          enable: true,
+          value_area: 800
+        }
+      },
+      color: {
+        value: startThemeColor == "dark" ? particlesColorDark : particlesColorLight,
+      },
+      shape: {
+        type: ["circle"],
+        stroke: {
+          width: 0,
+          color: "#fff"
+        },
+        polygon: {
+          nb_sides: 5
+        }
+      },
+      opacity: {
+        value: 1,
+        random: false,
+        anim: {
+          enable: false,
+          speed: 1,
+          opacity_min: 0.1,
+          sync: false
+        }
+      },
+      size: {
+        value: 8,
+        random: true,
+        anim: {
+          enable: false,
+          speed: 10,
+          size_min: 10,
+          sync: false
+        }
+      },
+      line_linked: {
+        enable: true,
+        distance: 150,
+        color: "#808080",
+        opacity: 0.4,
+        width: 1
+      },
+      move: {
+        enable: true,
+        speed: 5,
+        direction: "none",
+        random: false,
+        straight: false,
+        out_mode: "out",
+        bounce: false,
+        attract: {
+          enable: false,
+          rotateX: 600,
+          rotateY: 1200
+        }
+      }
+    },
+    interactivity: {
+      detect_on: "canvas",
+      events: {
+        onhover: {
+          enable: true,
+          mode: "grab"
+        },
+        onclick: {
+          enable: true,
+          mode: "push"
+        },
+        resize: true
+      },
+      modes: {
+        grab: {
+          distance: 140,
+          line_linked: {
+            opacity: 1
+          }
+        },
+        bubble: {
+          distance: 400,
+          size: 40,
+          duration: 2,
+          opacity: 8,
+          speed: 3
+        },
+        repulse: {
+          distance: 200,
+          duration: 0.4
+        },
+        push: {
+          particles_nb: 4
+        },
+        remove: {
+          particles_nb: 2
+        }
+      }
+    },
+    retina_detect: true
+  };
+
+  if (startThemeColor != null) {
+    // Select the node that will be observed for mutations
+    const targetNode = document.body;
+    // Options for the observer (which mutations to observe)
+    const config = { attributes: true, attributeFilter: ["data-theme"] };
+    // Callback function to execute when mutations are observed
+    const callback = (mutationList, observer) => {
+      for (const mutation of mutationList) {
+        if (mutation.type === "attributes") {
+          const themeColor = targetNode.dataset["theme"];
+          particlesConfig.particles.color.value = themeColor == "dark" ? particlesColorDark : particlesColorLight;
+          particlesJS("particles-js", particlesConfig);
+        }
+      }
+    }
+    // Create an observer instance linked to the callback function
+    const observer = new MutationObserver(callback);
+    // Start observing the target node for configured mutations
+    observer.observe(targetNode, config);
+  }
+  var body = document.body;
+  var div = document.createElement("div");
+  div.id = "particles-js";
+  div.setAttribute("style", "position: fixed; height: 100%; width: 100%; z-index: -99;");
+  body.insertBefore(div, body.firstElementChild);
+  particlesJS("particles-js", particlesConfig);
+
+  function getScrollPercentage() {
+    const scrollTop = window.scrollY || document.documentElement.scrollTop;
+    const scrollDistance = document.documentElement.scrollHeight - window.innerHeight;
+    return (scrollTop / scrollDistance) * 100;
+  }
+
+  function rainbowGradient(progress) {
+    var colors = [
+      [255, 0, 0],    // red
+      [255, 165, 0],  // orange
+      [255, 255, 0],  // yellow
+      [0, 128, 0],    // green
+      [0, 0, 255],    // blue
+      [75, 0, 130],   // indigo
+      [148, 0, 211]   // violet
+    ];
+
+    var totalSegments = colors.length - 1;
+    var segmentProgress = 1 / totalSegments;
+    var segmentIndex = Math.floor(progress / segmentProgress);
+    var segmentProgressWithinSegment = (progress - segmentIndex * segmentProgress) / segmentProgress;
+
+    var startColor = colors[segmentIndex];
+    var endColor = colors[segmentIndex + 1];
+
+    var r = Math.round(startColor[0] + (endColor[0] - startColor[0]) * segmentProgressWithinSegment);
+    var g = Math.round(startColor[1] + (endColor[1] - startColor[1]) * segmentProgressWithinSegment);
+    var b = Math.round(startColor[2] + (endColor[2] - startColor[2]) * segmentProgressWithinSegment);
+
+    return 'rgb(' + r + ', ' + g + ', ' + b + ')';
+  }
+
+  // progressbar at right-bottom
+  var body = document.body;
+  var div = document.createElement("div");
+  div.id = "progress-container";
+  div.setAttribute('style', 'position: fixed; bottom: 10px; right: 10px; width: 4em; height: 4em; z-index: 999; cursor: pointer;');
+  body.insertBefore(div, body.firstElementChild);
+
+  var progress = new ProgressBar.Circle("#progress-container", {
+    // This has to be the same size as the maximum width to
+    // prevent clipping
+    strokeWidth: 2,
+    trailWidth: 1,
+    easing: 'easeInOut',
+    duration: 1400,
+    text: {
+      autoStyleContainer: false,
+    },
+    from: { color: '#FFFF99', width: 1 },
+    to: { color: '#00FF33', width: 4 },
+    // Set default step function for all animate calls
+    step: function (state, circle) {
+      circle.path.setAttribute('stroke', rainbowGradient(circle.value()));
+      circle.path.setAttribute('stroke-width', 1 + circle.value() * 3);
+      circle.setText(circle.value() * 100);
+    }
+  });
+  progress.text.style.fontFamily = '"Raleway", Helvetica, sans-serif';
+  progress.text.style.fontSize = '1rem';
+
+  function getScrollPercentage() {
+    const scrollTop = window.scrollY || document.documentElement.scrollTop;
+    const scrollDistance = document.documentElement.scrollHeight - window.innerHeight;
+    return (scrollTop / scrollDistance) * 100;
+  }
+
+  function updateScroll() {
+    const scrollPercentage = getScrollPercentage();
+    if (isNaN(scrollPercentage) || scrollPercentage < 0.1 || scrollPercentage >= 100) {
+      progress.svg.parentNode.style.display = "none";
+    } else {
+      progress.svg.parentNode.style.display = "block";
+      progress.set(scrollPercentage / 100);
+      progress.setText(scrollPercentage.toFixed(1) + '%');
+    }
+  }
+
+  window.addEventListener('scroll', updateScroll);
+
+  document.getElementById('progress-container').addEventListener('click', function () {
+    window.scrollTo({
+      top: document.documentElement.scrollHeight,
+      behavior: 'smooth'
+    });
+  });
+
+  tippy('#progress-container', {
+    content: 'Jump to bottom',
+    theme: 'light',
+    placement: 'left',
+  });
+
+  updateScroll();
+
+  Fancybox.bind('[data-fancybox="gallery"]', {
+    Toolbar: {
+      display: {
+        left: [
+          "zoomIn",
+          "zoomOut",
+          "rotateCCW",
+          "rotateCW",
+          "flipX",
+          "flipY",
+          "toggle1to1",
+          "reset",
+        ],
+        middle: ["infobar"],
+        right: ["slideshow", "download", "fullscreen", "thumbs", "close"],
+      },
+    }
+  });
+});
+  </script>
+</body>
+</html>"""
+})))
 
 
 class DavPathBase:
@@ -698,7 +1111,7 @@ def normalize_attr(
             SHA1_TO_PICKCODE[attr["sha1"]] = ID_TO_PICKCODE[attr["id"]] = pickcode
             url = f"{path_url}?pickcode={pickcode}"
             if thumb := attr.get("thumb"):
-                IMAGE_URL_CACHE[pickcode] = thumb
+                IMAGE_URL_CACHE[pickcode] = thumb.replace("_100?", "_0?")
                 url += "&image=true"
             elif info["violated"] and attr["size"] < 1024 * 1024 * 115:
                 url += "&web=true"
@@ -961,137 +1374,8 @@ def get_page(path: str = "", /, as_file: bool = False):
             ) + f'<strong><a href="/?id={last_info["id"]}&method=list" style="border: 1px solid black; text-decoration: none">{escape(escape_name(last_info["name"]))}</a></strong>'
     return render_template_string(
         """\
-<!DOCTYPE html>
-<html>
-<head>
-  <title>115 File List</title>
-  <link rel="shortcut icon" href="/?pic=favicon" type="image/x-icon">
-  <link href="//cdnres.115.com/site/static/style_v10.0/file/css/file_type.css?_vh=bf604a2_70" rel="stylesheet" type="text/css">
-  <style>
-    a:hover {
-      color: red;
-    }
-    .file-type {
-      flex: 1;
-      min-width: 0;
-      position: relative;
-      height: 32px;
-      padding-left: 47px;
-      flex-direction: column;
-      justify-content: center;
-    }
-    td {
-      vertical-align: middle;
-    }
-    img {
-      height: 32px;
-      width: 32px; 
-    }
-
-    table {
-      border-collapse: collapse;
-      margin: 25px 0;
-      font-size: 0.9em;
-      font-family: sans-serif;
-      min-width: 1200px;
-      box-shadow: 0 0 20px rgba(0, 0, 0, 0.15);
-    }
-    thead tr {
-      font-family: Lato-Bold;
-      font-size: 18px;
-      color: #3636f0;
-      line-height: 1.4;
-      background-color: #f0f0f0;
-      position: sticky;
-      top: 0;
-    }
-    th, td:not(:first-child) {
-      padding: 12px 15px;
-    }
-    tbody tr {
-      border-bottom: 1px solid #dddddd;
-      background-color: #fff;
-      transition: background-color 0.3s, transform 0.3s;
-    }
-    tbody tr:last-of-type {
-      border-bottom: 2px solid #009879;
-    }
-    tbody tr:hover {
-      color: #009879;
-      font-weight: bold;
-      background-color: rgba(230, 230, 230, 0.5);
-      transform: scale(1.02);
-    }
-
-    .icon {
-      border-radius: 10px;
-      display: inline-block;
-      padding: 8px;
-      transition: background-color 0.5s;
-    }
-    .icon:hover {
-        background-color: #d2d2d2;
-    }
-
-    /* Popup container - can be anything you want */
-    .popup {
-      position: relative;
-      display: inline-block;
-      cursor: pointer;
-      -webkit-user-select: none;
-      -moz-user-select: none;
-      -ms-user-select: none;
-      user-select: none;
-    }
-  
-    /* The actual popup */
-    .popup .popuptext {
-      visibility: hidden;
-      width: 160px;
-      background-color: #555;
-      color: #fff;
-      text-align: center;
-      border-radius: 6px;
-      padding: 8px 0;
-      position: absolute;
-      z-index: 1;
-      bottom: 125%;
-      left: 50%;
-      margin-left: -80px;
-    }
-  
-    /* Popup arrow */
-    .popup .popuptext::after {
-      content: "";
-      position: absolute;
-      top: 100%;
-      left: 50%;
-      margin-left: -5px;
-      border-width: 5px;
-      border-style: solid;
-      border-color: #555 transparent transparent transparent;
-    }
-  
-    /* Toggle this class - hide and show the popup */
-    .popup:hover .popuptext {
-      visibility: visible;
-      -webkit-animation: fadeIn 1s;
-      animation: fadeIn 1s;
-    }
-  
-    /* Add animation (fade in the popup) */
-    @-webkit-keyframes fadeIn {
-      from {opacity: 0;} 
-      to {opacity: 1;}
-    }
-  
-    @keyframes fadeIn {
-      from {opacity: 0;}
-      to {opacity:1 ;}
-    }
-  </style>
-</head>
-<body>
+  {%- extends "base_template" %}
+  {%- block content %}
   {{ header | safe }}
   <table>
     <thead>
@@ -1118,7 +1402,7 @@ def get_page(path: str = "", /, as_file: bool = False):
         {%- set name = attr["name"] %}
         {%- set url = attr["url"] %}
         <td style="width: 0px"><i class="file-type tp-{{ attr.get("ico") or "" }}"></i></td>
-        <td style="max-width: 600px; word-wrap: break-word"><a href="{{ url }}" style="text-decoration: none">{{ name }}</a></td>
+        <td style="max-width: 600px; word-wrap: break-word"><a {% if not attr["is_directory"] and attr.get("thumb") %}class="is-image" data-fancybox="gallery" data-src="{{ IMAGE_URL_CACHE[attr["pickcode"]] }}"{% endif %} href="{{ url }}" style="text-decoration: none">{{ name }}</a></td>
         <td style="width: 160px; word-wrap: break-word">
           {%- if attr.get("is_media") %}
           <a class="popup" href="iina://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=iina" /><span class="popuptext">IINA</span></a>
@@ -1145,12 +1429,12 @@ def get_page(path: str = "", /, as_file: bool = False):
       {%- endfor %}
     </tbody>
   </table>
-</body>
-</html>""", 
+  {%- endblock %}""", 
         is_root=is_root, 
         parent_id=parent_id, 
         children=children, 
         header=header, 
+        IMAGE_URL_CACHE=IMAGE_URL_CACHE, 
     )
 
 
@@ -1193,137 +1477,8 @@ def get_share_page(path: str = "", /, share_code: str = "", as_file: bool = Fals
             add_part(f'<strong><a href="/<share?id=0&share_code={share_code}&method=list" style="border: 1px solid black; text-decoration: none">{share_code}</a></strong>')
     return render_template_string(
         """\
-<!DOCTYPE html>
-<html>
-<head>
-  <title>115 File List</title>
-  <link rel="shortcut icon" href="/?pic=favicon" type="image/x-icon">
-  <link href="//cdnres.115.com/site/static/style_v10.0/file/css/file_type.css?_vh=bf604a2_70" rel="stylesheet" type="text/css">
-  <style>
-    a:hover {
-      color: red;
-    }
-    .file-type {
-      flex: 1;
-      min-width: 0;
-      position: relative;
-      height: 32px;
-      padding-left: 47px;
-      flex-direction: column;
-      justify-content: center;
-    }
-    td {
-      vertical-align: middle;
-    }
-    img {
-      height: 32px;
-      width: 32px; 
-    }
-
-    table {
-      border-collapse: collapse;
-      margin: 25px 0;
-      font-size: 0.9em;
-      font-family: sans-serif;
-      min-width: 1200px;
-      box-shadow: 0 0 20px rgba(0, 0, 0, 0.15);
-    }
-    thead tr {
-      font-family: Lato-Bold;
-      font-size: 18px;
-      color: #3636f0;
-      line-height: 1.4;
-      background-color: #f0f0f0;
-      position: sticky;
-      top: 0;
-    }
-    th, td:not(:first-child) {
-      padding: 12px 15px;
-    }
-    tbody tr {
-      border-bottom: 1px solid #dddddd;
-      background-color: #fff;
-      transition: background-color 0.3s, transform 0.3s;
-    }
-    tbody tr:last-of-type {
-      border-bottom: 2px solid #009879;
-    }
-    tbody tr:hover {
-      color: #009879;
-      font-weight: bold;
-      background-color: rgba(230, 230, 230, 0.5);
-      transform: scale(1.02);
-    }
-
-    .icon {
-      border-radius: 10px;
-      display: inline-block;
-      padding: 8px;
-      transition: background-color 0.5s;
-    }
-    .icon:hover {
-        background-color: #d2d2d2;
-    }
-
-    /* Popup container - can be anything you want */
-    .popup {
-      position: relative;
-      display: inline-block;
-      cursor: pointer;
-      -webkit-user-select: none;
-      -moz-user-select: none;
-      -ms-user-select: none;
-      user-select: none;
-    }
-  
-    /* The actual popup */
-    .popup .popuptext {
-      visibility: hidden;
-      width: 160px;
-      background-color: #555;
-      color: #fff;
-      text-align: center;
-      border-radius: 6px;
-      padding: 8px 0;
-      position: absolute;
-      z-index: 1;
-      bottom: 125%;
-      left: 50%;
-      margin-left: -80px;
-    }
-  
-    /* Popup arrow */
-    .popup .popuptext::after {
-      content: "";
-      position: absolute;
-      top: 100%;
-      left: 50%;
-      margin-left: -5px;
-      border-width: 5px;
-      border-style: solid;
-      border-color: #555 transparent transparent transparent;
-    }
-  
-    /* Toggle this class - hide and show the popup */
-    .popup:hover .popuptext {
-      visibility: visible;
-      -webkit-animation: fadeIn 1s;
-      animation: fadeIn 1s;
-    }
-  
-    /* Add animation (fade in the popup) */
-    @-webkit-keyframes fadeIn {
-      from {opacity: 0;} 
-      to {opacity: 1;}
-    }
-  
-    @keyframes fadeIn {
-      from {opacity: 0;}
-      to {opacity:1 ;}
-    }
-  </style>
-</head>
-<body>
+  {%- extends "base_template" %}
+  {%- block content %}
   {{ header | safe }}
   <table>
     <thead>
@@ -1378,8 +1533,7 @@ def get_share_page(path: str = "", /, share_code: str = "", as_file: bool = Fals
       {%- endfor %}
     </tbody>
   </table>
-</body>
-</html>""", 
+  {%- endblock %}""", 
         attr=attr, 
         children=children, 
         header="".join(parts), 
@@ -1412,7 +1566,7 @@ def format_timestamp(ts: int | float, /) -> str:
 
 @flask_app.template_filter("escape_url")
 def escape_url(url: str, /) -> str:
-    return translate(url, TRANSTAB6_URL)
+    return translate(url, TRANSTAB7_URL)
 
 
 @flask_app.get("/")
