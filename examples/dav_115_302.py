@@ -676,18 +676,9 @@ window.addEventListener("load", function () {
   Fancybox.bind('[data-fancybox="gallery"]', {
     Toolbar: {
       display: {
-        left: [
-          "zoomIn",
-          "zoomOut",
-          "rotateCCW",
-          "rotateCW",
-          "flipX",
-          "flipY",
-          "toggle1to1",
-          "reset",
-        ],
-        middle: ["infobar"],
-        right: ["slideshow", "download", "fullscreen", "thumbs", "close"],
+        left: ["rotateCCW","rotateCW", "flipX", "flipY", "toggle1to1", "reset"], 
+        middle: ["infobar"], 
+        right: ["fullscreen", "thumbs", "slideshow", "download", "close"], 
       },
     }
   });
@@ -1393,7 +1384,7 @@ def get_page(path: str = "", /, as_file: bool = False):
         {%- set name = attr["name"] %}
         {%- set url = attr["url"] %}
         <td><i class="file-type tp-{{ attr.get("ico") or "" }}"></i></td>
-        <td style="word-wrap: break-word"><a href="{{ url }}" style="text-decoration: none">{{ name }}</a></td>
+        <td style="word-wrap: break-word"><a href="{{ url | escape_url | safe }}" style="text-decoration: none">{{ name }}</a></td>
         {%- if attr.get("is_media") %}
         <td style="min-width: 160px; max-width: 210px">
           <a class="popup" href="iina://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=iina" /><span class="popuptext">IINA</span></a>
@@ -1409,7 +1400,16 @@ def get_page(path: str = "", /, as_file: bool = False):
           <a class="popup" href="mpv://{{ url | escape_url | safe }}"><img class="icon" src="/?pic=mpv" /><span class="popuptext">MPV</span></a>
         {%- elif not attr["is_directory"] and attr.get("thumb") %}
         <td>
-          <a class="popup is-image" data-fancybox="gallery" data-src="{{ IMAGE_URL_CACHE[attr["pickcode"]] }}" data-thumb-src="{{ attr["thumb"].replace("_100?", "_200?") }}"><img class="icon" src="/?pic=fancybox" /><span class="popuptext">fancybox</span></a>
+          <a 
+            class="popup is-image" 
+            data-fancybox="gallery" 
+            data-caption="{{ attr["name"] }}"
+            data-download-src="{{ url | escape_url | safe }}" 
+            data-src="{{ IMAGE_URL_CACHE[attr["pickcode"]] }}" 
+            data-thumb-src="{{ attr["thumb"].replace("_100?", "_200?") }}" 
+          >
+            <img class="icon" src="/?pic=fancybox" /><span class="popuptext">fancybox</span>
+          </a>
         {%- else %}
         <td>
         {%- endif %}
@@ -1502,7 +1502,7 @@ def get_share_page(path: str = "", /, share_code: str = "", as_file: bool = Fals
         {%- set name = attr["name"] %}
         {%- set url = attr["url"] %}
         <td><i class="file-type tp-{{ attr.get("ico") or "" }}"></i></td>
-        <td style="word-wrap: break-word"><a href="{{ url }}" style="text-decoration: none">{{ name }}</a></td>
+        <td style="word-wrap: break-word"><a href="{{ url | escape_url | safe }}" style="text-decoration: none">{{ name }}</a></td>
         {%- if attr.get("is_media") %}
         <td style="min-width: 160px">
           <a class="popup" href="iina://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=iina" /><span class="popuptext">IINA</span></a>
