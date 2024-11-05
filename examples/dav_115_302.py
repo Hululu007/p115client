@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 3, 3)
+__version__ = (0, 3, 4)
 __requirements__ = ["cachetools", "flask", "Flask-Compress", "path_predicate", "python-115", "urllib3_request", "werkzeug", "wsgidav"]
 __doc__ = """\
     🕸️ 获取你的 115 网盘账号上文件信息和下载链接 🕷️
@@ -216,6 +216,7 @@ from io import BytesIO
 from pathlib import Path
 from posixpath import split as splitpath, splitext
 from string import digits, hexdigits
+from time import time
 from typing import cast
 from urllib.parse import unquote, urlsplit
 
@@ -259,7 +260,7 @@ ID_TO_PICKCODE: MutableMapping[int, str] = LRUCache(65536)
 # NOTE: sha1 到 pickcode 到映射
 SHA1_TO_PICKCODE: MutableMapping[str, str] = LRUCache(65536)
 # NOTE: 缓存图片的 CDN 直链 1 小时
-IMAGE_URL_CACHE: MutableMapping[str, None | P115URL] = TTLCache(65536, ttl=3600)
+IMAGE_URL_CACHE: MutableMapping[str | tuple[str, int], None | P115URL] = TTLCache(65536, ttl=3600)
 # NOTE: 缓存 115 分享的文件系统对象
 SHARE_FS_MAP: dict[str, P115ShareFileSystem] = {}
 # NOTE: 限制请求频率，以一组请求信息为 key，0.5 秒内相同的 key 只放行一个
@@ -752,8 +753,8 @@ class FileResource(DavPathBase, DAVNonCollection):
         super().__init__(path, environ)
         self.attr = attr
         self.is_strm = is_strm
-        pickcode = attr.get("pickcode")
-        if pickcode and (url := IMAGE_URL_CACHE.get(pickcode)) and isinstance(url, P115URL):
+        key = (attr["share_code"], attr["id"]) if "share_code" in attr else attr["pickcode"]
+        if (url := IMAGE_URL_CACHE.get(key)) and isinstance(url, P115URL):
             self.__dict__["url"] = str(url)
             self.__dict__["size"] = url["size"]
         if is_strm:
@@ -778,6 +779,8 @@ class FileResource(DavPathBase, DAVNonCollection):
         name = translate(attr["name"], TRANSTAB4)
         if share_code := attr.get("share_code"):
             url = f"{origin}/{name}?method=file&share_code={share_code}&id={attr['id']}"
+            if attr.get("thumb"):
+                url += "&image=true"
         else:
             url = f"{origin}/{name}?method=file&pickcode={attr['pickcode']}&id={attr['id']}&sha1={attr['sha1']}"
             if attr.get("class") == "PIC" or attr.get("thumb"):
@@ -790,6 +793,10 @@ class FileResource(DavPathBase, DAVNonCollection):
             return url
         attr = self.attr
         if share_code := attr.get("share_code"):
+            if url := attr.get("thumb"):
+                url = IMAGE_URL_CACHE[(share_code, attr["id"])] = flatten_image_url(url)
+                self.__dict__["url"] = str(url)
+                self.__dict__["size"] = url["size"]
             return f"/<share?method=file&share_code={share_code}&id={attr['id']}"
         else:
             pickcode = attr.get("pickcode")
@@ -970,18 +977,19 @@ def reduce_image_url_layers(url: str, /) -> str:
 def flatten_image_url(url: str, /) -> P115URL:
     if isinstance(url, P115URL):
         return url
-    url = reduce_image_url_layers(url)
-    with urlopen(url, "HEAD") as resp:
+    thumb = url
+    with urlopen(reduce_image_url_layers(thumb), "HEAD") as resp:
         size = int(resp.headers["Content-Length"])
         url = cast(str, resp.url)
-    return P115URL(url, size=size)
+    return P115URL(url, size=size, thumb=thumb)
 
 
 def get_image_url(pickcode: str, /) -> P115URL:
-    if url := IMAGE_URL_CACHE.get(pickcode):
-        return flatten_image_url(url)
-    resp = check_response(client.fs_image(pickcode, request=urlopen))
-    url = IMAGE_URL_CACHE[pickcode] = flatten_image_url(resp["data"]["origin_url"])
+    url = IMAGE_URL_CACHE.get(pickcode, "")
+    if not url:
+        resp = check_response(client.fs_image(pickcode, request=urlopen))
+        url = cast(str, resp["data"]["origin_url"])
+    url = IMAGE_URL_CACHE[pickcode] = flatten_image_url(url)
     return url
 
 
@@ -1080,9 +1088,22 @@ def normalize_attr(
         ) if k in info
     }
     if share_code := attr.get("share_code"):
-        attr["url"] = f"{origin}/<share/{share_code}{translate(attr['path'], TRANSTAB3)}?share_code={share_code}&id={attr['id']}"
-        if not attr["is_directory"]:
-            attr["url"] += "&method=file"
+        url = f"{origin}/<share/{share_code}{translate(attr['path'], TRANSTAB3)}?share_code={share_code}&id={attr['id']}"
+        if attr["is_directory"]:
+            attr["url"] = url
+        else:
+            url += "&method=file"
+            if info["violated"] and attr["size"] < 1024 * 1024 * 115:
+                url += "&web=true"
+            attr["url"] = url
+            if thumb := attr.get("thumb"):
+                thumb = thumb.replace("_100?", "_0?")
+                key = (share_code, attr["id"])
+                cached_thumb = IMAGE_URL_CACHE.get(key, "")
+                if isinstance(cached_thumb, P115URL):
+                    cached_thumb = cached_thumb["thumb"]
+                if thumb != cached_thumb:
+                    IMAGE_URL_CACHE[key] = thumb
             attr["is_media"] = bool(info.get("play_long")) or type_of_attr(info) in (3, 4)
     else:
         relpath = attr["relpath"] = attr["path"][len(cast(str, root_dir)):]
@@ -1094,8 +1115,13 @@ def normalize_attr(
             SHA1_TO_PICKCODE[attr["sha1"]] = ID_TO_PICKCODE[attr["id"]] = pickcode
             url = f"{path_url}?pickcode={pickcode}"
             if thumb := attr.get("thumb"):
-                IMAGE_URL_CACHE[pickcode] = thumb.replace("_100?", "_0?")
-            elif info["violated"] and attr["size"] < 1024 * 1024 * 115:
+                thumb = thumb.replace("_100?", "_0?")
+                cached_thumb = IMAGE_URL_CACHE.get(pickcode, "")
+                if isinstance(cached_thumb, P115URL):
+                    cached_thumb = cached_thumb["thumb"]
+                if thumb != cached_thumb:
+                    IMAGE_URL_CACHE[pickcode] = thumb
+            if info["violated"] and attr["size"] < 1024 * 1024 * 115:
                 url += "&web=true"
             attr["url"] = url + "&method=file"
             attr["is_media"] = bool(info.get("play_long")) or info.get("class") in ("AVI", "JG_AVI", "MUS", "JG_MUS")
@@ -1178,6 +1204,9 @@ def get_list(path: str = "", /):
     children = fs.listdir_attr(id_or_path, page_size=10_000)
     if children and root and not any(int(info["id"]) == root for info in children[0]["ancestors"]):
         return Response("out of root range", 403)
+    earliest_thumb_ts = min((int(attr["thumb"].rsplit("=", 1)[1]) for attr in children if not attr["is_directory"] and attr.get("thumb")), default=0)
+    if earliest_thumb_ts - time() < 600:
+        children = fs.listdir_attr(id_or_path, page_size=10_000, refresh=True)
     origin = get_origin()
     return [normalize_attr(attr, origin) for attr in children]
 
@@ -1210,6 +1239,10 @@ def get_share_list(path: str = "", /, share_code: str = ""):
     else:
         id_or_path = unquote(get_arg("path", "")) or path
     children = fs.listdir_attr(id_or_path, page_size=10_000)
+    if children:
+        earliest_thumb_ts = min((int(attr["thumb"].rsplit("=", 1)[1]) for attr in children if not attr["is_directory"] and attr.get("thumb")), default=0)
+        if earliest_thumb_ts - time() < 600:
+            children = fs.listdir_attr(id_or_path, page_size=10_000, refresh=True)
     origin = get_origin()
     return [normalize_attr(attr, origin) for attr in children]
 
@@ -1269,6 +1302,7 @@ def get_share_url(path: str = "", /, share_code: str = "", file_id: int | str = 
     if not share_code:
         return Response("`share_code` not provided", 400)
     fs = get_share_fs(share_code)
+    attr: dict = {}
     if file_id or (file_id := get_arg("id", "").strip()):
         try:
             file_id = int(file_id)
@@ -1276,9 +1310,19 @@ def get_share_url(path: str = "", /, share_code: str = "", file_id: int | str = 
             return Response(f"bad id: {file_id!r}", 400)
     else:
         path = unquote(get_arg("path", "")) or path
-        attr: dict = fs.attr(path, ensure_dir=False)
+        attr = fs.attr(path, ensure_dir=False)
         attr = normalize_attr(attr)
-        file_id = attr["id"]
+        file_id = cast(int, attr["id"])
+    if is_image := get_arg("image") not in (None, "0", "false"):
+        key = (share_code, file_id)
+        if not (thumb := IMAGE_URL_CACHE.get(key, "")):
+            if not attr:
+                attr = fs.attr(file_id, ensure_dir=False)
+                attr = normalize_attr(attr)
+            thumb = cast(str, attr["thumb"])
+        thumb = IMAGE_URL_CACHE[key] = flatten_image_url(thumb)
+        if "thumb" in attr:
+            return {"type": "image", "url": thumb}
     use_web_api = get_arg("web") not in (None, "0", "false")
     user_agent = request.headers.get("User-Agent", "")
     bytes_range = request.headers.get("Range", "")
@@ -1291,9 +1335,9 @@ def get_share_url(path: str = "", /, share_code: str = "", file_id: int | str = 
         if cooldown_key in URL_COOLDOWN:
             return Response("too many requests", 429)
         URL_COOLDOWN[cooldown_key] = None
-        key = (share_code, receive_code, file_id, remote_addr, user_agent, use_web_api)
-        if not (url := URL_CACHE.get(key)):
-            URL_CACHE[key] = url = get_share_file_url(share_code, receive_code, file_id, use_web_api=use_web_api)
+        cache_key = (share_code, receive_code, file_id, remote_addr, user_agent, use_web_api)
+        if not (url := URL_CACHE.get(cache_key)):
+            URL_CACHE[cache_key] = url = get_share_file_url(share_code, receive_code, file_id, use_web_api=use_web_api)
     else:
         url = get_share_file_url(share_code, receive_code, file_id, use_web_api=use_web_api)
     return {"type": "file", "url": str(url), "headers": url.get("headers"), "web": use_web_api}
@@ -1406,7 +1450,7 @@ def get_page(path: str = "", /, as_file: bool = False):
             data-caption="{{ attr["name"] }}"
             data-download-src="{{ url | escape_url | safe }}" 
             data-src="{{ IMAGE_URL_CACHE[attr["pickcode"]] }}" 
-            data-thumb-src="{{ attr["thumb"].replace("_100?", "_200?") }}" 
+            data-thumb-src="{{ attr["thumb"].replace("_0?", "_200?") }}" 
           >
             <img class="icon" src="/?pic=fancybox" /><span class="popuptext">fancybox</span>
           </a>
@@ -1516,6 +1560,18 @@ def get_share_page(path: str = "", /, share_code: str = "", as_file: bool = Fals
           <a class="popup" href="omniplayer://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=omniplayer" /><span class="popuptext">OmniPlayer</span></a>
           <a class="popup" href="figplayer://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=figplayer" /><span class="popuptext">Fig Player</span></a>
           <a class="popup" href="mpv://{{ url | escape_url | safe }}"><img class="icon" src="/?pic=mpv" /><span class="popuptext">MPV</span></a>
+        {%- elif not attr["is_directory"] and attr.get("thumb") %}
+        <td>
+          <a 
+            class="popup is-image" 
+            data-fancybox="gallery" 
+            data-caption="{{ attr["name"] }}"
+            data-download-src="{{ url | escape_url | safe }}" 
+            data-src="{{ IMAGE_URL_CACHE[(attr["share_code"], attr["id"])] }}" 
+            data-thumb-src="{{ attr["thumb"].replace("_0?", "_200?") }}" 
+          >
+            <img class="icon" src="/?pic=fancybox" /><span class="popuptext">fancybox</span>
+          </a>
         {%- else %}
         <td>
         {%- endif %}
@@ -1535,6 +1591,7 @@ def get_share_page(path: str = "", /, share_code: str = "", as_file: bool = Fals
         attr=attr, 
         children=children, 
         header="".join(parts), 
+        IMAGE_URL_CACHE=IMAGE_URL_CACHE, 
     )
 
 
