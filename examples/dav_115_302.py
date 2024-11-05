@@ -1104,7 +1104,6 @@ def normalize_attr(
             url = f"{path_url}?pickcode={pickcode}"
             if thumb := attr.get("thumb"):
                 IMAGE_URL_CACHE[pickcode] = thumb.replace("_100?", "_0?")
-                url += "&image=true"
             elif info["violated"] and attr["size"] < 1024 * 1024 * 115:
                 url += "&web=true"
             attr["url"] = url + "&method=file"
@@ -1374,7 +1373,7 @@ def get_page(path: str = "", /, as_file: bool = False):
       <tr>
         <th style="width: 0px"></th>
         <th style="min-width: 100px">Name</th>
-        <th style="width: 210px">Open</th>
+        <th>Open</th>
         <th style="width: 100px">Size</th>
         <th style="width: 30px">Attr</th>
         <th style="width: 160px">Last Modified</th>
@@ -1394,9 +1393,9 @@ def get_page(path: str = "", /, as_file: bool = False):
         {%- set name = attr["name"] %}
         {%- set url = attr["url"] %}
         <td><i class="file-type tp-{{ attr.get("ico") or "" }}"></i></td>
-        <td style="word-wrap: break-word"><a {% if not attr["is_directory"] and attr.get("thumb") %}class="is-image" data-fancybox="gallery" data-src="{{ IMAGE_URL_CACHE[attr["pickcode"]] }}" data-thumb-src="{{ attr["thumb"].replace("_100?", "_200?") }}"{% endif %} href="{{ url }}" style="text-decoration: none">{{ name }}</a></td>
+        <td style="word-wrap: break-word"><a href="{{ url }}" style="text-decoration: none">{{ name }}</a></td>
         {%- if attr.get("is_media") %}
-        <td style="min-width: 160px">
+        <td style="min-width: 160px; max-width: 210px">
           <a class="popup" href="iina://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=iina" /><span class="popuptext">IINA</span></a>
           <a class="popup" href="potplayer://{{ url | escape_url | safe }}"><img class="icon" src="/?pic=potplayer" /><span class="popuptext">PotPlayer</span></a>
           <a class="popup" href="vlc://{{ url | escape_url | safe }}"><img class="icon" src="/?pic=vlc" /><span class="popuptext">VLC</span></a>
@@ -1408,6 +1407,9 @@ def get_page(path: str = "", /, as_file: bool = False):
           <a class="popup" href="omniplayer://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=omniplayer" /><span class="popuptext">OmniPlayer</span></a>
           <a class="popup" href="figplayer://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=figplayer" /><span class="popuptext">Fig Player</span></a>
           <a class="popup" href="mpv://{{ url | escape_url | safe }}"><img class="icon" src="/?pic=mpv" /><span class="popuptext">MPV</span></a>
+        {%- elif not attr["is_directory"] and attr.get("thumb") %}
+        <td>
+          <a class="popup is-image" data-fancybox="gallery" data-src="{{ IMAGE_URL_CACHE[attr["pickcode"]] }}" data-thumb-src="{{ attr["thumb"].replace("_100?", "_200?") }}"><img class="icon" src="/?pic=fancybox" /><span class="popuptext">fancybox</span></a>
         {%- else %}
         <td>
         {%- endif %}
@@ -1571,6 +1573,8 @@ def index():
     match request.args.get("pic"):
         case "favicon":
             return send_file(BytesIO(b'<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="16" height="16" rx="8" fill="#2777F8"/><path d="M4.5874 6.99646C4.60631 6.96494 4.61891 6.92713 4.63152 6.90192C5.17356 5.81784 5.7219 4.74006 6.25764 3.64969C6.38999 3.37867 6.60429 3.25891 6.88792 3.25891H9.39012C9.71786 3.25891 10.0582 3.25261 10.3859 3.25891C10.7326 3.26521 11.0729 3.19589 11.4007 3.08243C11.4259 3.07613 11.4637 3.05722 11.4826 3.06352C11.5646 3.06983 11.6087 3.15807 11.5772 3.24C11.4196 3.56145 11.2557 3.88289 11.0793 4.20433C10.9532 4.43123 10.7515 4.55098 10.4994 4.55098H7.72618C7.42364 4.55098 7.20305 4.68334 7.077 4.96697C6.95094 5.23168 6.81228 5.49009 6.67992 5.75481C6.66101 5.78002 6.65471 5.80523 6.6358 5.83674C6.81858 5.88087 7.00767 5.91238 7.18414 5.94389C7.73249 6.06365 8.29343 6.1834 8.81026 6.4166C9.5792 6.75695 10.2158 7.25487 10.6444 7.97969C10.9091 8.42088 11.0667 8.88098 11.0982 9.3915C11.1927 10.5638 10.7578 11.5219 9.88176 12.2845C9.28296 12.8013 8.58336 13.1038 7.80812 13.2488C7.35432 13.3308 6.89422 13.3559 6.44042 13.3244C5.92359 13.2803 5.42567 13.1479 4.95927 12.9084C4.95296 12.9022 4.94036 12.9022 4.91515 12.8833C5.00969 12.8895 5.07271 12.9022 5.14205 12.9022C5.85426 12.9652 6.54756 12.8833 7.21566 12.6564C7.79551 12.4546 8.32494 12.1584 8.74723 11.6857C9.09388 11.295 9.28927 10.8475 9.35229 10.3306C9.44684 9.61841 9.18212 9.03855 8.72202 8.52173C8.24931 8.00489 7.66315 7.67716 7.00767 7.45655C6.49715 7.28639 5.98662 7.16663 5.45088 7.091C5.17986 7.04688 4.90254 7.02167 4.63152 6.99646C4.61891 7.00906 4.61261 7.00906 4.5874 6.99646Z" fill="white"/></svg>'), mimetype="image/svg+xml")
+        case "fancybox":
+            return send_file(BytesIO(b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 37 37"><circle cx="18.5" cy="18.5" r="18.5" fill="#fff"/><circle cx="18.5" cy="15.5" r="1.1"/><circle cx="18.5" cy="22" r="1.1"/><circle cx="18.5" cy="28.5" r="1.1"/><path d="M27 11.2a2.9 2.9 0 0 1-1.7.8l-4.5-3h-.5l-2 .6-1.7-.5h-.8a118.3 118.3 0 0 1-5 3l-.8-.9c-.5-.5-.5-1.3-.5-2v-4l.3-1.4L11 3l1.9.8c.2.3 2 1.5 2.8 2l2-.2H19l1.4.3h.5l3-2 1.8-1 1.5.5.3 1.4v4.6c0 1-.4 1.6-.6 1.8Zm-22.2-5A18.5 18.5 0 0 0 0 18.4a18.5 18.5 0 0 0 13.8 17.8l-3.4-11zm27.4 0-5.7 19.1-3.1 11A18.5 18.5 0 0 0 37 18.5a18.5 18.5 0 0 0-4.9-12.4z"/></svg>'), mimetype="image/svg+xml")
         case "figplayer":
             return redirect("https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/f5/3b/9d/f53b9d10-b126-16ba-9f55-632135bfede3/AppIcon-0-0-85-220-0-0-4-0-2x.png/434x0w.webp")
         case "fileball":
