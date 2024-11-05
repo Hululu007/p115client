@@ -327,7 +327,7 @@ setattr(flask_app, "jinja_env", Environment(loader=DictLoader({
       margin: 25px 0;
       font-size: 0.9em;
       font-family: sans-serif;
-      min-width: 1200px;
+      min-width: 800px;
       box-shadow: 0 0 20px rgba(0, 0, 0, 0.15);
     }
     thead tr {
@@ -1380,18 +1380,18 @@ def get_page(path: str = "", /, as_file: bool = False):
   <table>
     <thead>
       <tr>
-        <th></th>
-        <th>Name</th>
-        <th>Open</th>
-        <th>Size</th>
-        <th>Attr</th>
-        <th>Last Modified</th>
+        <th style="width: 0px"></th>
+        <th style="min-width: 100px">Name</th>
+        <th style="width: 210px">Open</th>
+        <th style="width: 100px">Size</th>
+        <th style="width: 30px">Attr</th>
+        <th style="width: 160px">Last Modified</th>
       </tr>
     </thead>
     <tbody>
       <tr>
         {%- if is_root %}
-        <td style="width: 0px"><i class="file-type tp-folder-receive" folder-type="shared"></i></td>
+        <td><i class="file-type tp-folder-receive" folder-type="shared"></i></td>
         <td colspan="5"><a href="/<share" style="display: block; text-align: center; text-decoration: none; font-size: 30px">分享列表</a></td>
         {%- else %}
         <td colspan="6"><a href="/?id={{ parent_id }}" style="display: block; text-align: center; text-decoration: none; font-size: 30px">..</a></td>
@@ -1401,9 +1401,9 @@ def get_page(path: str = "", /, as_file: bool = False):
       <tr>
         {%- set name = attr["name"] %}
         {%- set url = attr["url"] %}
-        <td style="width: 0px"><i class="file-type tp-{{ attr.get("ico") or "" }}"></i></td>
-        <td style="max-width: 600px; word-wrap: break-word"><a {% if not attr["is_directory"] and attr.get("thumb") %}class="is-image" data-fancybox="gallery" data-src="{{ IMAGE_URL_CACHE[attr["pickcode"]] }}" data-thumb-src="{{ attr["thumb"].replace("_100?", "_200?") }}"{% endif %} href="{{ url }}" style="text-decoration: none">{{ name }}</a></td>
-        <td style="width: 160px; word-wrap: break-word">
+        <td><i class="file-type tp-{{ attr.get("ico") or "" }}"></i></td>
+        <td style="word-wrap: break-word"><a {% if not attr["is_directory"] and attr.get("thumb") %}class="is-image" data-fancybox="gallery" data-src="{{ IMAGE_URL_CACHE[attr["pickcode"]] }}" data-thumb-src="{{ attr["thumb"].replace("_100?", "_200?") }}"{% endif %} href="{{ url }}" style="text-decoration: none">{{ name }}</a></td>
+        <td style="word-wrap: break-word">
           {%- if attr.get("is_media") %}
           <a class="popup" href="iina://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=iina" /><span class="popuptext">IINA</span></a>
           <a class="popup" href="potplayer://{{ url | escape_url | safe }}"><img class="icon" src="/?pic=potplayer" /><span class="popuptext">PotPlayer</span></a>
@@ -1483,12 +1483,12 @@ def get_share_page(path: str = "", /, share_code: str = "", as_file: bool = Fals
   <table>
     <thead>
       <tr>
-        <th></th>
-        <th>Name</th>
-        <th>Open</th>
-        <th>Size</th>
-        <th>Attr</th>
-        <th>Last Modified</th>
+        <th style="width: 0px"></th>
+        <th style="min-width: 100px">Name</th>
+        <th style="width: 210px">Open</th>
+        <th style="width: 100px">Size</th>
+        <th style="width: 30px">Attr</th>
+        <th style="width: 160px">Last Modified</th>
       </tr>
     </thead>
     <tbody>
@@ -1505,9 +1505,9 @@ def get_share_page(path: str = "", /, share_code: str = "", as_file: bool = Fals
       <tr>
         {%- set name = attr["name"] %}
         {%- set url = attr["url"] %}
-        <td style="width: 0px"><i class="file-type tp-{{ attr.get("ico") or "" }}"></i></td>
-        <td style="max-width: 600px; word-wrap: break-word"><a href="{{ url }}" style="text-decoration: none">{{ name }}</a></td>
-        <td style="width: 160px; word-wrap: break-word">
+        <td><i class="file-type tp-{{ attr.get("ico") or "" }}"></i></td>
+        <td style="word-wrap: break-word"><a href="{{ url }}" style="text-decoration: none">{{ name }}</a></td>
+        <td>
           {%- if attr.get("is_media") %}
           <a class="popup" href="iina://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=iina" /><span class="popuptext">IINA</span></a>
           <a class="popup" href="potplayer://{{ url | escape_url | safe }}"><img class="icon" src="/?pic=potplayer" /><span class="popuptext">PotPlayer</span></a>
