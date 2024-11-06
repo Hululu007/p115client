@@ -454,11 +454,10 @@ setattr(flask_app, "jinja_env", Environment(loader=DictLoader({
       position: absolute;
     }
 
-    .player-container .art-icon-fullscreenOn > svg {
-      padding: 0px;
-    }
-
-    .player-container .art-icon-fullscreenWebOn > svg {
+    .player-container .art-icon-fullscreenOn > svg,
+    .player-container .art-icon-fullscreenOff > svg,
+    .player-container .art-icon-fullscreenWebOn > svg,
+    .player-container .art-icon-fullscreenWebOff > svg {
       padding: 0px;
     }
   </style>
@@ -1960,5 +1959,9 @@ if __name__ == "__main__":
 # TODO: 研究一下，压缩包是否有 app 解压方法（这样就可以免 web 接口限制）
 # TODO: 虽然115分享的图片也能获去cdn图片，但是并不能单独获取某个文件的属性，因此并不能给图片更新，除非这张图片被转存了，然后缓存转存后的pickcode，以后就可以反复更新了
 # TODO: 加上搜索框和分页，加上图库浏览功能
+# TODO: 对 head 请求进行优化，更快地响应，尽量避免做实际的事情
 # TODO: 音乐播放器
 # TODO: 播放器实现，播放列表，字幕或歌词绑定，弹幕、封面、元数据等功能
+# TODO: 网页版支持播放 m3u8，自动绑定字幕等，这样可以避免那种没有声音的情况，默认使用最高画质，如果没有m3u8，则会退到原始视频
+# TODO: 使用115接口保存播放进度
+

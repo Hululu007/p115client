@@ -5944,14 +5944,68 @@ class P115Client:
         GET https://webapi.115.com/files/video
 
         :payload:
-            - pickcode: str
-            - share_id: int | str = <default>
-            - local: 0 | 1 = <default>
+            - pickcode: str 💡 提取码
+            - share_id: int | str = <default> 💡 分享 id
+            - local: 0 | 1 = <default> 💡 是否本地，如果为 1，则不包括 m3u8
         """
         api = complete_webapi(base_url, "/files/video")
         if isinstance(payload, str):
             payload = {"pickcode": payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_video_app(
+        self, 
+        payload: str | dict, 
+        /, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> bytes:
+        ...
+    @overload
+    def fs_video_app(
+        self, 
+        payload: str | dict, 
+        /, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, bytes]:
+        ...
+    def fs_video_app(
+        self, 
+        payload: str | dict, 
+        /, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> bytes | Coroutine[Any, Any, bytes]:
+        """获取视频的 m3u8 文件列表，此接口必须使用 web 的 cookies
+
+        POST https://proapi.115.com/android/2.0/video/play
+
+        :payload:
+            - pickcode: str 💡 提取码
+            - share_id: int | str = <default> 💡 分享 id
+            - local: 0 | 1 = <default> 💡 是否本地，如果为 1，则不包括 m3u8
+            - user_id: int = <default> 💡 不用管
+        """
+        api = "https://proapi.115.com/android/2.0/video/play"
+        if isinstance(payload, str):
+            payload = {"pickcode": payload, "user_id": self.user_id}
+        else:
+            payload.setdefault("user_id", self.user_id)
+        def parse(resp, content: bytes) -> dict:
+            json = json_loads(content)
+            if json["state"]:
+                json["data"] = json_loads(rsa_decode(json["data"]))
+            return json
+        request_kwargs.setdefault("parse", parse)
+        request_kwargs["data"] = {"data": rsa_encode(dumps(payload)).decode("ascii")}
+        return self.request(
+            url=api, 
+            method="POST", 
+            async_=async_, 
+            **request_kwargs, 
+        )
 
     @overload
     def fs_video_m3u8(
@@ -5991,6 +6045,9 @@ class P115Client:
 
         GET http://115.com/api/video/m3u8/{pickcode}.m3u8?definition={definition}
 
+        .. attention::
+            这个接口只支持 web 的 cookies，其它设备会返回空数据
+
         :param pickcode: 视频文件的 pickcode
         :params definition: 画质，默认列出所有画质。但可进行筛选，常用的为：
             - 0: 各种分辨率（默认）
@@ -6000,20 +6057,6 @@ class P115Client:
         :param request_kwargs: 其它请求参数
 
         :return: 接口返回值
-
-        其它替代接口（下面只提供伪代码，相关函数并无具体实现）:
-
-        1. 需要破解 data 参数具体包含哪些值
-
-            POST https://proapi.115.com/android/2.0/video/play
-
-            data = {data: str = rsa_encode(payload)}
-
-        2. 需要破解里面一个 rsa 请求参数的生成方法，此接口不限设备（不强制为 web 的 cookies）
-
-            GET http://videoplay.115.com/m3u8
-
-            params = {filesha1: str, time: int, userid: int, rsa: str = "<md5_sign>"}
         """
         if base_url:
             if base_url is True:
