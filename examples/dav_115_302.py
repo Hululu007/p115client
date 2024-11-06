@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 3, 5)
+__version__ = (0, 3, 6)
 __requirements__ = ["cachetools", "flask", "Flask-Compress", "path_predicate", "python-115", "urllib3_request", "werkzeug", "wsgidav"]
 __doc__ = """\
     🕸️ 获取你的 115 网盘账号上文件信息和下载链接 🕷️
@@ -299,7 +299,7 @@ setattr(flask_app, "jinja_env", Environment(loader=DictLoader({
 <!DOCTYPE html>
 <html>
 <head>
-  <title>115 File List</title>
+  <title>dav 115 302</title>
   <link rel="shortcut icon" href="/?pic=favicon" type="image/x-icon">
   <link href="//cdnres.115.com/site/static/style_v10.0/file/css/file_type.css?_vh=bf604a2_70" rel="stylesheet" type="text/css">
   <style>
@@ -434,8 +434,8 @@ setattr(flask_app, "jinja_env", Environment(loader=DictLoader({
     }
 
     .draggable-resizable-window {
-      width: 1000px;
-      height: 600px;
+      width: 900px;
+      height: 520px;
       position: absolute;
       overflow: hidden;
       resize: both;
@@ -444,7 +444,7 @@ setattr(flask_app, "jinja_env", Environment(loader=DictLoader({
       z-index: 999;
     }
 
-    .artplayer-container {
+    .player-container {
       width: 100%;
       height: 100%;
       display: flex;
@@ -453,41 +453,42 @@ setattr(flask_app, "jinja_env", Environment(loader=DictLoader({
       cursor: pointer;
       position: absolute;
     }
+
+    .player-container .art-icon-fullscreenOn > svg {
+      padding: 0px;
+    }
+
+    .player-container .art-icon-fullscreenWebOn > svg {
+      padding: 0px;
+    }
   </style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/particles.js/2.0.0/particles.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/progressbar.js/1.1.1/progressbar.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/fancybox/fancybox.umd.js"></script>
-  <link
-    rel="stylesheet"
-    href="https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/fancybox/fancybox.css"
-  />
-  <script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/carousel/carousel.umd.js"></script>
-  <link
-    rel="stylesheet"
-    href="https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/carousel/carousel.css"
-  />
-  <script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/carousel/carousel.thumbs.umd.js"></script>
-  <link
-    rel="stylesheet"
-    href="https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/carousel/carousel.thumbs.css"
-  />
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/artplayer@latest/dist/artplayer.css" />
-  <script src="https://cdn.jsdelivr.net/npm/artplayer@latest/dist/artplayer.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui@latest/dist/fancybox/fancybox.umd.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/@fancyapps/ui@latest/dist/fancybox/fancybox.css" rel="stylesheet"/>
+  <script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui@latest/dist/carousel/carousel.umd.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/@fancyapps/ui@latest/dist/carousel/carousel.css" rel="stylesheet"/>
+  <script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui@latest/dist/carousel/carousel.thumbs.umd.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/@fancyapps/ui@latest/dist/carousel/carousel.thumbs.css" rel="stylesheet"/>
+  <script src="https://cdn.jsdelivr.net/npm/artplayer@latest/dist/artplayer.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest/dist/hls.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/plyr@latest/dist/plyr.min.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/plyr@latest/dist/plyr.min.css" rel="stylesheet"/>
 </head>
 <body>
   <div class="draggable-resizable-window">
-    <div class="artplayer-container"></div>
+    <div class="player-container"></div>
   </div>
   {%- block content %}{% endblock %}
   <script>
 document.addEventListener('DOMContentLoaded', function () {
   let player;
   const draggableWindow = document.querySelector(".draggable-resizable-window");
-  var artplayerContainer = draggableWindow.querySelector('.artplayer-container');
+  var playerContainer = draggableWindow.querySelector('.player-container');
   let isDragging = false;
   let initialOffsetX, initialOffsetY, startX, startY;
 
-  artplayerContainer.addEventListener("mousedown", (e) => {
+  playerContainer.addEventListener("mousedown", (e) => {
     isDragging = true;
     initialOffsetX = draggableWindow.offsetLeft;
     initialOffsetY = draggableWindow.offsetTop;
@@ -495,7 +496,7 @@ document.addEventListener('DOMContentLoaded', function () {
     startY = e.clientY;
   });
 
-  artplayerContainer.addEventListener("mousemove", (e) => {
+  playerContainer.addEventListener("mousemove", (e) => {
     if (!isDragging) return;
     const dx = e.clientX - startX;
     const dy = e.clientY - startY;
@@ -509,7 +510,7 @@ document.addEventListener('DOMContentLoaded', function () {
     draggableWindow.style.top = `${newTop}px`;
   });
 
-  artplayerContainer.addEventListener("mouseup", () => {
+  playerContainer.addEventListener("mouseup", () => {
     isDragging = false;
   });
 
@@ -518,9 +519,22 @@ document.addEventListener('DOMContentLoaded', function () {
   closeButton.src = "/?pic=close";
   closeButton.style = "transition: opacity 0.5s ease"
 
-  document.querySelectorAll('.play-video').forEach(function(anchor) {
+  document.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape' && player) {
+        if (player instanceof Artplayer && !player.fullscreen)
+          player.destroy();
+        else if (player instanceof Plyr && !player.fullscreen.active) {
+          player.destroy();
+          draggableWindow.style.display = 'none';
+          player = null;
+        }
+    }
+  });
+
+  document.querySelectorAll('.play-with-artplayer').forEach(function(anchor) {
     anchor.addEventListener('click', function (event) {
       event.preventDefault();
+      if (player) player.destroy();
       draggableWindow.style.display = 'block';
       const scrollX = window.scrollX;
       const scrollY = window.scrollY;
@@ -532,12 +546,11 @@ document.addEventListener('DOMContentLoaded', function () {
       const top = scrollY + (windowHeight - modalHeight) / 2;
       draggableWindow.style.left = left + 'px';
       draggableWindow.style.top = top + 'px';
-      if (player) {
-        player.destroy();
-      }
+
       player = new Artplayer({
-        container: artplayerContainer, 
+        container: playerContainer, 
         url: anchor.href, 
+        airplay: true, 
         aspectRatio: true, 
         autoMini: true, 
         autoOrientation: true, 
@@ -545,6 +558,7 @@ document.addEventListener('DOMContentLoaded', function () {
         fastForward: true, 
         flip: true, 
         fullscreen: true, 
+        fullscreenWeb: true, 
         lock: true, 
         miniProgressBar: true, 
         pip: true, 
@@ -552,6 +566,22 @@ document.addEventListener('DOMContentLoaded', function () {
         screenshot: true, 
         subtitleOffset: true, 
         setting: true, 
+        customType: {
+          m3u8: (video, url, art) => {
+            if (Hls.isSupported()) {
+              if (art.hls) art.hls.destroy();
+              const hls = new Hls();
+              hls.loadSource(url);
+              hls.attachMedia(video);
+              art.hls = hls;
+              art.on('destroy', () => hls.destroy());
+            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+              video.src = url;
+            } else {
+              art.notice.show = 'Unsupported playback format: m3u8';
+            }
+          }, 
+        },
         layers: [{
             name: 'potser',
             html: closeButton,
@@ -567,21 +597,24 @@ document.addEventListener('DOMContentLoaded', function () {
                 draggableWindow.style.display = 'none';
             },
           },
-        ],
+        ], 
+        moreVideoAttr: {
+          crossOrigin: 'anonymous', 
+        }, 
       });
-      artplayerContainer.addEventListener('mouseenter', () => {
+      playerContainer.addEventListener('mouseenter', () => {
         closeButton.style.opacity = 1;
       });
-      artplayerContainer.addEventListener('mouseleave', () => {
+      playerContainer.addEventListener('mouseleave', () => {
         closeButton.style.opacity = 0;
       });
       let hideTimeout;
-      artplayerContainer.addEventListener('mousemove', () => {
+      playerContainer.addEventListener('mousemove', () => {
         if (player.fullscreen)
           closeButton.style.display = "block";
         clearTimeout(hideTimeout);
         hideTimeout = setTimeout(() => {
-          if (player.fullscreen)
+          if (player && player.fullscreen)
             closeButton.style.display = "none";
         }, 1000);
       });
@@ -592,18 +625,43 @@ document.addEventListener('DOMContentLoaded', function () {
           closeButton.style.display = "block";
       });
       player.on('destroy', () => {
-          player.pause();
-          player.off();
-          if (player.hls) 
-              player.hls.destroy();
-          if (player.flv)
-              player.flv.destroy();
-          if (player.dash)
-              player.dash.destroy();
-          if (player.torrent)
-              player.torrent.destroy();
-          player = null;
+        clearTimeout(hideTimeout);
+        player.pause();
+        player.off();
+        if (player.hls) 
+            player.hls.destroy();
+        if (player.flv)
+            player.flv.destroy();
+        if (player.dash)
+            player.dash.destroy();
+        if (player.torrent)
+            player.torrent.destroy();
+        player = null;
       });
+    });
+  });
+
+  document.querySelectorAll('.play-with-plyr').forEach(function(anchor) {
+    anchor.addEventListener('click', function (event) {
+      event.preventDefault();
+      if (player) player.destroy();
+      draggableWindow.style.display = 'block';
+      const scrollX = window.scrollX;
+      const scrollY = window.scrollY;
+      const windowWidth = window.innerWidth;
+      const windowHeight = window.innerHeight;
+      const modalWidth = draggableWindow.offsetWidth;
+      const modalHeight = draggableWindow.offsetHeight;
+      const left = scrollX + (windowWidth - modalWidth) / 2;
+      const top = scrollY + (windowHeight - modalHeight) / 2;
+      draggableWindow.style.left = left + 'px';
+      draggableWindow.style.top = top + 'px';
+      const video = playerContainer.innerHTML = `
+      <video id="player" controls crossorigin>
+        <source src="${anchor.href}" />
+      </video>`
+      player = new Plyr("#player", {captions: {active: true}});
+      player.play();
     });
   });
 });
@@ -1593,7 +1651,8 @@ def get_page(path: str = "", /, as_file: bool = False):
         <td style="word-wrap: break-word"><a href="{{ url | escape_url | safe }}" style="text-decoration: none">{{ name }}</a></td>
         {%- if attr.get("is_media") %}
         <td style="min-width: 160px; max-width: 210px">
-          <a class="popup play-video" href="{{ url | escape_url | safe }}"><img class="icon" src="/?pic=artplayer" /><span class="popuptext">Artplayer</span></a>
+          <a class="popup play-with-artplayer" href="{{ url | escape_url | safe }}"><img class="icon" src="/?pic=artplayer" /><span class="popuptext">Artplayer</span></a>
+          <a class="popup play-with-plyr" href="{{ url | escape_url | safe }}"><img class="icon" src="/?pic=plyr" /><span class="popuptext">plyr</span></a>
           <a class="popup" href="iina://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=iina" /><span class="popuptext">IINA</span></a>
           <a class="popup" href="potplayer://{{ url | escape_url | safe }}"><img class="icon" src="/?pic=potplayer" /><span class="popuptext">PotPlayer</span></a>
           <a class="popup" href="vlc://{{ url | escape_url | safe }}"><img class="icon" src="/?pic=vlc" /><span class="popuptext">VLC</span></a>
@@ -1712,7 +1771,8 @@ def get_share_page(path: str = "", /, share_code: str = "", as_file: bool = Fals
         <td style="word-wrap: break-word"><a href="{{ url | escape_url | safe }}" style="text-decoration: none">{{ name }}</a></td>
         {%- if attr.get("is_media") %}
         <td style="min-width: 160px">
-          <a class="popup play-video" href="{{ url | escape_url | safe }}"><img class="icon" src="/?pic=artplayer" /><span class="popuptext">Artplayer</span></a>
+          <a class="popup play-with-artplayer" href="{{ url | escape_url | safe }}"><img class="icon" src="/?pic=artplayer" /><span class="popuptext">Artplayer</span></a>
+          <a class="popup play-with-plyr" href="{{ url | escape_url | safe }}"><img class="icon" src="/?pic=plyr" /><span class="popuptext">plyr</span></a>
           <a class="popup" href="iina://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=iina" /><span class="popuptext">IINA</span></a>
           <a class="popup" href="potplayer://{{ url | escape_url | safe }}"><img class="icon" src="/?pic=potplayer" /><span class="popuptext">PotPlayer</span></a>
           <a class="popup" href="vlc://{{ url | escape_url | safe }}"><img class="icon" src="/?pic=vlc" /><span class="popuptext">VLC</span></a>
@@ -1820,6 +1880,8 @@ def index():
             return send_file(BytesIO(b'<svg height="512px" style="enable-background:new 0 0 512 512;" version="1.1" viewBox="0 0 512 512" width="512px" xml:space="preserve" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><g id="_x31_2-vlc_x2C__media_x2C__player"><g><g><g><path d="M478.104,458.638l-59.65-119.619c-2.535-5.058-7.691-8.255-13.326-8.255H106.872 c-5.635,0-10.791,3.197-13.326,8.255L33.887,458.638c-2.325,4.637-2.053,10.141,0.66,14.538 c2.715,4.396,7.516,7.118,12.676,7.118h417.554c5.16,0,9.959-2.694,12.707-7.087 C480.193,468.778,480.404,463.307,478.104,458.638L478.104,458.638z M478.104,458.638" style="fill:#FF9800;"/></g><path d="M375.297,345.718c0,43.659-107.068,44.858-119.297,44.858c-12.23,0-119.302-1.199-119.302-44.858 c0-1.197,0.301-2.691,0.6-3.887l20.579-75.665c14.61,11.369,53.086,19.739,98.124,19.739s83.512-8.37,98.123-19.739 l20.578,75.665C375.002,343.026,375.297,344.521,375.297,345.718L375.297,345.718z M375.297,345.718" style="fill:#FCFCFC;"/><path d="M332.35,186.62c-18.787,5.975-46.227,9.565-76.35,9.565s-57.563-3.591-76.351-9.565l22.964-84.34 c15.506,2.69,34,4.187,53.387,4.187s37.879-1.496,53.387-4.187L332.35,186.62z M332.35,186.62" style="fill:#FCFCFC;"/><path d="M256,106.467c-19.387,0-37.881-1.496-53.387-4.187l10.439-37.982 c5.666-20.03,22.668-32.592,42.947-32.592s37.279,12.562,42.945,32.297l10.441,38.277 C293.879,104.971,275.387,106.467,256,106.467L256,106.467z M256,106.467" style="fill:#FF9800;"/><path d="M354.123,266.166c-14.611,11.369-53.086,19.739-98.123,19.739s-83.513-8.37-98.124-19.739 l21.772-79.546c18.789,5.975,46.228,9.565,76.351,9.565s57.563-3.591,76.35-9.565L354.123,266.166z M354.123,266.166" style="fill:#FF9800;"/></g></g></g><g id="Layer_1"/></svg>'), mimetype="image/svg+xml")
         case "artplayer":
             return redirect("https://artplayer.org/document/logo.png")
+        case "plyr":
+            return send_file(BytesIO(b'<svg width="300" height="300" xmlns="http://www.w3.org/2000/svg" clip-rule="evenodd" version="1.1"><g><ellipse filter="url(#svg_1_blur)" stroke="#cccccc" fill="#fcfefe" cx="151" cy="152.33333" id="svg_1" rx="149.5" ry="150"/><ellipse fill="#1db2fd" stroke="#000" cx="151" cy="152.33333" id="svg_4" rx="130" ry="130" stroke-width="0"/><path transform="rotate(90 168 152.333)" fill="#ffffff" d="m90,217.33333l78.00001,-130l78.00001,130l-156.00001,0l-0.00001,0z" id="svg_7" stroke="#000" stroke-width="0"/></g><defs><filter height="200%" width="200%" y="-50%" x="-50%" id="svg_1_blur"><feGaussianBlur stdDeviation="1" in="SourceGraphic"/></filter></defs></svg>'), mimetype="image/svg+xml")
         case "close":
             return send_file(BytesIO(b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50" width="100px" height="100px"><path d="M 9.15625 6.3125 L 6.3125 9.15625 L 22.15625 25 L 6.21875 40.96875 L 9.03125 43.78125 L 25 27.84375 L 40.9375 43.78125 L 43.78125 40.9375 L 27.84375 25 L 43.6875 9.15625 L 40.84375 6.3125 L 25 22.15625 Z" fill="#FFFFFF"/></svg>'), mimetype="image/svg+xml")
         case _:
@@ -1898,3 +1960,5 @@ if __name__ == "__main__":
 # TODO: 研究一下，压缩包是否有 app 解压方法（这样就可以免 web 接口限制）
 # TODO: 虽然115分享的图片也能获去cdn图片，但是并不能单独获取某个文件的属性，因此并不能给图片更新，除非这张图片被转存了，然后缓存转存后的pickcode，以后就可以反复更新了
 # TODO: 加上搜索框和分页，加上图库浏览功能
+# TODO: 音乐播放器
+# TODO: 播放器实现，播放列表，字幕或歌词绑定，弹幕、封面、元数据等功能
