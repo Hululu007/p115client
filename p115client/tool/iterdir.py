@@ -7,6 +7,7 @@ __all__ = [
     "filter_na_ids", "iter_stared_dirs_raw", "iter_stared_dirs", "ensure_attr_path", "iterdir_raw", 
     "iterdir", "iter_files", "iter_files_raw", "dict_files", "traverse_files", "iter_dupfiles", 
     "dict_dupfiles", "iter_image_files", "dict_image_files", "iter_dangling_files", 
+    "share_extract_payload", "share_iterdir", "share_iter_files", 
 ]
 __doc__ = "这个模块提供了一些和目录信息罗列有关的函数"
 
@@ -16,8 +17,9 @@ from collections import defaultdict, deque
 from collections.abc import AsyncIterator, Callable, Collection, Coroutine, Iterable, Iterator, Mapping, Sequence
 from itertools import count, chain, islice, takewhile
 from operator import itemgetter
+from re import compile as re_compile
 from time import time
-from typing import cast, overload, Any, Final, Literal, NamedTuple, NewType, TypeVar
+from typing import cast, overload, Any, Final, Literal, NamedTuple, NewType, TypedDict, TypeVar
 from warnings import warn
 
 from asynctools import async_filter, async_map, to_list
@@ -33,6 +35,10 @@ from .edit import update_desc, update_star
 D = TypeVar("D", bound=dict)
 K = TypeVar("K")
 
+CRE_SHARE_LINK_search1 = re_compile(r"(?:/s/|share\.115\.com/)(?P<share_code>[a-z0-9]+)\?password=(?:(?P<receive_code>[a-z0-9]{4}))?").search
+CRE_SHARE_LINK_search2 = re_compile(r"(?P<share_code>[a-z0-9]+)(?:-(?P<receive_code>[a-z0-9]{4}))?").search
+
+
 class DirNode(NamedTuple):
     name: str
     parent_id: int = 0
@@ -41,6 +47,11 @@ DirNodeTuple = NewType("DirNodeTuple", tuple[str, int])
 
 #: 用于缓存每个用户（根据用户 id 区别）的每个目录 id 到所对应的 (名称, 父id) 的元组的字典的字典
 ID_TO_DIRNODE_CACHE: Final[defaultdict[int, dict[int, DirNode | DirNodeTuple]]] = defaultdict(dict)
+
+
+class SharePayload(TypedDict):
+    share_code: str
+    receive_code: None | str
 
 
 def type_of_attr(attr: Mapping, /) -> int:
@@ -2457,4 +2468,210 @@ def iter_dangling_files(
             if payload["offset"] >= resp["count"]:
                 break
     return run_gen_step_iter(gen_step, async_=async_)
+
+
+def share_extract_payload(link: str, /) -> SharePayload:
+    m = CRE_SHARE_LINK_search1(link)
+    if m is None:
+        m = CRE_SHARE_LINK_search2(link)
+    if m is None:
+        raise ValueError("not a valid 115 share link")
+    return cast(SharePayload, m.groupdict())
+
+
+@overload
+def share_iterdir(
+    client: str | P115Client, 
+    share_code: str, 
+    receive_code: str = "", 
+    cid: int = 0, 
+    page_size: int = 10_000, 
+    order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
+    asc: Literal[0, 1] = 1, 
+    normalize_attr: None | Callable[[dict], dict] = normalize_attr, 
+    *, 
+    async_: Literal[False] = False, 
+    **request_kwargs, 
+) -> Iterator[dict]:
+    ...
+@overload
+def share_iterdir(
+    client: str | P115Client, 
+    share_code: str, 
+    receive_code: str = "", 
+    cid: int = 0, 
+    page_size: int = 10_000, 
+    order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
+    asc: Literal[0, 1] = 1, 
+    normalize_attr: None | Callable[[dict], dict] = normalize_attr, 
+    *, 
+    async_: Literal[True], 
+    **request_kwargs, 
+) -> AsyncIterator[dict]:
+    ...
+def share_iterdir(
+    client: str | P115Client, 
+    share_code: str, 
+    receive_code: str = "", 
+    cid: int = 0, 
+    page_size: int = 10_000, 
+    order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
+    asc: Literal[0, 1] = 1, 
+    normalize_attr: None | Callable[[dict], dict] = normalize_attr, 
+    *, 
+    async_: Literal[False, True] = False, 
+    **request_kwargs, 
+) -> Iterator[dict] | AsyncIterator[dict]:
+    """对分享链接迭代目录，获取文件信息
+
+    :param client: 115 客户端或 cookies
+    :param share_code: 分享码
+    :param receive_code: 接收码
+    :param cid: 目录的 id
+    :param page_size: 分页大小
+    :param order: 排序
+
+        - "file_name": 文件名
+        - "file_size": 文件大小
+        - "file_type": 文件种类
+        - "user_utime": 修改时间
+        - "user_ptime": 创建时间
+        - "user_otime": 上一次打开时间
+
+    :param asc: 升序排列。0: 否，1: 是
+    :param normalize_attr: 把数据进行转换处理，使之便于阅读
+    :param async_: 是否异步
+    :param request_kwargs: 其它请求参数
+
+    :return: 迭代器，被打上星标的目录信息
+    """
+    if isinstance(client, str):
+        client = P115Client(client, check_for_relogin=True)
+    if page_size < 0:
+        page_size = 10_000
+    def gen_step():
+        nonlocal receive_code
+        if not receive_code:
+            resp = yield client.share_info(share_code, async_=async_, **request_kwargs)
+            check_response(resp)
+            receive_code = resp["data"]["receive_code"]
+        payload = {
+            "share_code": share_code, 
+            "receive_code": receive_code, 
+            "cid": cid, 
+            "limit": page_size, 
+            "offset": 0, 
+            "asc": asc, 
+            "o": order, 
+        }
+        count = 0
+        while True:
+            resp = yield client.share_snap(payload, async_=async_, **request_kwargs)
+            check_response(resp)
+            if count == (count := resp["data"]["count"]):
+                break
+            it: Iterable[dict] = resp["data"]["list"]
+            if normalize_attr is not None:
+                it = map(normalize_attr, it)
+            yield YieldFrom(it, identity=True)
+            payload["offset"] += page_size # type: ignore
+            if payload["offset"] >= count: # type: ignore
+                break
+    return run_gen_step_iter(gen_step, async_=async_)
+
+
+@overload
+def share_iter_files(
+    client: str | P115Client, 
+    share_link: str, 
+    receive_code: str = "", 
+    *, 
+    async_: Literal[False] = False, 
+    **request_kwargs, 
+) -> Iterator[dict]:
+    ...
+@overload
+def share_iter_files(
+    client: str | P115Client, 
+    share_link: str, 
+    receive_code: str = "", 
+    *, 
+    async_: Literal[True], 
+    **request_kwargs, 
+) -> AsyncIterator[dict]:
+    ...
+def share_iter_files(
+    client: str | P115Client, 
+    share_link: str, 
+    receive_code: str = "", 
+    *, 
+    async_: Literal[False, True] = False, 
+    **request_kwargs, 
+) -> Iterator[dict] | AsyncIterator[dict]:
+    """批量获取分享链接中的文件列表
+
+    .. hint::
+        `share_link` 支持 3 种形式（圆括号中的字符表示可有可无）：
+
+        1. http(s)://115.com/s/{share_code}?password={receive_code}(#) 或 http(s)://share.115.com/{share_code}?password={receive_code}(#)
+        2. (/){share_code}-{receive_code}(/)
+        3. {share_code}
+
+        如果使用第 3 种形式，而且又不提供 `receive_code`，则认为这是你自己所做的分享，会尝试自动去获取这个密码
+
+        如果 `share_link` 中有 `receive_code`，而你又单独提供了 `receive_code`，则后者的优先级更高
+
+    :param client: 115 客户端或 cookies
+    :param share_link: 分享码或分享链接
+    :param receive_code: 密码
+    :param async_: 是否异步
+    :param request_kwargs: 其它请求参数
+
+    :return: 迭代器，返回此分享链接下的（仅文件）文件信息，由于接口返回信息有限，所以比较简略
+
+        .. code:: python
+
+            {
+                "id": int, 
+                "sha1": str, 
+                "name": str, 
+                "size": int, 
+                "path": str, 
+            }
+
+    """
+    if isinstance(client, str):
+        client = P115Client(client, check_for_relogin=True)
+    def gen_step():
+        payload: dict = cast(dict, share_extract_payload(share_link))
+        if receive_code:
+            payload["receive_code"] = receive_code
+        elif not payload["receive_code"]:
+            resp = yield client.share_info(payload["share_code"], async_=async_, **request_kwargs)
+            check_response(resp)
+            payload["receive_code"] = resp["data"]["receive_code"]
+        payload["cid"] = 0
+        it = share_iterdir(client, **payload, async_=async_, **request_kwargs)
+        do_next: Callable = anext if async_ else next
+        try:
+            while True:
+                attr = yield do_next(it)
+                if attr["is_directory"]:
+                    payload["cid"] = attr["id"]
+                    resp = yield client.share_downlist(payload, async_=async_, **request_kwargs)
+                    check_response(resp)
+                    for info in resp["data"]["list"]:
+                        fid, sha1 = info["fid"].split("_", 1)
+                        yield Yield({
+                            "id": int(fid), 
+                            "sha1": sha1, 
+                            "name": info["fn"], 
+                            "size": int(info["si"]), 
+                            "path": f"/{info['pt']}/{info['fn']}", 
+                        }, identity=True)
+                else:
+                    yield Yield({k: attr[k] for k in ("id", "sha1", "name", "size", "path")}, identity=True)
+        except (StopIteration, StopAsyncIteration):
+            pass
+    return run_gen_step(gen_step, async_=async_)
 

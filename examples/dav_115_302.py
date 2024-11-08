@@ -5,7 +5,7 @@ from __future__ import annotations
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __version__ = (0, 3, 6)
-__requirements__ = ["cachetools", "flask", "Flask-Compress", "path_predicate", "python-115", "urllib3_request", "werkzeug", "wsgidav"]
+__requirements__ = ["cachetools", "flask", "Flask-Compress", "path_predicate", "python-115", "python-encode_uri", "urllib3_request", "werkzeug", "wsgidav"]
 __doc__ = """\
     🕸️ 获取你的 115 网盘账号上文件信息和下载链接 🕷️
 
@@ -174,6 +174,7 @@ else:
 
 try:
     from cachetools import LRUCache, TTLCache
+    from encode_uri import encode_uri, encode_uri_component_loose
     from flask import request, redirect, render_template_string, send_file, Flask, Response
     from flask_compress import Compress # type: ignore
     from jinja2 import Environment, DictLoader
@@ -193,6 +194,7 @@ except ImportError:
     from subprocess import run
     run([executable, "-m", "pip", "install", "-U", *__requirements__], check=True)
     from cachetools import LRUCache, TTLCache
+    from encode_uri import encode_uri, encode_uri_component_loose
     from flask import request, redirect, render_template_string, send_file, Flask, Response
     from flask_compress import Compress # type: ignore
     from jinja2 import Environment, DictLoader
@@ -221,10 +223,6 @@ from typing import cast
 from urllib.parse import unquote, urlsplit
 
 
-TRANSTAB3 = {c: f"%{c:02x}" for c in b"#%?"}
-TRANSTAB4 = {c: f"%{c:02x}" for c in b"#%/?"}
-TRANSTAB7_URL = {c: f"%{c:02x}" for c in b"{}<>'\" "}
-translate = str.translate
 urlopen = partial(urllib3_request, pool=PoolManager(num_pools=128))
 
 origin = args.origin
@@ -565,6 +563,21 @@ document.addEventListener('DOMContentLoaded', function () {
         screenshot: true, 
         subtitleOffset: true, 
         setting: true, 
+        settings: [{
+          html: "画质", 
+          width: 150, 
+          selector: [{
+            default: true, 
+            html: "源文件", 
+            url: anchor.href, 
+          }], 
+          onSelect: function (item, $dom, event) {
+            player.switchQuality(item.url);
+            player.type = item.type;
+            player.notice.show = `切换画质: ${item.html}`;
+            return item.html;
+          },
+        }], 
         customType: {
           m3u8: (video, url, art) => {
             if (Hls.isSupported()) {
@@ -574,13 +587,12 @@ document.addEventListener('DOMContentLoaded', function () {
               hls.attachMedia(video);
               art.hls = hls;
               art.on('destroy', () => hls.destroy());
-            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+            } else if (video.canPlayType('application/vnd.apple.mpegurl'))
               video.src = url;
-            } else {
+            else
               art.notice.show = 'Unsupported playback format: m3u8';
-            }
           }, 
-        },
+        }, 
         layers: [{
             name: 'potser',
             html: closeButton,
@@ -995,7 +1007,7 @@ class FileResource(DavPathBase, DAVNonCollection):
     def strm_data(self, /) -> bytes:
         attr = self.attr
         origin = self.origin
-        name = translate(attr["name"], TRANSTAB4)
+        name = encode_uri_component_loose(attr["name"])
         if share_code := attr.get("share_code"):
             url = f"{origin}/{name}?method=file&share_code={share_code}&id={attr['id']}"
             if attr.get("thumb"):
@@ -1307,7 +1319,7 @@ def normalize_attr(
         ) if k in info
     }
     if share_code := attr.get("share_code"):
-        url = f"{origin}/<share/{share_code}{translate(attr['path'], TRANSTAB3)}?share_code={share_code}&id={attr['id']}"
+        url = f"{origin}/<share/{share_code}{encode_uri_component_loose(attr['path'], quote_slash=False)}?share_code={share_code}&id={attr['id']}"
         if attr["is_directory"]:
             attr["url"] = url
         else:
@@ -1326,7 +1338,7 @@ def normalize_attr(
             attr["is_media"] = bool(info.get("play_long")) or type_of_attr(info) in (3, 4)
     else:
         relpath = attr["relpath"] = attr["path"][len(cast(str, root_dir)):]
-        path_url = "%s/%s" % (origin, translate(relpath, TRANSTAB3))
+        path_url = "%s/%s" % (origin, encode_uri_component_loose(relpath, quote_slash=False))
         if attr["is_directory"]:
             attr["url"] = f"{path_url}?id={attr['id']}"
         else:
@@ -1647,29 +1659,29 @@ def get_page(path: str = "", /, as_file: bool = False):
         {%- set name = attr["name"] %}
         {%- set url = attr["url"] %}
         <td><i class="file-type tp-{{ attr.get("ico") or "" }}"></i></td>
-        <td style="word-wrap: break-word"><a href="{{ url | escape_url | safe }}" style="text-decoration: none">{{ name }}</a></td>
+        <td style="word-wrap: break-word"><a href="{{ url | encode_uri(html_escape=True) | safe }}" style="text-decoration: none">{{ name }}</a></td>
         {%- if attr.get("is_media") %}
         <td style="min-width: 160px; max-width: 210px">
-          <a class="popup play-with-artplayer" href="{{ url | escape_url | safe }}"><img class="icon" src="/?pic=artplayer" /><span class="popuptext">Artplayer</span></a>
-          <a class="popup play-with-plyr" href="{{ url | escape_url | safe }}"><img class="icon" src="/?pic=plyr" /><span class="popuptext">plyr</span></a>
+          <a class="popup play-with-artplayer" href="{{ url | encode_uri(html_escape=True) | safe }}"><img class="icon" src="/?pic=artplayer" /><span class="popuptext">Artplayer</span></a>
+          <a class="popup play-with-plyr" href="{{ url | encode_uri(html_escape=True) | safe }}"><img class="icon" src="/?pic=plyr" /><span class="popuptext">plyr</span></a>
           <a class="popup" href="iina://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=iina" /><span class="popuptext">IINA</span></a>
-          <a class="popup" href="potplayer://{{ url | escape_url | safe }}"><img class="icon" src="/?pic=potplayer" /><span class="popuptext">PotPlayer</span></a>
-          <a class="popup" href="vlc://{{ url | escape_url | safe }}"><img class="icon" src="/?pic=vlc" /><span class="popuptext">VLC</span></a>
+          <a class="popup" href="potplayer://{{ url | encode_uri(html_escape=True) | safe }}"><img class="icon" src="/?pic=potplayer" /><span class="popuptext">PotPlayer</span></a>
+          <a class="popup" href="vlc://{{ url | encode_uri(html_escape=True) | safe }}"><img class="icon" src="/?pic=vlc" /><span class="popuptext">VLC</span></a>
           <a class="popup" href="filebox://play?url={{ url | urlencode }}"><img class="icon" src="/?pic=fileball" /><span class="popuptext">Fileball</span></a>
-          <a class="popup" href="intent:{{ url | escape_url | safe }}#Intent;package=com.mxtech.videoplayer.ad;S.title={{ name }};end"><img class="icon" src="/?pic=mxplayer" /><span class="popuptext">MX Player</span></a>
-          <a class="popup" href="intent:{{ url | escape_url | safe }}#Intent;package=com.mxtech.videoplayer.pro;S.title={{ name }};end"><img class="icon" src="/?pic=mxplayer-pro" /><span class="popuptext">MX Player Pro</span></a>
+          <a class="popup" href="intent:{{ url | encode_uri(html_escape=True) | safe }}#Intent;package=com.mxtech.videoplayer.ad;S.title={{ name }};end"><img class="icon" src="/?pic=mxplayer" /><span class="popuptext">MX Player</span></a>
+          <a class="popup" href="intent:{{ url | encode_uri(html_escape=True) | safe }}#Intent;package=com.mxtech.videoplayer.pro;S.title={{ name }};end"><img class="icon" src="/?pic=mxplayer-pro" /><span class="popuptext">MX Player Pro</span></a>
           <a class="popup" href="infuse://x-callback-url/play?url={{ url | urlencode }}"><img class="icon" src="/?pic=infuse" /><span class="popuptext">infuse</span></a>
-          <a class="popup" href="nplayer-{{ url | escape_url | safe }}"><img class="icon" src="/?pic=nplayer" /><span class="popuptext">nPlayer</span></a>
+          <a class="popup" href="nplayer-{{ url | encode_uri(html_escape=True) | safe }}"><img class="icon" src="/?pic=nplayer" /><span class="popuptext">nPlayer</span></a>
           <a class="popup" href="omniplayer://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=omniplayer" /><span class="popuptext">OmniPlayer</span></a>
           <a class="popup" href="figplayer://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=figplayer" /><span class="popuptext">Fig Player</span></a>
-          <a class="popup" href="mpv://{{ url | escape_url | safe }}"><img class="icon" src="/?pic=mpv" /><span class="popuptext">MPV</span></a>
+          <a class="popup" href="mpv://{{ url | encode_uri(html_escape=True) | safe }}"><img class="icon" src="/?pic=mpv" /><span class="popuptext">MPV</span></a>
         {%- elif not attr["is_directory"] and attr.get("thumb") %}
         <td>
           <a 
             class="popup is-image" 
             data-fancybox="gallery" 
             data-caption="{{ attr["name"] }}"
-            data-download-src="{{ url | escape_url | safe }}" 
+            data-download-src="{{ url | encode_uri(html_escape=True) | safe }}" 
             data-src="{{ IMAGE_URL_CACHE[attr["pickcode"]] }}" 
             data-thumb-src="{{ attr["thumb"].replace("_0?", "_200?") }}" 
           >
@@ -1767,29 +1779,29 @@ def get_share_page(path: str = "", /, share_code: str = "", as_file: bool = Fals
         {%- set name = attr["name"] %}
         {%- set url = attr["url"] %}
         <td><i class="file-type tp-{{ attr.get("ico") or "" }}"></i></td>
-        <td style="word-wrap: break-word"><a href="{{ url | escape_url | safe }}" style="text-decoration: none">{{ name }}</a></td>
+        <td style="word-wrap: break-word"><a href="{{ url | encode_uri(html_escape=True) | safe }}" style="text-decoration: none">{{ name }}</a></td>
         {%- if attr.get("is_media") %}
         <td style="min-width: 160px">
-          <a class="popup play-with-artplayer" href="{{ url | escape_url | safe }}"><img class="icon" src="/?pic=artplayer" /><span class="popuptext">Artplayer</span></a>
-          <a class="popup play-with-plyr" href="{{ url | escape_url | safe }}"><img class="icon" src="/?pic=plyr" /><span class="popuptext">plyr</span></a>
+          <a class="popup play-with-artplayer" href="{{ url | encode_uri(html_escape=True) | safe }}"><img class="icon" src="/?pic=artplayer" /><span class="popuptext">Artplayer</span></a>
+          <a class="popup play-with-plyr" href="{{ url | encode_uri(html_escape=True) | safe }}"><img class="icon" src="/?pic=plyr" /><span class="popuptext">plyr</span></a>
           <a class="popup" href="iina://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=iina" /><span class="popuptext">IINA</span></a>
-          <a class="popup" href="potplayer://{{ url | escape_url | safe }}"><img class="icon" src="/?pic=potplayer" /><span class="popuptext">PotPlayer</span></a>
-          <a class="popup" href="vlc://{{ url | escape_url | safe }}"><img class="icon" src="/?pic=vlc" /><span class="popuptext">VLC</span></a>
+          <a class="popup" href="potplayer://{{ url | encode_uri(html_escape=True) | safe }}"><img class="icon" src="/?pic=potplayer" /><span class="popuptext">PotPlayer</span></a>
+          <a class="popup" href="vlc://{{ url | encode_uri(html_escape=True) | safe }}"><img class="icon" src="/?pic=vlc" /><span class="popuptext">VLC</span></a>
           <a class="popup" href="filebox://play?url={{ url | urlencode }}"><img class="icon" src="/?pic=fileball" /><span class="popuptext">Fileball</span></a>
-          <a class="popup" href="intent:{{ url | escape_url | safe }}#Intent;package=com.mxtech.videoplayer.ad;S.title={{ name }};end"><img class="icon" src="/?pic=mxplayer" /><span class="popuptext">MX Player</span></a>
-          <a class="popup" href="intent:{{ url | escape_url | safe }}#Intent;package=com.mxtech.videoplayer.pro;S.title={{ name }};end"><img class="icon" src="/?pic=mxplayer-pro" /><span class="popuptext">MX Player Pro</span></a>
+          <a class="popup" href="intent:{{ url | encode_uri(html_escape=True) | safe }}#Intent;package=com.mxtech.videoplayer.ad;S.title={{ name }};end"><img class="icon" src="/?pic=mxplayer" /><span class="popuptext">MX Player</span></a>
+          <a class="popup" href="intent:{{ url | encode_uri(html_escape=True) | safe }}#Intent;package=com.mxtech.videoplayer.pro;S.title={{ name }};end"><img class="icon" src="/?pic=mxplayer-pro" /><span class="popuptext">MX Player Pro</span></a>
           <a class="popup" href="infuse://x-callback-url/play?url={{ url | urlencode }}"><img class="icon" src="/?pic=infuse" /><span class="popuptext">infuse</span></a>
-          <a class="popup" href="nplayer-{{ url | escape_url | safe }}"><img class="icon" src="/?pic=nplayer" /><span class="popuptext">nPlayer</span></a>
+          <a class="popup" href="nplayer-{{ url | encode_uri(html_escape=True) | safe }}"><img class="icon" src="/?pic=nplayer" /><span class="popuptext">nPlayer</span></a>
           <a class="popup" href="omniplayer://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=omniplayer" /><span class="popuptext">OmniPlayer</span></a>
           <a class="popup" href="figplayer://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=figplayer" /><span class="popuptext">Fig Player</span></a>
-          <a class="popup" href="mpv://{{ url | escape_url | safe }}"><img class="icon" src="/?pic=mpv" /><span class="popuptext">MPV</span></a>
+          <a class="popup" href="mpv://{{ url | encode_uri(html_escape=True) | safe }}"><img class="icon" src="/?pic=mpv" /><span class="popuptext">MPV</span></a>
         {%- elif not attr["is_directory"] and attr.get("thumb") %}
         <td>
           <a 
             class="popup is-image" 
             data-fancybox="gallery" 
             data-caption="{{ attr["name"] }}"
-            data-download-src="{{ url | escape_url | safe }}" 
+            data-download-src="{{ url | encode_uri(html_escape=True) | safe }}" 
             data-src="{{ IMAGE_URL_CACHE[(attr["share_code"], attr["id"])] }}" 
             data-thumb-src="{{ attr["thumb"].replace("_0?", "_200?") }}" 
           >
@@ -1818,6 +1830,9 @@ def get_share_page(path: str = "", /, share_code: str = "", as_file: bool = Fals
     )
 
 
+flask_app.template_filter("encode_uri")(encode_uri)
+
+
 @flask_app.template_filter("format_size")
 def format_size(
     n: int, 
@@ -1840,11 +1855,6 @@ def format_size(
 @flask_app.template_filter("format_timestamp")
 def format_timestamp(ts: int | float, /) -> str:
     return str(datetime.fromtimestamp(ts))
-
-
-@flask_app.template_filter("escape_url")
-def escape_url(url: str, /) -> str:
-    return translate(url, TRANSTAB7_URL)
 
 
 @flask_app.get("/")
@@ -1965,3 +1975,4 @@ if __name__ == "__main__":
 # TODO: 网页版支持播放 m3u8，自动绑定字幕等，这样可以避免那种没有声音的情况，默认使用最高画质，如果没有m3u8，则会退到原始视频
 # TODO: 使用115接口保存播放进度
 
+# 播放列表、字幕列表（自动执行绑定视频）、多码率列表

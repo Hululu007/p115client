@@ -2801,6 +2801,9 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """推送一个解压缩任务给服务器，完成后，就可以查看压缩包的文件列表了
 
+        .. warning::
+            只能云解压 20GB 以内文件，不支持云解压分卷压缩包
+
         POST https://webapi.115.com/files/push_extract
 
         :payload:
@@ -5939,9 +5942,14 @@ class P115Client:
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
-        """获取视频信息
+        """获取视频信息和 m3u8 链接列表
 
         GET https://webapi.115.com/files/video
+
+        .. important::
+            仅这几种设备可用：`harmony`, `web`, `desktop`, **wechatmini**, **alipaymini**, **tv**
+
+            但是如果要获取 m3u8 文件，则要提供 web 设备的 cookies，否则返回空数据
 
         :payload:
             - pickcode: str 💡 提取码
@@ -5958,6 +5966,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        app: str = "android", 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> bytes:
@@ -5967,6 +5977,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        app: str = "android", 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, bytes]:
@@ -5975,12 +5987,17 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        app: str = "android", 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> bytes | Coroutine[Any, Any, bytes]:
-        """获取视频的 m3u8 文件列表，此接口必须使用 web 的 cookies
+        """获取视频信息和 m3u8 链接列表
 
         POST https://proapi.115.com/android/2.0/video/play
+
+        .. important::
+            仅这几种设备可用：`115android`, `115ios`, `115ipad`, `android`, `ios`, `qandroid`, `qios`, **wechatmini**, **alipaymini**, **tv**
 
         :payload:
             - pickcode: str 💡 提取码
@@ -5988,14 +6005,14 @@ class P115Client:
             - local: 0 | 1 = <default> 💡 是否本地，如果为 1，则不包括 m3u8
             - user_id: int = <default> 💡 不用管
         """
-        api = "https://proapi.115.com/android/2.0/video/play"
+        api = f"https://proapi.115.com/{app}/2.0/video/play"
         if isinstance(payload, str):
             payload = {"pickcode": payload, "user_id": self.user_id}
         else:
             payload.setdefault("user_id", self.user_id)
         def parse(resp, content: bytes) -> dict:
             json = json_loads(content)
-            if json["state"]:
+            if json["state"] or json.get("errno") == 409:
                 json["data"] = json_loads(rsa_decode(json["data"]))
             return json
         request_kwargs.setdefault("parse", parse)
@@ -6046,13 +6063,16 @@ class P115Client:
         GET http://115.com/api/video/m3u8/{pickcode}.m3u8?definition={definition}
 
         .. attention::
-            这个接口只支持 web 的 cookies，其它设备会返回空数据
+            这个接口只支持 web 的 cookies，其它设备会返回空数据，而且获取得到的 m3u8 里的链接，也是 m3u8，会绑定前一次请求时的 User-Agent
 
         :param pickcode: 视频文件的 pickcode
         :params definition: 画质，默认列出所有画质。但可进行筛选，常用的为：
             - 0: 各种分辨率（默认）
-            - 3: HD (约为720p)
-            - 4: UD (约为1080p)
+            - 1: SD 标清（约为 480p）
+            - 3: HD 超清（约为 720p）
+            - 4: UD 1080P（约为 1080p）
+            - 5: BD 4K
+            - 100: 原画（尺寸和原始的相同）
         :param async_: 是否异步
         :param request_kwargs: 其它请求参数
 
@@ -7940,12 +7960,15 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """获取分享链接的某个目录中可下载的文件的列表（只含文件，不含目录，任意深度，简略信息）
 
+        .. attention::
+            cid 不能为 0
+
         GET https://proapi.115.com/app/share/downlist
 
         :payload:
             - share_code: str
             - receive_code: str
-            - cid: int | str = 0
+            - cid: int | str
         """
         api = complete_webapi(base_url, "/share/downlist")
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
