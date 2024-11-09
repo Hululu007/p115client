@@ -2471,6 +2471,15 @@ def iter_dangling_files(
 
 
 def share_extract_payload(link: str, /) -> SharePayload:
+    """从链接中提取 share_code 和 receive_code
+
+    .. hint::
+        `link` 支持 3 种形式（圆括号中的字符表示可有可无）：
+
+        1. http(s)://115.com/s/{share_code}?password={receive_code}(#) 或 http(s)://share.115.com/{share_code}?password={receive_code}(#)
+        2. (/){share_code}-{receive_code}(/)
+        3. {share_code}
+    """
     m = CRE_SHARE_LINK_search1(link)
     if m is None:
         m = CRE_SHARE_LINK_search2(link)

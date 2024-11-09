@@ -120,3 +120,6 @@ def wish_adopt(
         client = P115Client(client)
     return check_response(client.act_xys_adopt({"did": wish_id, "aid": aid_id, "to_cid": to_cid}))
 
+# TODO: 再实现一个漂流瓶
+# TODO: 支持异步
+
