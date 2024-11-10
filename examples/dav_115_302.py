@@ -572,13 +572,13 @@ document.addEventListener('DOMContentLoaded', function () {
         try {
           const resp = await fetch(`/?method=sub&pickcode=${attr.pickcode}`);
           const json = await resp.json();
-          const prefix = attr.name.slice(0, attr.name.lastIndexOf(".") + 1);
+          const prefix = attr.name.slice(0, attr.name.lastIndexOf("."));
           if (json instanceof Object && json.list.length) {
             for (const {title, url, type, sha1} of json.list) {
               if (!sha1)
                 subtitles.push({html: `${title} ${type}`, url, type});
               else if (title.startsWith(prefix)) {
-                subtitles.push({html: title.slice(prefix.length), url, type});
+                subtitles.push({html: title.slice(prefix.length + 1), url, type});
                 if (!subtitle) subtitle = url;
               }
             }
@@ -2106,6 +2106,4 @@ if __name__ == "__main__":
 # TODO: 使用115接口保存播放进度
 
 # TODO: 在线播放：播放列表、字幕列表（自动执行绑定视频）、多码率列表
-
-# TODO: 增加 m3u8 接口，今天就要
 
