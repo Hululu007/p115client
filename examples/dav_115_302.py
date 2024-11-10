@@ -4,8 +4,8 @@
 from __future__ import annotations
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 3, 6)
-__requirements__ = ["cachetools", "flask", "Flask-Compress", "path_predicate", "python-115", "python-encode_uri", "urllib3_request", "werkzeug", "wsgidav"]
+__version__ = (0, 3, 7)
+__requirements__ = ["cachetools", "flask", "Flask-Compress", "httpagentparser", "orjson", "path_predicate", "python-115", "python-encode_uri", "urllib3_request", "werkzeug", "wsgidav"]
 __doc__ = """\
     🕸️ 获取你的 115 网盘账号上文件信息和下载链接 🕷️
 
@@ -177,7 +177,12 @@ try:
     from encode_uri import encode_uri, encode_uri_component_loose
     from flask import request, redirect, render_template_string, send_file, Flask, Response
     from flask_compress import Compress # type: ignore
+    # NOTE: 其它可用模块
+    # - https://pypi.org/project/user-agents/
+    # - https://github.com/faisalman/ua-parser-js
+    from httpagentparser import detect as detect_ua
     from jinja2 import Environment, DictLoader
+    from orjson import dumps
     from p115 import check_response, AuthenticationError, P115URL
     from p115.component import P115Client, P115FileSystem, P115ShareFileSystem
     from p115.tool import type_of_attr
@@ -197,7 +202,9 @@ except ImportError:
     from encode_uri import encode_uri, encode_uri_component_loose
     from flask import request, redirect, render_template_string, send_file, Flask, Response
     from flask_compress import Compress # type: ignore
+    from httpagentparser import detect as detect_ua # type: ignore
     from jinja2 import Environment, DictLoader
+    from orjson import dumps
     from p115 import check_response, AuthenticationError, P115URL
     from p115.component import P115Client, P115FileSystem, P115ShareFileSystem
     from p115.tool import type_of_attr
@@ -346,6 +353,7 @@ setattr(flask_app, "jinja_env", Environment(loader=DictLoader({
       background-color: #f0f0f0;
       position: sticky;
       top: 0;
+      z-index: 100;
     }
 
     th, td:not(:first-child) {
@@ -452,25 +460,22 @@ setattr(flask_app, "jinja_env", Environment(loader=DictLoader({
       position: absolute;
     }
 
-    .player-container .art-icon-fullscreenOn > svg,
-    .player-container .art-icon-fullscreenOff > svg,
-    .player-container .art-icon-fullscreenWebOn > svg,
-    .player-container .art-icon-fullscreenWebOff > svg {
+    .art-icon > svg {
       padding: 0px;
     }
   </style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/particles.js/2.0.0/particles.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/progressbar.js/1.1.1/progressbar.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui@latest/dist/fancybox/fancybox.umd.js"></script>
-  <link href="https://cdn.jsdelivr.net/npm/@fancyapps/ui@latest/dist/fancybox/fancybox.css" rel="stylesheet"/>
-  <script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui@latest/dist/carousel/carousel.umd.js"></script>
-  <link href="https://cdn.jsdelivr.net/npm/@fancyapps/ui@latest/dist/carousel/carousel.css" rel="stylesheet"/>
-  <script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui@latest/dist/carousel/carousel.thumbs.umd.js"></script>
-  <link href="https://cdn.jsdelivr.net/npm/@fancyapps/ui@latest/dist/carousel/carousel.thumbs.css" rel="stylesheet"/>
-  <script src="https://cdn.jsdelivr.net/npm/artplayer@latest/dist/artplayer.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest/dist/hls.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/plyr@latest/dist/plyr.min.js"></script>
-  <link href="https://cdn.jsdelivr.net/npm/plyr@latest/dist/plyr.min.css" rel="stylesheet"/>
+  <script src="https://cdn.jsdmirror.com/npm/@fancyapps/ui@latest/dist/fancybox/fancybox.umd.js"></script>
+  <link href="https://cdn.jsdmirror.com/npm/@fancyapps/ui@latest/dist/fancybox/fancybox.css" rel="stylesheet"/>
+  <script src="https://cdn.jsdmirror.com/npm/@fancyapps/ui@latest/dist/carousel/carousel.umd.js"></script>
+  <link href="https://cdn.jsdmirror.com/npm/@fancyapps/ui@latest/dist/carousel/carousel.css" rel="stylesheet"/>
+  <script src="https://cdn.jsdmirror.com/npm/@fancyapps/ui@latest/dist/carousel/carousel.thumbs.umd.js"></script>
+  <link href="https://cdn.jsdmirror.com/npm/@fancyapps/ui@latest/dist/carousel/carousel.thumbs.css" rel="stylesheet"/>
+  <script src="https://cdn.jsdmirror.com/npm/artplayer@latest/dist/artplayer.min.js"></script>
+  <script src="https://cdn.jsdmirror.com/npm/hls.js@latest/dist/hls.min.js"></script>
+  <script src="https://cdn.jsdmirror.com/npm/plyr@latest/dist/plyr.min.js"></script>
+  <link href="https://cdn.jsdmirror.com/npm/plyr@latest/dist/plyr.min.css" rel="stylesheet"/>
 </head>
 <body>
   <div class="draggable-resizable-window">
@@ -517,6 +522,7 @@ document.addEventListener('DOMContentLoaded', function () {
   closeButton.style = "transition: opacity 0.5s ease"
 
   document.addEventListener('keydown', function(event) {
+    if (!player) return;
     if (event.key === 'Escape' && player) {
         if (player instanceof Artplayer && !player.fullscreen)
           player.destroy();
@@ -529,7 +535,9 @@ document.addEventListener('DOMContentLoaded', function () {
   });
 
   document.querySelectorAll('.play-with-artplayer').forEach(function(anchor) {
-    anchor.addEventListener('click', function (event) {
+    const attr = JSON.parse(anchor.parentElement.dataset.attr);
+    let multiQualities, subtitles, subtitle = "";
+    anchor.addEventListener('click', async (event) => {
       event.preventDefault();
       if (player) player.destroy();
       draggableWindow.style.display = 'block';
@@ -544,6 +552,42 @@ document.addEventListener('DOMContentLoaded', function () {
       draggableWindow.style.left = left + 'px';
       draggableWindow.style.top = top + 'px';
 
+      if (!multiQualities) {
+        multiQualities = [{
+          default: true, 
+          html: "源文件", 
+          url: anchor.href, 
+        }];
+        try {
+          const resp = await fetch(`/?method=m3u8&pickcode=${attr.pickcode}`);
+          const json = await resp.json();
+          if (json instanceof Array && json.length)
+            multiQualities.push(...json.map(({title, url})=>({html: title, url, type: "m3u8"})));
+        } catch (e) {
+          console.error(`can't get multi qualities for ${attr.name}: ${e.message}`);
+        }
+      }
+      if (!subtitles) {
+        subtitles = [];
+        try {
+          const resp = await fetch(`/?method=sub&pickcode=${attr.pickcode}`);
+          const json = await resp.json();
+          const prefix = attr.name.slice(0, attr.name.lastIndexOf(".") + 1);
+          if (json instanceof Object && json.list.length) {
+            for (const {title, url, type, sha1} of json.list) {
+              if (!sha1)
+                subtitles.push({html: `${title} ${type}`, url, type});
+              else if (title.startsWith(prefix)) {
+                subtitles.push({html: title.slice(prefix.length), url, type});
+                if (!subtitle) subtitle = url;
+              }
+            }
+            if (!subtitle) subtitle = subtitles[0].url;
+          }
+        } catch (e) {
+          console.error(`can't get multi subtitles for ${attr.name}: ${e.message}`);
+        }
+      }
       player = new Artplayer({
         container: playerContainer, 
         url: anchor.href, 
@@ -561,23 +605,39 @@ document.addEventListener('DOMContentLoaded', function () {
         pip: true, 
         playbackRate: true, 
         screenshot: true, 
+        subtitle: {url: subtitle}, 
         subtitleOffset: true, 
         setting: true, 
         settings: [{
           html: "画质", 
-          width: 150, 
-          selector: [{
-            default: true, 
-            html: "源文件", 
-            url: anchor.href, 
-          }], 
+          selector: multiQualities, 
           onSelect: function (item, $dom, event) {
             player.switchQuality(item.url);
             player.type = item.type;
             player.notice.show = `切换画质: ${item.html}`;
             return item.html;
+          }, 
+        }, {
+          html: "字幕", 
+          icon: '<img width="22" heigth="22" src="/?pic=subtitle">',
+          selector: [
+            {
+              html: 'Display',
+              tooltip: 'Show',
+              switch: true,
+              onSwitch: function (item) {
+                  item.tooltip = item.switch ? 'Hide' : 'Show';
+                  player.subtitle.show = !item.switch;
+                  return !item.switch;
+              },
+            }, 
+            ...subtitles,
+          ],
+          onSelect: function (item) {
+            player.subtitle.url = item.url;
+            return item.html;
           },
-        }], 
+        }],
         customType: {
           m3u8: (video, url, art) => {
             if (Hls.isSupported()) {
@@ -621,6 +681,7 @@ document.addEventListener('DOMContentLoaded', function () {
       });
       let hideTimeout;
       playerContainer.addEventListener('mousemove', () => {
+        if (!player) return;
         if (player.fullscreen)
           closeButton.style.display = "block";
         clearTimeout(hideTimeout);
@@ -671,8 +732,7 @@ document.addEventListener('DOMContentLoaded', function () {
       <video id="player" controls crossorigin>
         <source src="${anchor.href}" />
       </video>`
-      player = new Plyr("#player", {captions: {active: true}});
-      player.play();
+      player = new Plyr("#player", {autoplay: true});
     });
   });
 });
@@ -1478,34 +1538,69 @@ def get_share_list(path: str = "", /, share_code: str = ""):
     return [normalize_attr(attr, origin) for attr in children]
 
 
-def get_url(path: str = "", /, pickcode: str = ""):
-    get_arg = request.args.get
-    attr: dict
+def get_file_pickcode(path: str = "", /, pickcode: str = "") -> str | Response:
     if root_dir:
+        attr: dict
+        get_arg = request.args.get
         if pickcode or (pickcode := get_arg("pickcode", "").strip().lower()):
             if not pickcode.isalnum():
                 return Response(f"bad pickcode: {pickcode!r}", 400)
+            return pickcode
         elif fid := get_arg("id", "").strip():
             try:
                 file_id = int(fid)
             except ValueError:
                 return Response(f"bad id: {file_id!r}", 400)
             attr = fs.attr(file_id, refresh=False)
-            pickcode = normalize_attr(attr)["pickcode"]
+            return normalize_attr(attr)["pickcode"]
         elif sha1 := get_arg("sha1", "").strip().upper():
             if not len(sha1) == 40 or sha1.strip(hexdigits):
                 return Response(f"bad sha1: {sha1!r}", 400)
             resp = check_response(client.fs_shasearch(sha1))
-            pickcode = resp["data"]["pick_code"]
+            return resp["data"]["pick_code"]
         else:
             path = unquote(get_arg("path", "")) or path
             attr = fs.attr(path.lstrip("/"), ensure_dir=False, refresh=False)
             attr = normalize_attr(attr)
             if root and not any(info["id"] == root for info in attr["ancestors"]):
                 return Response("out of root range", 403)
-            pickcode = attr["pickcode"]
+            return attr["pickcode"]
     else:
-        pickcode = root_pickcode
+        return root_pickcode
+
+
+def get_m3u8(path: str = "", /, pickcode: str = "") -> list[dict] | Response:
+    """获取 m3u8 文件链接
+    """
+    pickcode_resp = get_file_pickcode(path, pickcode)
+    if isinstance(pickcode_resp, Response):
+        return pickcode_resp
+    pickcode = pickcode_resp
+    resp = client.fs_video_app(pickcode)
+    if not resp["state"]:
+        return []
+    return resp["data"]["video_url"]
+
+
+def get_subtitles(path: str = "", /, pickcode: str = "") -> None | dict | Response:
+    """获取字幕（随便提供此文件夹内的任何一个文件的提取码即可）
+    """
+    pickcode_resp = get_file_pickcode(path, pickcode)
+    if isinstance(pickcode_resp, Response):
+        return pickcode_resp
+    pickcode = pickcode_resp
+    resp = client.fs_video_subtitle(pickcode)
+    return resp.get("data")
+
+
+def get_url(path: str = "", /, pickcode: str = "") -> dict | Response:
+    """获取下载链接
+    """
+    pickcode_resp = get_file_pickcode(path, pickcode)
+    if isinstance(pickcode_resp, Response):
+        return pickcode_resp
+    pickcode = pickcode_resp
+    get_arg = request.args.get
     if is_image := get_arg("image") not in (None, "0", "false"):
         return {"type": "image", "url": get_image_url(pickcode)}
     use_web_api = get_arg("web") not in (None, "0", "false")
@@ -1661,20 +1756,30 @@ def get_page(path: str = "", /, as_file: bool = False):
         <td><i class="file-type tp-{{ attr.get("ico") or "" }}"></i></td>
         <td style="word-wrap: break-word"><a href="{{ url | encode_uri(html_escape=True) | safe }}" style="text-decoration: none">{{ name }}</a></td>
         {%- if attr.get("is_media") %}
-        <td style="min-width: 160px; max-width: 210px">
-          <a class="popup play-with-artplayer" href="{{ url | encode_uri(html_escape=True) | safe }}"><img class="icon" src="/?pic=artplayer" /><span class="popuptext">Artplayer</span></a>
-          <a class="popup play-with-plyr" href="{{ url | encode_uri(html_escape=True) | safe }}"><img class="icon" src="/?pic=plyr" /><span class="popuptext">plyr</span></a>
+        {%- set platform = user_agent.get("platform", {}).get("name", "").lower() %}
+        <td style="min-width: 160px; max-width: 210px" data-attr='{{ attr | json_dumps }}'>
+          <a class="popup play-with-artplayer" href="{{ url | encode_uri(html_escape=True) | safe }}"><img class="icon" src="/?pic=artplayer"/><span class="popuptext">Artplayer</span></a>
+          <a class="popup play-with-plyr" href="{{ url | encode_uri(html_escape=True) | safe }}"><img class="icon" src="/?pic=plyr"/><span class="popuptext">plyr</span></a>
           <a class="popup" href="iina://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=iina" /><span class="popuptext">IINA</span></a>
           <a class="popup" href="potplayer://{{ url | encode_uri(html_escape=True) | safe }}"><img class="icon" src="/?pic=potplayer" /><span class="popuptext">PotPlayer</span></a>
+          {%- if platform == "ios" %}
+          <a class="popup" href="vlc-x-callback://x-callback-url/stream?url={{ url | urlencode }}"><img class="icon" src="/?pic=vlc" /><span class="popuptext">VLC</span></a>
+          {%- else %}
           <a class="popup" href="vlc://{{ url | encode_uri(html_escape=True) | safe }}"><img class="icon" src="/?pic=vlc" /><span class="popuptext">VLC</span></a>
+          {%- endif %}
           <a class="popup" href="filebox://play?url={{ url | urlencode }}"><img class="icon" src="/?pic=fileball" /><span class="popuptext">Fileball</span></a>
           <a class="popup" href="intent:{{ url | encode_uri(html_escape=True) | safe }}#Intent;package=com.mxtech.videoplayer.ad;S.title={{ name }};end"><img class="icon" src="/?pic=mxplayer" /><span class="popuptext">MX Player</span></a>
           <a class="popup" href="intent:{{ url | encode_uri(html_escape=True) | safe }}#Intent;package=com.mxtech.videoplayer.pro;S.title={{ name }};end"><img class="icon" src="/?pic=mxplayer-pro" /><span class="popuptext">MX Player Pro</span></a>
           <a class="popup" href="infuse://x-callback-url/play?url={{ url | urlencode }}"><img class="icon" src="/?pic=infuse" /><span class="popuptext">infuse</span></a>
+          {%- if platform == "mac os" %}
+          <a class="popup" href="nplayer-mac://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=nplayer" /><span class="popuptext">nPlayer</span></a>
+          {%- else %}
           <a class="popup" href="nplayer-{{ url | encode_uri(html_escape=True) | safe }}"><img class="icon" src="/?pic=nplayer" /><span class="popuptext">nPlayer</span></a>
+          {%- endif %}
           <a class="popup" href="omniplayer://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=omniplayer" /><span class="popuptext">OmniPlayer</span></a>
           <a class="popup" href="figplayer://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=figplayer" /><span class="popuptext">Fig Player</span></a>
           <a class="popup" href="mpv://{{ url | encode_uri(html_escape=True) | safe }}"><img class="icon" src="/?pic=mpv" /><span class="popuptext">MPV</span></a>
+          <a class="popup" href="stellar://play/{{ url | encode_uri(html_escape=True) | safe }}"><img class="icon" src="/?pic=stellarplayer" /><span class="popuptext">恒星播放器</span></a>
         {%- elif not attr["is_directory"] and attr.get("thumb") %}
         <td>
           <a 
@@ -1707,6 +1812,7 @@ def get_page(path: str = "", /, as_file: bool = False):
         parent_id=parent_id, 
         children=children, 
         header=header, 
+        user_agent=detect_ua(request.headers.get("User-Agent", "")), 
         IMAGE_URL_CACHE=IMAGE_URL_CACHE, 
     )
 
@@ -1781,20 +1887,30 @@ def get_share_page(path: str = "", /, share_code: str = "", as_file: bool = Fals
         <td><i class="file-type tp-{{ attr.get("ico") or "" }}"></i></td>
         <td style="word-wrap: break-word"><a href="{{ url | encode_uri(html_escape=True) | safe }}" style="text-decoration: none">{{ name }}</a></td>
         {%- if attr.get("is_media") %}
-        <td style="min-width: 160px">
+        {%- set platform = user_agent.get("platform", {}).get("name", "").lower() %}
+        <td style="min-width: 160px" data-attr='{{ attr | json_dumps }}'>
           <a class="popup play-with-artplayer" href="{{ url | encode_uri(html_escape=True) | safe }}"><img class="icon" src="/?pic=artplayer" /><span class="popuptext">Artplayer</span></a>
           <a class="popup play-with-plyr" href="{{ url | encode_uri(html_escape=True) | safe }}"><img class="icon" src="/?pic=plyr" /><span class="popuptext">plyr</span></a>
           <a class="popup" href="iina://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=iina" /><span class="popuptext">IINA</span></a>
           <a class="popup" href="potplayer://{{ url | encode_uri(html_escape=True) | safe }}"><img class="icon" src="/?pic=potplayer" /><span class="popuptext">PotPlayer</span></a>
+          {%- if platform == "ios" %}
+          <a class="popup" href="vlc-x-callback://x-callback-url/stream?url={{ url | urlencode }}"><img class="icon" src="/?pic=vlc" /><span class="popuptext">VLC</span></a>
+          {%- else %}
           <a class="popup" href="vlc://{{ url | encode_uri(html_escape=True) | safe }}"><img class="icon" src="/?pic=vlc" /><span class="popuptext">VLC</span></a>
+          {%- endif %}
           <a class="popup" href="filebox://play?url={{ url | urlencode }}"><img class="icon" src="/?pic=fileball" /><span class="popuptext">Fileball</span></a>
           <a class="popup" href="intent:{{ url | encode_uri(html_escape=True) | safe }}#Intent;package=com.mxtech.videoplayer.ad;S.title={{ name }};end"><img class="icon" src="/?pic=mxplayer" /><span class="popuptext">MX Player</span></a>
           <a class="popup" href="intent:{{ url | encode_uri(html_escape=True) | safe }}#Intent;package=com.mxtech.videoplayer.pro;S.title={{ name }};end"><img class="icon" src="/?pic=mxplayer-pro" /><span class="popuptext">MX Player Pro</span></a>
           <a class="popup" href="infuse://x-callback-url/play?url={{ url | urlencode }}"><img class="icon" src="/?pic=infuse" /><span class="popuptext">infuse</span></a>
+          {%- if platform == "mac os" %}
+          <a class="popup" href="nplayer-mac://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=nplayer" /><span class="popuptext">nPlayer</span></a>
+          {%- else %}
           <a class="popup" href="nplayer-{{ url | encode_uri(html_escape=True) | safe }}"><img class="icon" src="/?pic=nplayer" /><span class="popuptext">nPlayer</span></a>
+          {%- endif %}
           <a class="popup" href="omniplayer://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=omniplayer" /><span class="popuptext">OmniPlayer</span></a>
           <a class="popup" href="figplayer://weblink?url={{ url | urlencode }}"><img class="icon" src="/?pic=figplayer" /><span class="popuptext">Fig Player</span></a>
           <a class="popup" href="mpv://{{ url | encode_uri(html_escape=True) | safe }}"><img class="icon" src="/?pic=mpv" /><span class="popuptext">MPV</span></a>
+          <a class="popup" href="stellar://play/{{ url | encode_uri(html_escape=True) | safe }}"><img class="icon" src="/?pic=stellarplayer" /><span class="popuptext">恒星播放器</span></a>
         {%- elif not attr["is_directory"] and attr.get("thumb") %}
         <td>
           <a 
@@ -1826,11 +1942,17 @@ def get_share_page(path: str = "", /, share_code: str = "", as_file: bool = Fals
         attr=attr, 
         children=children, 
         header="".join(parts), 
+        user_agent=detect_ua(request.headers.get("User-Agent", "")), 
         IMAGE_URL_CACHE=IMAGE_URL_CACHE, 
     )
 
 
 flask_app.template_filter("encode_uri")(encode_uri)
+
+
+@flask_app.template_filter("json_dumps")
+def json_dumps(data, /) -> str:
+    return dumps(data).decode("utf-8").replace("'", "&apos;")
 
 
 @flask_app.template_filter("format_size")
@@ -1885,6 +2007,8 @@ def index():
             return redirect("https://cdn.okaapps.com/resource/icon/app_icons/omniplayer.png")
         case "potplayer":
             return send_file(BytesIO(b'<svg width="256pt" height="256pt" version="1.1" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg"><g id="#f8d714ff" fill="#f8d714"><path d="m14.48 5.74c3.4-1.07 7.01-0.71 10.52-0.77 70.34 0.02 140.68-0.01 211.02 0.01 5.46-0.33 10.91 2.69 13.41 7.57 2.08 3.81 1.52 8.3 1.6 12.47-0.01 68.66-0.01 137.32 0 205.98-0.06 4.38 0.49 9.15-1.94 13.05-2.6 4.58-7.88 7.21-13.09 6.96-71.98 0.04-143.96 0.03-215.93 0-5.25 0.27-10.56-2.37-13.17-6.99-2.42-3.88-1.87-8.63-1.93-12.99 0.02-70.34-0.01-140.67 0.01-211.01-0.43-6.21 3.59-12.31 9.5-14.28m107.84 33.69c-14.96 1.39-29.3 8.36-39.65 19.25-9.91 10.28-16.17 24-17.37 38.23-1.18 12.94 1.74 26.23 8.31 37.46 7.78 13.44 20.66 23.86 35.48 28.54 14.49 4.68 30.65 3.88 44.61-2.22 14.42-6.23 26.32-18.03 32.68-32.4 6.61-14.74 7.24-32.04 1.71-47.22-4.72-13.25-14.04-24.78-25.96-32.24-11.74-7.43-25.99-10.76-39.81-9.4m-58.68 142.57c0 11.33-0.01 22.66 0 34h7.36c0-4.13 0-8.26 0.01-12.38 4.89-0.21 10.28 0.89 14.7-1.78 6.64-4.22 5.84-16.13-1.84-18.76-6.53-2.02-13.51-0.71-20.23-1.08m31.36-0.02v34.03c2.21-0.01 4.43-0.02 6.64-0.03 0.01-11.3-0.09-22.6 0.05-33.89-2.23-0.1-4.46-0.07-6.69-0.11m14.91 9.93c-2.42 1.25-3.4 3.9-4.08 6.36 2.18 0.12 4.38 0.06 6.57 0.15 0.83-4.08 5.95-5.29 9.03-2.88 0.68 1.52 1.23 4.02-0.79 4.76-3.79 1.3-8.04 0.88-11.69 2.64-4.94 2.35-4.8 10.64 0.13 12.94 4.31 1.97 9.56 1.01 13.21-1.89 0.26 3.53 4.7 1.48 7.03 2.02-1.44-6.71-0.21-13.61-0.86-20.38-0.19-2.04-1.85-3.62-3.67-4.32-4.76-1.82-10.32-1.73-14.88 0.6m52.44 1.46c-4.44 4.27-4.97 11.44-2.64 16.91 2.61 6 10.47 8.19 16.25 5.72 3.31-1.17 5.09-4.4 6.6-7.34-1.94-0.02-3.87-0.03-5.8 0-1.88 2.97-5.81 4.17-8.96 2.5-2.29-1.05-2.56-3.78-2.98-5.95 6.09-0.03 12.18 0 18.27-0.01-0.37-3.83-0.81-7.91-3.32-11.01-4.08-5.29-12.77-5.47-17.42-0.82m30.89 1.79c0.06-1.38 0.12-2.77 0.16-4.15-2.13-0.01-4.27-0.01-6.4-0.01v25.01c2.21-0.01 4.43-0.03 6.64-0.04 0.32-5.5-0.92-11.27 1.04-16.55 1.5-3.15 5.26-3.51 8.33-3.15-0.01-2.14-0.01-4.28-0.02-6.42-3.98 0.03-7.62 1.94-9.75 5.31m-61.66-4.17c3.01 8.67 6.35 17.24 9.1 25.99 0.23 3.74-3.99 4.08-6.67 3.4-0.01 1.73-0.01 3.47-0.01 5.2 4.41 0.8 10.45 0.5 12.22-4.49 3.74-9.96 7.1-20.06 10.66-30.08-2.29-0.01-4.58-0.01-6.86-0.01-1.82 6.03-3.63 12.06-5.5 18.06-2.14-5.92-3.89-11.98-5.73-18.01-2.4-0.05-4.81-0.05-7.21-0.06z"/><path d="m111.13 74.07c1.31-0.17 2.41 0.69 3.5 1.25 13.64 8.39 27.33 16.71 41 25.05 1.27 0.84 3.17 1.74 2.53 3.64-1.02 1.06-2.3 1.82-3.55 2.58-13.78 8.18-27.43 16.6-41.23 24.75-1.21 1.08-3.48 0.59-3.29-1.3-0.22-17.35-0.01-34.71-0.1-52.06 0.12-1.36-0.28-3.1 1.14-3.91z"/><path d="m71 187.63c3.41 0.08 7.12-0.52 10.26 1.13 2.82 2.15 2.47 7.87-1.24 8.92-2.98 0.55-6.02 0.3-9.02 0.31v-10.36z"/><path d="m164.77 200.98c0.41-3.09 2.66-6.44 6.2-5.83 3.27-0.26 4.83 3.13 5.25 5.84-3.82 0.02-7.64 0.02-11.45-0.01z"/><path d="m112.05 208c1.75-3.68 6.75-2.65 10.01-3.99-0.17 2.65 0.47 6.23-2.36 7.73-2.87 2.1-8.98 0.72-7.65-3.74z"/></g><g id="#ffffffff"><path d="m122.32 39.43c13.82-1.36 28.07 1.97 39.81 9.4 11.92 7.46 21.24 18.99 25.96 32.24 5.53 15.18 4.9 32.48-1.71 47.22-6.36 14.37-18.26 26.17-32.68 32.4-13.96 6.1-30.12 6.9-44.61 2.22-14.82-4.68-27.7-15.1-35.48-28.54-6.57-11.23-9.49-24.52-8.31-37.46 1.2-14.23 7.46-27.95 17.37-38.23 10.35-10.89 24.69-17.86 39.65-19.25m-11.19 34.64c-1.42 0.81-1.02 2.55-1.14 3.91 0.09 17.35-0.12 34.71 0.1 52.06-0.19 1.89 2.08 2.38 3.29 1.3 13.8-8.15 27.45-16.57 41.23-24.75 1.25-0.76 2.53-1.52 3.55-2.58 0.64-1.9-1.26-2.8-2.53-3.64-13.67-8.34-27.36-16.66-41-25.05-1.09-0.56-2.19-1.42-3.5-1.25z" fill="#fff"/></g><g id="#222222ff" fill="#222"><path d="m63.64 182c6.72 0.37 13.7-0.94 20.23 1.08 7.68 2.63 8.48 14.54 1.84 18.76-4.42 2.67-9.81 1.57-14.7 1.78-0.01 4.12-0.01 8.25-0.01 12.38h-7.36c-0.01-11.34 0-22.67 0-34m7.36 5.63v10.36c3-0.01 6.04 0.24 9.02-0.31 3.71-1.05 4.06-6.77 1.24-8.92-3.14-1.65-6.85-1.05-10.26-1.13z"/><path d="m95 181.98c2.23 0.04 4.46 0.01 6.69 0.11-0.14 11.29-0.04 22.59-0.05 33.89-2.21 0.01-4.43 0.02-6.64 0.03v-34.03z"/><path d="m109.91 191.91c4.56-2.33 10.12-2.42 14.88-0.6 1.82 0.7 3.48 2.28 3.67 4.32 0.65 6.77-0.58 13.67 0.86 20.38-2.33-0.54-6.77 1.51-7.03-2.02-3.65 2.9-8.9 3.86-13.21 1.89-4.93-2.3-5.07-10.59-0.13-12.94 3.65-1.76 7.9-1.34 11.69-2.64 2.02-0.74 1.47-3.24 0.79-4.76-3.08-2.41-8.2-1.2-9.03 2.88-2.19-0.09-4.39-0.03-6.57-0.15 0.68-2.46 1.66-5.11 4.08-6.36m2.14 16.09c-1.33 4.46 4.78 5.84 7.65 3.74 2.83-1.5 2.19-5.08 2.36-7.73-3.26 1.34-8.26 0.31-10.01 3.99z"/><path d="m162.35 193.37c4.65-4.65 13.34-4.47 17.42 0.82 2.51 3.1 2.95 7.18 3.32 11.01-6.09 0.01-12.18-0.02-18.27 0.01 0.42 2.17 0.69 4.9 2.98 5.95 3.15 1.67 7.08 0.47 8.96-2.5 1.93-0.03 3.86-0.02 5.8 0-1.51 2.94-3.29 6.17-6.6 7.34-5.78 2.47-13.64 0.28-16.25-5.72-2.33-5.47-1.8-12.64 2.64-16.91m2.42 7.61c3.81 0.03 7.63 0.03 11.45 0.01-0.42-2.71-1.98-6.1-5.25-5.84-3.54-0.61-5.79 2.74-6.2 5.83z"/><path d="m193.24 195.16c2.13-3.37 5.77-5.28 9.75-5.31 0.01 2.14 0.01 4.28 0.02 6.42-3.07-0.36-6.83 0-8.33 3.15-1.96 5.28-0.72 11.05-1.04 16.55-2.21 0.01-4.43 0.03-6.64 0.04v-25.01c2.13 0 4.27 0 6.4 0.01-0.04 1.38-0.1 2.77-0.16 4.15z"/><path d="m131.58 190.99c2.4 0.01 4.81 0.01 7.21 0.06 1.84 6.03 3.59 12.09 5.73 18.01 1.87-6 3.68-12.03 5.5-18.06 2.28 0 4.57 0 6.86 0.01-3.56 10.02-6.92 20.12-10.66 30.08-1.77 4.99-7.81 5.29-12.22 4.49 0-1.73 0-3.47 0.01-5.2 2.68 0.68 6.9 0.34 6.67-3.4-2.75-8.75-6.09-17.32-9.1-25.99z"/></g></svg>'), mimetype="image/svg+xml")
+        case "stellarplayer":
+            return send_file(BytesIO(b'<svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg"><g id="logo"><rect width="28" height="28" rx="6.22222" fill="url(#paint0_linear_87_144)"/><g><g id="&#231;&#188;&#150;&#231;&#187;&#132; 21"><path fill-rule="evenodd" clip-rule="evenodd" d="M10.0555 19.9097C9.0377 19.303 8.03054 18.677 7.04678 18.0162C6.05833 17.3521 4.97744 16.6761 4.15079 15.8125C3.44858 15.0788 3.13926 14.1435 3.52322 13.1783C3.74487 12.6215 4.14919 12.289 4.61728 11.9388C6.16872 10.7778 7.90225 9.84974 9.61487 8.94708C10.8692 8.28582 12.1528 7.679 13.4606 7.1278C14.3868 6.73734 11.3384 20.6746 10.0555 19.9097Z" fill="url(#paint1_linear_87_144)"/><path fill-rule="evenodd" clip-rule="evenodd" d="M20.9028 12.135C20.9408 13.2208 20.9431 14.3074 20.9225 15.3929C20.9033 16.4679 20.8302 17.5411 20.7219 18.6099C20.5583 20.2262 20.6614 22.9355 18.825 23.6847C18.053 23.9997 17.2103 23.8022 16.4753 23.4613C15.6146 23.0621 14.7763 22.5885 13.9444 22.1363C12.6322 21.4229 11.339 20.6746 10.0561 19.9097C9.03831 19.303 20.871 11.2294 20.9028 12.135Z" fill="url(#paint2_linear_87_144)"/><path fill-rule="evenodd" clip-rule="evenodd" d="M20.7208 9.42192C20.8133 10.3242 20.8706 11.2294 20.9024 12.135C20.9404 13.2208 20.9427 14.3075 20.9221 15.3929C20.9029 16.468 7.90248 9.84977 9.6151 8.9471C10.8694 8.28584 12.153 7.67901 13.4608 7.12781C14.3871 6.73735 15.3015 6.31235 16.2645 6.01414C17.0337 5.77602 17.9108 5.49825 18.7327 5.70721C19.6449 5.93901 20.2067 6.7775 20.4448 7.63575C20.6045 8.21022 20.6604 8.83292 20.7208 9.42192Z" fill="url(#paint3_linear_87_144)"/><g filter="url(#filter0_d_87_144)"><path fill-rule="evenodd" clip-rule="evenodd" d="M21.6535 17.9191C20.9196 18.4518 20.1654 18.9553 19.3982 19.4367C18.4782 20.014 17.5397 20.5604 16.5907 21.0865C15.6514 21.6085 14.6868 22.0827 13.7083 22.524C12.2286 23.1916 9.93732 24.6391 8.37016 23.4163C7.71128 22.9022 7.46023 22.0699 7.38705 21.2594C7.30144 20.3104 7.29128 19.3434 7.26592 18.3928C7.22588 16.8933 7.22563 15.3929 7.24483 13.8932C7.26002 12.7033 7.29718 11.5131 7.37613 10.3258C7.45559 9.1328 7.49902 7.85339 7.83203 6.7012C8.11496 5.72241 8.76895 4.98452 9.79586 4.83498C10.3883 4.74885 10.8783 4.93412 11.4155 5.16596C13.1962 5.93435 14.8665 6.97796 16.5045 8.01608C17.7043 8.7763 18.8716 9.58934 20.003 10.4513C20.8043 11.0617 21.6296 11.6445 22.3696 12.3332C22.9606 12.8832 23.6399 13.5074 23.8706 14.3274C24.1268 15.2374 23.683 16.1465 23.06 16.7839C22.6431 17.2107 22.1326 17.5714 21.6535 17.9191Z" fill="white"/></g><path fill-rule="evenodd" clip-rule="evenodd" d="M16.7797 15.7278C16.535 15.9105 16.2837 16.0833 16.0279 16.2484C15.7213 16.4465 15.4084 16.6339 15.0921 16.8144C14.779 16.9935 14.4574 17.1562 14.1313 17.3076C13.6381 17.5366 12.8743 18.0332 12.3519 17.6137C12.1323 17.4373 12.0486 17.1518 12.0242 16.8737C11.9957 16.5481 11.9923 16.2164 11.9838 15.8903C11.9705 15.3759 11.9704 14.8611 11.9768 14.3466C11.9819 13.9384 11.9942 13.5301 12.0206 13.1228C12.047 12.7135 12.0615 12.2746 12.1725 11.8793C12.2668 11.5435 12.4848 11.2904 12.8271 11.2391C13.0246 11.2095 13.1879 11.2731 13.367 11.3526C13.9606 11.6162 14.5174 11.9742 15.0633 12.3304C15.4633 12.5912 15.8524 12.8701 16.2295 13.1658C16.4966 13.3752 16.7717 13.5752 17.0184 13.8114C17.2154 14.0001 17.4418 14.2143 17.5187 14.4956C17.6041 14.8078 17.4562 15.1197 17.2485 15.3383C17.1096 15.4847 16.9394 15.6085 16.7797 15.7278Z" fill="url(#paint4_linear_87_144)"/></g></g></g><defs><linearGradient id="paint0_linear_87_144" x1="12.0694" y1="45.9458" x2="43.1922" y2="15.5614" gradientUnits="userSpaceOnUse"><stop stop-color="#8E3BEB"/><stop offset="0.358999" stop-color="#4B55E8"/><stop offset="0.684563" stop-color="#3861E7"/><stop offset="1" stop-color="#3E93FF"/></linearGradient><linearGradient id="paint1_linear_87_144" x1="0.881796" y1="20.3806" x2="10.6665" y2="22.3946" gradientUnits="userSpaceOnUse"><stop stop-color="white"/><stop offset="1" stop-color="white" stop-opacity="0.0315158"/><stop offset="1" stop-color="white" stop-opacity="0.01"/></linearGradient><linearGradient id="paint2_linear_87_144" x1="23.3468" y1="21.5116" x2="18.183" y2="15.0328" gradientUnits="userSpaceOnUse"><stop stop-color="white"/><stop offset="1" stop-color="white" stop-opacity="0.01"/></linearGradient><linearGradient id="paint3_linear_87_144" x1="14.332" y1="1.72647" x2="9.79149" y2="9.03326" gradientUnits="userSpaceOnUse"><stop stop-color="white"/><stop offset="1" stop-color="white" stop-opacity="0.01"/></linearGradient><linearGradient id="paint4_linear_87_144" x1="15.2557" y1="9.29257" x2="9.39501" y2="13.0592" gradientUnits="userSpaceOnUse"><stop stop-color="#386CEB"/><stop offset="1" stop-color="#3A40DB"/></linearGradient></defs></svg>'), mimetype="image/svg+xml")
         case "vlc":
             return send_file(BytesIO(b'<svg height="512px" style="enable-background:new 0 0 512 512;" version="1.1" viewBox="0 0 512 512" width="512px" xml:space="preserve" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><g id="_x31_2-vlc_x2C__media_x2C__player"><g><g><g><path d="M478.104,458.638l-59.65-119.619c-2.535-5.058-7.691-8.255-13.326-8.255H106.872 c-5.635,0-10.791,3.197-13.326,8.255L33.887,458.638c-2.325,4.637-2.053,10.141,0.66,14.538 c2.715,4.396,7.516,7.118,12.676,7.118h417.554c5.16,0,9.959-2.694,12.707-7.087 C480.193,468.778,480.404,463.307,478.104,458.638L478.104,458.638z M478.104,458.638" style="fill:#FF9800;"/></g><path d="M375.297,345.718c0,43.659-107.068,44.858-119.297,44.858c-12.23,0-119.302-1.199-119.302-44.858 c0-1.197,0.301-2.691,0.6-3.887l20.579-75.665c14.61,11.369,53.086,19.739,98.124,19.739s83.512-8.37,98.123-19.739 l20.578,75.665C375.002,343.026,375.297,344.521,375.297,345.718L375.297,345.718z M375.297,345.718" style="fill:#FCFCFC;"/><path d="M332.35,186.62c-18.787,5.975-46.227,9.565-76.35,9.565s-57.563-3.591-76.351-9.565l22.964-84.34 c15.506,2.69,34,4.187,53.387,4.187s37.879-1.496,53.387-4.187L332.35,186.62z M332.35,186.62" style="fill:#FCFCFC;"/><path d="M256,106.467c-19.387,0-37.881-1.496-53.387-4.187l10.439-37.982 c5.666-20.03,22.668-32.592,42.947-32.592s37.279,12.562,42.945,32.297l10.441,38.277 C293.879,104.971,275.387,106.467,256,106.467L256,106.467z M256,106.467" style="fill:#FF9800;"/><path d="M354.123,266.166c-14.611,11.369-53.086,19.739-98.123,19.739s-83.513-8.37-98.124-19.739 l21.772-79.546c18.789,5.975,46.228,9.565,76.351,9.565s57.563-3.591,76.35-9.565L354.123,266.166z M354.123,266.166" style="fill:#FF9800;"/></g></g></g><g id="Layer_1"/></svg>'), mimetype="image/svg+xml")
         case "artplayer":
@@ -1893,6 +2017,8 @@ def index():
             return send_file(BytesIO(b'<svg width="300" height="300" xmlns="http://www.w3.org/2000/svg" clip-rule="evenodd" version="1.1"><g><ellipse filter="url(#svg_1_blur)" stroke="#cccccc" fill="#fcfefe" cx="151" cy="152.33333" id="svg_1" rx="149.5" ry="150"/><ellipse fill="#1db2fd" stroke="#000" cx="151" cy="152.33333" id="svg_4" rx="130" ry="130" stroke-width="0"/><path transform="rotate(90 168 152.333)" fill="#ffffff" d="m90,217.33333l78.00001,-130l78.00001,130l-156.00001,0l-0.00001,0z" id="svg_7" stroke="#000" stroke-width="0"/></g><defs><filter height="200%" width="200%" y="-50%" x="-50%" id="svg_1_blur"><feGaussianBlur stdDeviation="1" in="SourceGraphic"/></filter></defs></svg>'), mimetype="image/svg+xml")
         case "close":
             return send_file(BytesIO(b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50" width="100px" height="100px"><path d="M 9.15625 6.3125 L 6.3125 9.15625 L 22.15625 25 L 6.21875 40.96875 L 9.03125 43.78125 L 25 27.84375 L 40.9375 43.78125 L 43.78125 40.9375 L 27.84375 25 L 43.6875 9.15625 L 40.84375 6.3125 L 25 22.15625 Z" fill="#FFFFFF"/></svg>'), mimetype="image/svg+xml")
+        case "subtitle":
+            return send_file(BytesIO(b'<svg xmlns="http://www.w3.org/2000/svg" height="24" width="24" viewBox="0 0 48 48"><path d="M0 0h48v48H0z" fill="none"/><path fill="#ffffff" d="M40 8H8c-2.21 0-4 1.79-4 4v24c0 2.21 1.79 4 4 4h32c2.21 0 4-1.79 4-4V12c0-2.21-1.79-4-4-4zM8 24h8v4H8v-4zm20 12H8v-4h20v4zm12 0h-8v-4h8v4zm0-8H20v-4h20v4z"/></svg>'), mimetype="image/svg+xml")
         case _:
             return query("/")
 
@@ -1929,6 +2055,10 @@ def query(path: str = ""):
                 return get_list(path)
             case "url":
                 return get_url(path)
+            case "m3u8":
+                return get_m3u8(path)
+            case "sub":
+                return get_subtitles(path)
             case _:
                 return get_page(path, as_file=method=="file")
 
@@ -1976,3 +2106,6 @@ if __name__ == "__main__":
 # TODO: 使用115接口保存播放进度
 
 # TODO: 在线播放：播放列表、字幕列表（自动执行绑定视频）、多码率列表
+
+# TODO: 增加 m3u8 接口，今天就要
+

@@ -1154,6 +1154,9 @@ class P115Client:
     ) -> Self | Coroutine[Any, Any, Self]:
         """自动登录某个设备（同一个设备最多同时一个在线，即最近登录的那个）
 
+        .. hint::
+            即使一个设备被新登录的顶掉了，它的 cookies 在某些接口上，依然可用，主要是在 webapi、aps、life 等子域名下，但 proapi 好像不行
+
         :param app: 要登录的 app，如果为 None，则用当前登录设备，如果无当前登录设备，则报错
         :param replace: 替换当前 client 对象的 cookie，否则返回新的 client 对象
         :param async_: 是否异步
@@ -6009,7 +6012,7 @@ class P115Client:
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
-    ) -> bytes:
+    ) -> dict:
         ...
     @overload
     def fs_video_app(
@@ -6020,7 +6023,7 @@ class P115Client:
         *, 
         async_: Literal[True], 
         **request_kwargs, 
-    ) -> Coroutine[Any, Any, bytes]:
+    ) -> Coroutine[Any, Any, dict]:
         ...
     def fs_video_app(
         self, 
@@ -6030,7 +6033,7 @@ class P115Client:
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
-    ) -> bytes | Coroutine[Any, Any, bytes]:
+    ) -> dict | Coroutine[Any, Any, dict]:
         """获取视频信息和 m3u8 链接列表
 
         POST https://proapi.115.com/android/2.0/video/play
