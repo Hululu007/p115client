@@ -18,7 +18,7 @@ from hashlib import sha1
 from http.cookiejar import Cookie, CookieJar
 from http.cookies import Morsel
 from inspect import isawaitable
-from itertools import count, cycle, product
+from itertools import count, cycle, product, repeat
 from operator import itemgetter
 from os import fsdecode, fstat, isatty, stat, PathLike, path as ospath
 from pathlib import Path, PurePath
@@ -70,18 +70,21 @@ CRE_SHARE_LINK_search1: Final = re_compile(r"(?:/s/|share\.115\.com/)(?P<share_c
 CRE_SHARE_LINK_search2: Final = re_compile(r"(?P<share_code>[a-z0-9]+)-(?P<receive_code>[a-z0-9]{4})").search
 CRE_115_DOMAIN_match: Final = re_compile("https?://(?:[^.]+\.)*115.com").match
 ED2K_NAME_TRANSTAB: Final = dict(zip(b"/|", ("%2F", "%7C")))
-WEBAPI_SUB_ROUTERS: Final = ("/category", "/files", "/history", "/label", "/movies", "/offine", "/photo", "/rb", "/share", "/user", "/usershare")
 
 _httpx_request = None
 
 
-def make_webapi_prefix_generator(n: int = 1, /) -> Callable[[], str]:
+def make_webapi_prefix_generator(
+    n: int = 1, 
+    /, 
+    seq=("/category", "/files", "/history", "/label", "/movies", "/offine", "/photo", "/rb", "/share", "/user", "/usershare"), 
+) -> Callable[[], str]:
     if n == 0:
         return cycle(("",)).__next__
     def gen(n: int = 1, /):
         yield ""
         if n:
-            yield from WEBAPI_SUB_ROUTERS
+            yield from seq
             if n == 1:
                 return
             if n >= 2:
@@ -89,7 +92,7 @@ def make_webapi_prefix_generator(n: int = 1, /) -> Callable[[], str]:
             else:
                 it = count(2)
             for i in it:
-                for t in product(*((WEBAPI_SUB_ROUTERS,)*i)):
+                for t in product(*repeat(seq, i)):
                     yield "".join(t)
     if n < 0:
         return gen().__next__
@@ -99,8 +102,6 @@ def make_webapi_prefix_generator(n: int = 1, /) -> Callable[[], str]:
         while True:
             yield from gen(n)
     return loop().__next__
-
-get_prefix = make_webapi_prefix_generator(4)
 
 
 def complete_api(path: str, /, base: str = "", base_url: bool | str = False) -> str:
@@ -118,8 +119,17 @@ def complete_api(path: str, /, base: str = "", base_url: bool | str = False) -> 
         return f"https://{base}115.com{path}"
 
 
-def complete_webapi(path: str, /, base_url: bool | str = False) -> str:
-    return complete_api(get_prefix() + path, base="webapi", base_url=base_url)
+def complete_webapi(
+    path: str, 
+    /, 
+    base_url: bool | str = False, 
+    get_prefix: None | Callable[[], str] = None, #make_webapi_prefix_generator(4), 
+) -> str:
+    if get_prefix is not None:
+        if path and not path.startswith("/"):
+            path = "/" + path
+        path = get_prefix() + path
+    return complete_api(path, base="webapi", base_url=base_url)
 
 
 def json_loads(content: bytes, /):
@@ -595,22 +605,28 @@ class P115Client:
     def session(self, /):
         """同步请求的 session 对象
         """
-        from httpx import Client, HTTPTransport
-        ns = self.__dict__
-        session = Client(transport=HTTPTransport(retries=5), verify=False)
-        session._headers = self.headers # type: ignore
-        session._cookies = self.cookies
+        from httpx import Client, HTTPTransport, Limits
+        session = Client(
+            limits=Limits(max_connections=256, max_keepalive_connections=64, keepalive_expiry=10), 
+            transport=HTTPTransport(retries=5), 
+            verify=False, 
+        )
+        setattr(session, "_headers", self.headers)
+        setattr(session, "_cookies", self.cookies)
         return session
 
     @cached_property
     def async_session(self, /):
         """异步请求的 session 对象
         """
-        from httpx import AsyncClient, AsyncHTTPTransport
-        ns = self.__dict__
-        session = AsyncClient(transport=AsyncHTTPTransport(retries=5), verify=False)
-        session._headers = self.headers # type: ignore
-        session._cookies = self.cookies
+        from httpx import AsyncClient, AsyncHTTPTransport, Limits
+        session = AsyncClient(
+            limits=Limits(max_connections=256, max_keepalive_connections=64, keepalive_expiry=10), 
+            transport=AsyncHTTPTransport(retries=5), 
+            verify=False, 
+        )
+        setattr(session, "_headers", self.headers)
+        setattr(session, "_cookies", self.cookies)
         return session
 
     @property
@@ -646,7 +662,6 @@ class P115Client:
             cookies = cookies_str_to_dict(cookies)
             if not cookies:
                 return
-        ns = self.__dict__
         set_cookie = cookiejar.set_cookie
         clear_cookie = cookiejar.clear
         cookie: Mapping | Cookie | Morsel
@@ -668,9 +683,9 @@ class P115Client:
             for cookie in cookies:
                 set_cookie(create_cookie("", cookie))
         user_id = self.user_id
-        ns.pop("user_id", None)
+        self.__dict__.pop("user_id", None)
         if self.user_id != user_id:
-            ns.pop("user_key", None)
+            self.__dict__.pop("user_key", None)
         cookies_new = self.cookies_str
         if cookies_old != cookies_new:
             self._write_cookies(self.cookies_str)
@@ -745,8 +760,7 @@ class P115Client:
         /, 
         encoding: str = "latin-1", 
     ):
-        cookies_path = self.__dict__.get("cookies_path")
-        if not cookies_path or self.cookies_str == cookies:
+        if not (cookies_path := self.__dict__.get("cookies_path")):
             return
         cookies_bytes = bytes(cookies, encoding)
         with cookies_path.open("wb") as f:
@@ -759,9 +773,8 @@ class P115Client:
     def close(self, /) -> None:
         """删除 session 和 async_session 属性，如果它们未被引用，则应该会被自动清理
         """
-        ns = self.__dict__
-        ns.pop("session", None)
-        ns.pop("async_session", None)
+        self.__dict__.pop("session", None)
+        self.__dict__.pop("async_session", None)
 
     @overload
     def login(
@@ -1071,7 +1084,8 @@ class P115Client:
                         raise LoginError(errno.EIO, f"qrcode: aborted with {resp!r}")
             if app:
                 return (yield cls.login_qrcode_scan_result(
-                    {"account": qrcode_token["uid"], "app": app}, 
+                    qrcode_token["uid"], 
+                    app, 
                     async_=async_, 
                     **request_kwargs, 
                 ))
@@ -1226,7 +1240,8 @@ class P115Client:
                     raise LoginError(errno.EIO, "can't determine app")
             uid = yield self.login_without_app(async_=async_, **request_kwargs)
             cookies = check_response((yield self.login_qrcode_scan_result(
-                {"account": uid, "app": app}, 
+                uid, 
+                app, 
                 async_=async_, 
                 **request_kwargs, 
             )))["data"]["cookie"]
@@ -6811,8 +6826,8 @@ class P115Client:
     @overload
     @staticmethod
     def login_qrcode_scan_result(
-        payload: int | str | dict, 
-        /, 
+        uid: str, 
+        app: str = "qandroid", 
         request: None | Callable = None, 
         *, 
         async_: Literal[False] = False, 
@@ -6822,8 +6837,8 @@ class P115Client:
     @overload
     @staticmethod
     def login_qrcode_scan_result(
-        payload: int | str | dict, 
-        /, 
+        uid: str, 
+        app: str = "qandroid", 
         request: None | Callable = None, 
         *, 
         async_: Literal[True], 
@@ -6832,8 +6847,8 @@ class P115Client:
         ...
     @staticmethod
     def login_qrcode_scan_result(
-        payload: int | str | dict, 
-        /, 
+        uid: str, 
+        app: str = "qandroid", 
         request: None | Callable = None, 
         *, 
         async_: Literal[False, True] = False, 
@@ -6843,18 +6858,18 @@ class P115Client:
 
         POST https://passportapi.115.com/app/1.0/{app}/1.0/login/qrcode/
 
-        :payload:
-            - account: int | str
-            - app: str = "qandroid"
+        :param uid: 扫码的 uid
+        :param app: 绑定的 app
+        :param request: 自定义请求函数
+        :param async_: 是否异步
+        :param request_kwargs: 其它请求参数
+
+        :return: 接口返回值
         """
-        if isinstance(payload, (int, str)):
-            payload = {"app": "qandroid", "account": payload}
-        else:
-            payload = {"app": "qandroid", **payload}
-        app = payload["app"]
         if app == "desktop":
             app = "web"
         api = f"https://passportapi.115.com/app/1.0/{app}/1.0/login/qrcode/"
+        payload = {"account": uid}
         request_kwargs.setdefault("parse", default_parse)
         if request is None:
             return get_default_request()(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
