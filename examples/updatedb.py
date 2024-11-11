@@ -85,7 +85,7 @@ logger.addHandler(handler)
 _get_cookies = None
 
 
-def generate_cookies(
+def generate_cookies_factory(
     client: P115Client, 
     app: None | str = None, 
 ) -> Callable[[], str]:
@@ -120,30 +120,29 @@ def generate_cookies(
     return call
 
 
-# TODO: 如果一个 cookies 已经返回超过一定秒数，则把它取出，而不是创建信息
 def cookies_pool(
     client: P115Client, 
     app: None | str = None, 
-    min_size: int = 32, 
+    cooldown_time: int | float = 3, 
     lock: bool | LockType = True, 
 ) -> Callable[[], tuple[str, Callable[[], None]]]:
     """cookies 池
 
     :param client: 115 网盘客户端对象
     :param app: 自动扫码后绑定的 app
-    :param min_size: cookies 池最小大小
+    :param cooldown_time: cookies 的冷却时间
     :param lock: 多线程锁，如果不需要锁，传入 False
 
     :return: 返回一个函数，调用后返回一个元组，包含 cookies 和 一个调用以在完成后把 cookies 返还池中
     """
-    get_cookies = generate_cookies(client, app)
+    generate_cookies = generate_cookies_factory(client, app)
     dq: deque[tuple[str, float]] = deque()
     push, pop = dq.append, dq.popleft
     def call():
-        if dq and dq[0][1] + 3 < perf_counter() or len(dq) >= min_size:
+        if dq and dq[0][1] + cooldown_time < perf_counter():
             cookies = pop()[0]
         else:
-            cookies = get_cookies()
+            cookies = generate_cookies()
         return cookies, lambda: push((cookies, perf_counter()))
     if lock is False:
         return call
