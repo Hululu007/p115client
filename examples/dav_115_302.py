@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 3, 7)
+__version__ = (0, 3, 8)
 __requirements__ = ["cachetools", "flask", "Flask-Compress", "httpagentparser", "orjson", "path_predicate", "pysubs2", "python-115", "python-encode_uri", "urllib3_request", "werkzeug", "wsgidav"]
 __doc__ = """\
     🕸️ 获取你的 115 网盘账号上文件信息和下载链接 🕷️
@@ -704,7 +704,8 @@ document.addEventListener('DOMContentLoaded', function () {
           },
         ], 
         moreVideoAttr: {
-          crossOrigin: 'anonymous', 
+          preload: 'none', 
+          playsinline: true, 
         }, 
         plugins: [
           {%- if args.load_libass %}
@@ -772,7 +773,7 @@ document.addEventListener('DOMContentLoaded', function () {
       draggableWindow.style.left = left + 'px';
       draggableWindow.style.top = top + 'px';
       const video = playerContainer.innerHTML = `
-      <video id="player" controls crossorigin>
+      <video id="player" controls playsinline>
         <source src="${anchor.href}" />
       </video>`
       player = new Plyr("#player", {autoplay: true});
