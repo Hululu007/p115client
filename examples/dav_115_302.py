@@ -5,7 +5,7 @@ from __future__ import annotations
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __version__ = (0, 3, 7)
-__requirements__ = ["cachetools", "flask", "Flask-Compress", "httpagentparser", "orjson", "path_predicate", "python-115", "python-encode_uri", "urllib3_request", "werkzeug", "wsgidav"]
+__requirements__ = ["cachetools", "flask", "Flask-Compress", "httpagentparser", "orjson", "path_predicate", "pysubs2", "python-115", "python-encode_uri", "urllib3_request", "werkzeug", "wsgidav"]
 __doc__ = """\
     🕸️ 获取你的 115 网盘账号上文件信息和下载链接 🕷️
 
@@ -149,6 +149,7 @@ parser.add_argument("-fs", "--fast-strm", action="store_true", help="""快速实
         path.suffix.lower() in (".nfo", ".ass", ".ssa", ".srt", ".idx", ".sub", ".txt", ".vtt", ".smi")
     )'
 """)
+parser.add_argument("-ass", "--load-libass", action="store_true", help="加载 libass.js，实现 ass/ssa 字幕特效")
 
 if __name__ == "__main__":
     parser.add_argument("-H", "--host", default="0.0.0.0", help="ip 或 hostname，默认值：'0.0.0.0'")
@@ -188,6 +189,7 @@ try:
     from p115.tool import type_of_attr
     from path_predicate import make_predicate
     from posixpatht import escape as escape_name, path_is_dir_form
+    from pysubs2 import SSAFile
     from urllib3.poolmanager import PoolManager
     from urllib3_request import request as urllib3_request
     from werkzeug.middleware.dispatcher import DispatcherMiddleware
@@ -210,6 +212,7 @@ except ImportError:
     from p115.tool import type_of_attr
     from path_predicate import make_predicate
     from posixpatht import escape as escape_name, path_is_dir_form
+    from pysubs2 import SSAFile # type: ignore
     from urllib3.poolmanager import PoolManager
     from urllib3_request import request as urllib3_request
     from werkzeug.middleware.dispatcher import DispatcherMiddleware
@@ -230,7 +233,7 @@ from typing import cast
 from urllib.parse import unquote, urlsplit
 
 
-urlopen = partial(urllib3_request, pool=PoolManager(num_pools=128))
+urlopen = partial(urllib3_request, pool=PoolManager(num_pools=256))
 
 origin = args.origin
 root = args.root
@@ -299,7 +302,7 @@ else:
 flask_app = Flask(__name__)
 Compress(flask_app)
 setattr(flask_app.json, "ensure_ascii", False)
-setattr(flask_app, "jinja_env", Environment(loader=DictLoader({
+env = Environment(loader=DictLoader({
     "base_template": """\
 <!DOCTYPE html>
 <html>
@@ -476,6 +479,9 @@ setattr(flask_app, "jinja_env", Environment(loader=DictLoader({
   <script src="https://cdn.jsdmirror.com/npm/hls.js@latest/dist/hls.min.js"></script>
   <script src="https://cdn.jsdmirror.com/npm/plyr@latest/dist/plyr.min.js"></script>
   <link href="https://cdn.jsdmirror.com/npm/plyr@latest/dist/plyr.min.css" rel="stylesheet"/>
+  {%- if args.load_libass %}
+  <script src="https://artplayer.org/uncompiled/artplayer-plugin-libass/index.js"></script>
+  {%- endif %}
 </head>
 <body>
   <div class="draggable-resizable-window">
@@ -576,13 +582,33 @@ document.addEventListener('DOMContentLoaded', function () {
           if (json instanceof Object && json.list.length) {
             for (const {title, url, type, sha1} of json.list) {
               if (!sha1)
-                subtitles.push({html: `${title} ${type}`, url, type});
+                subtitles.push({
+                  html: `${title} ${type}`, 
+                  {%- if args.load_libass %}
+                  url: type === "srt" ? `/a.ass?method=srt2ass&url=${encodeURIComponent(url)}` : url, 
+                  type: type === "srt" ? "ass" : type, 
+                  {%- else %}
+                  url, 
+                  type, 
+                  {%- endif %}
+                  escape: false, 
+                });
               else if (title.startsWith(prefix)) {
-                subtitles.push({html: title.slice(prefix.length + 1), url, type});
-                if (!subtitle) subtitle = url;
+                subtitles.push({
+                  html: title.slice(prefix.length + 1), 
+                  {%- if args.load_libass %}
+                  url: type === "srt" ? `/a.ass?method=srt2ass&url=${encodeURIComponent(url)}` : `/a.${type}?method=redirect&url=${encodeURIComponent(url)}`, 
+                  type: type === "srt" ? "ass" : type, 
+                  {%- else %}
+                  url, 
+                  type, 
+                  {%- endif %}
+                  escape: false, 
+                });
+                if (!subtitle) subtitle = subtitles.at(-1);
               }
             }
-            if (!subtitle) subtitle = subtitles[0].url;
+            if (!subtitle) subtitle = subtitles[0];
           }
         } catch (e) {
           console.error(`can't get multi subtitles for ${attr.name}: ${e.message}`);
@@ -605,7 +631,7 @@ document.addEventListener('DOMContentLoaded', function () {
         pip: true, 
         playbackRate: true, 
         screenshot: true, 
-        subtitle: {url: subtitle}, 
+        subtitle, 
         subtitleOffset: true, 
         setting: true, 
         settings: [{
@@ -626,15 +652,23 @@ document.addEventListener('DOMContentLoaded', function () {
               tooltip: 'Show',
               switch: true,
               onSwitch: function (item) {
-                  item.tooltip = item.switch ? 'Hide' : 'Show';
-                  player.subtitle.show = !item.switch;
-                  return !item.switch;
+                item.tooltip = item.switch ? 'Hide' : 'Show';
+                player.subtitle.show = !item.switch;
+                return !item.switch;
               },
             }, 
             ...subtitles,
           ],
           onSelect: function (item) {
-            player.subtitle.url = item.url;
+            {%- if args.load_libass %}
+            player.plugins.artplayerPluginLibass.switch(item.url);
+            {%- else %}
+            player.subtitle.init({
+              ...player.subtitle.option, 
+              style: {}, 
+              ...item, 
+            });
+            {%- endif %}
             return item.html;
           },
         }],
@@ -672,7 +706,17 @@ document.addEventListener('DOMContentLoaded', function () {
         moreVideoAttr: {
           crossOrigin: 'anonymous', 
         }, 
+        plugins: [
+          {%- if args.load_libass %}
+          artplayerPluginLibass({
+            debug: false, 
+            wasmUrl: 'https://unpkg.com/libass-wasm@4.1.0/dist/js/subtitles-octopus-worker.wasm', 
+            fallbackFont: 'https://artplayer.org/assets/misc/SourceHanSansCN-Bold.woff2', 
+          }),
+          {%- endif %}
+        ],
       });
+      window.player = player;
       playerContainer.addEventListener('mouseenter', () => {
         closeButton.style.opacity = 1;
       });
@@ -712,7 +756,6 @@ document.addEventListener('DOMContentLoaded', function () {
       });
     });
   });
-
   document.querySelectorAll('.play-with-plyr').forEach(function(anchor) {
     anchor.addEventListener('click', function (event) {
       event.preventDefault();
@@ -978,7 +1021,9 @@ window.addEventListener("load", function () {
   </script>
 </body>
 </html>"""
-})))
+}))
+setattr(flask_app, "jinja_env", env)
+env.globals['args'] = args
 
 
 class DavPathBase:
@@ -1307,6 +1352,10 @@ def redirect_exception_response(func: Callable, /) -> Callable:
                 flask_app.logger.exception("can't make response")
                 return str(exc), 503 # Service Unavailable
     return update_wrapper(wrapper, func)
+
+
+def srt2ass(url, /):
+    return SSAFile.from_string(urlopen(url).read().decode("utf-8"), format_="srt").to_string("ass")
 
 
 def list_shares() -> list[dict]:
@@ -2028,6 +2077,17 @@ def index():
 def query(path: str = ""):
     get_arg = request.args.get
     method = get_arg("method")
+    if method in ("srt2ass", "download", "redirect"):
+        url = get_arg("url")
+        if not url:
+            return "bad url", 400
+        match method:
+            case "srt2ass":
+                return send_file(BytesIO(srt2ass(unquote(url)).encode("utf-8")), "application/x-ass")
+            case "download":
+                return send_file(urlopen(url), "application/octent-stream")
+            case "redirect":
+                return redirect(url)
     path = path.lstrip("/")
     if path == "<share" or path.startswith("<share/") or get_arg("share_code"):
         share_code = ""
@@ -2106,4 +2166,4 @@ if __name__ == "__main__":
 # TODO: 使用115接口保存播放进度
 
 # TODO: 在线播放：播放列表、字幕列表（自动执行绑定视频）、多码率列表
-
+# TODO: 支持自定义转换规则，把 srt 转换为 ass 时，添加样式和字体
