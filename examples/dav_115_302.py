@@ -628,6 +628,7 @@ document.addEventListener('DOMContentLoaded', function () {
         fullscreenWeb: true, 
         lock: true, 
         miniProgressBar: true, 
+        muted: false, 
         pip: true, 
         playbackRate: true, 
         screenshot: true, 
@@ -704,6 +705,7 @@ document.addEventListener('DOMContentLoaded', function () {
           },
         ], 
         moreVideoAttr: {
+          [window.location.hostname == "localhost" ? "crossOrigin" : ""]: "anonymous", 
           preload: 'none', 
           playsinline: true, 
         }, 
@@ -773,7 +775,7 @@ document.addEventListener('DOMContentLoaded', function () {
       draggableWindow.style.left = left + 'px';
       draggableWindow.style.top = top + 'px';
       const video = playerContainer.innerHTML = `
-      <video id="player" controls playsinline>
+      <video id="player" controls crossorigin playsinline>
         <source src="${anchor.href}" />
       </video>`
       player = new Plyr("#player", {autoplay: true});
@@ -1657,7 +1659,7 @@ def get_url(path: str = "", /, pickcode: str = "") -> dict | Response:
     user_agent = request.headers.get("User-Agent", "")
     bytes_range = request.headers.get("Range", "")
     url: None | P115URL
-    if bytes_range and not user_agent.startswith(("VLC/", "OPlayer/")):
+    if bytes_range and not user_agent.lower().startswith(("vlc/", "oplayer/", "lavf/")):
         remote_addr = request.remote_addr or ""
         cooldown_key = (pickcode, remote_addr, user_agent, bytes_range)
         if cooldown_key in URL_COOLDOWN:
@@ -1705,7 +1707,7 @@ def get_share_url(path: str = "", /, share_code: str = "", file_id: int | str = 
     share_code = fs.share_code
     receive_code = fs.receive_code
     url: None | P115URL
-    if bytes_range and not user_agent.startswith(("VLC/", "OPlayer/")):
+    if bytes_range and not user_agent.lower().startswith(("vlc/", "oplayer/", "lavf/")):
         remote_addr = request.remote_addr or ""
         cooldown_key = (share_code, receive_code, file_id, remote_addr, user_agent, bytes_range)
         if cooldown_key in URL_COOLDOWN:
@@ -2167,4 +2169,5 @@ if __name__ == "__main__":
 # TODO: 使用115接口保存播放进度
 
 # TODO: 在线播放：播放列表、字幕列表（自动执行绑定视频）、多码率列表
-# TODO: 支持自定义转换规则，把 srt 转换为 ass 时，添加样式和字体
+# TODO: 支持自定义转换规则，把 srt 转换为 ass 时，添加样式和字体，或者添加一个在线的样式选择框，就像 115
+# TODO: 直接用 m3u8 实现播放列表和各种附加，这样一切都是流媒体

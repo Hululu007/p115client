@@ -624,7 +624,7 @@ def make_application(
             case _:
                 user_agent = (request.get_first_header(b"User-agent") or b"").decode("latin-1")
                 bytes_range = (request.get_first_header(b"Range") or b"").decode("latin-1")
-                if bytes_range and not user_agent.startswith(("VLC/", "OPlayer/")):
+                if bytes_range and not user_agent.lower().startswith(("vlc/", "oplayer/", "lavf/")):
                     remote_addr = request.original_client_ip
                     cooldown_key = (pickcode, remote_addr, user_agent, bytes_range)
                     if cooldown_key in URL_COOLDOWN:
