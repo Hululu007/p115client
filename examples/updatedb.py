@@ -2,7 +2,7 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 0, 11)
+__version__ = (0, 0, 12)
 __all__ = ["updatedb", "updatedb_one", "updatedb_tree"]
 __doc__ = "遍历 115 网盘的目录信息导出到数据库"
 __requirements__ = ["p115client", "posixpatht"]
@@ -22,12 +22,7 @@ if __name__ == "__main__":
     3. 形如 "根目录 > 名字 > 名字 > ..." 的路径，来自点击文件的【显示属性】，在【位置】这部分看到的路径，本程序会尝试获取对应的 id
 """)
     parser.add_argument("-c", "--cookies", help="115 登录 cookies，优先级高于 -cp/--cookies-path")
-    parser.add_argument("-cp", "--cookies-path", help="""\
-存储 115 登录 cookies 的文本文件的路径，如果缺失，则从 115-cookies.txt 文件中获取，此文件可在如下目录之一: 
-    1. 当前工作目录
-    2. 用户根目录
-    3. 此脚本所在目录
-如果都找不到，则默认使用 '2. 用户根目录，此时则需要扫码登录'""")
+    parser.add_argument("-cp", "--cookies-path", default="", help="cookies 文件保存路径，默认为当前工作目录下的 115-cookies.txt")
     parser.add_argument("-f", "--dbfile", default="", help="sqlite 数据库文件路径，默认为在当前工作目录下的 f'115-{user_id}.db'")
     parser.add_argument("-cl", "--clean", action="store_true", help="任务完成后清理数据库，以节约空间")
     parser.add_argument("-st", "--auto-splitting-threshold", type=int, default=100_000, help="自动拆分的文件数阈值，大于此值时，自动进行拆分，如果 = 0，则总是拆分，如果 < 0，则总是不拆分，默认值 100,000（10 万）")
@@ -42,9 +37,10 @@ if __name__ == "__main__":
         raise SystemExit(0)
 
 try:
-    from httpx import ReadTimeout
+    from httpx import HTTPStatusError, ReadTimeout
     from p115client import check_response, P115Client
-    from p115client.exception import BusyOSError
+    from p115client.const import APP_TO_SSOENT
+    from p115client.exception import AuthenticationError, BusyOSError
     from p115client.tool.edit import update_desc, update_star
     from p115client.tool.iterdir import ensure_attr_path, filter_na_ids, get_path_to_cid, iter_stared_dirs, DirNode, DirNodeTuple
     from posixpatht import escape, joins, normpath
@@ -52,9 +48,10 @@ except ImportError:
     from sys import executable
     from subprocess import run
     run([executable, "-m", "pip", "install", "-U", *__requirements__], check=True)
-    from httpx import ReadTimeout
+    from httpx import HTTPStatusError, ReadTimeout
     from p115client import check_response, P115Client
-    from p115client.exception import BusyOSError
+    from p115client.const import APP_TO_SSOENT
+    from p115client.exception import AuthenticationError, BusyOSError
     from p115client.tool.edit import update_desc, update_star
     from p115client.tool.iterdir import ensure_attr_path, filter_na_ids, get_path_to_cid, iter_stared_dirs, DirNode, DirNodeTuple
     from posixpatht import escape, joins, normpath
@@ -62,14 +59,14 @@ except ImportError:
 import logging
 
 from collections import deque
-from collections.abc import Collection, Iterator, Iterable, Mapping, Sequence, Set
+from collections.abc import Callable, Collection, Iterator, Iterable, Mapping, Sequence, Set
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from errno import EBUSY, ENOENT, ENOTDIR
-from functools import partial
 from itertools import takewhile
 from math import isnan, isinf
 from sqlite3 import connect, Connection, Cursor
+from _thread import allocate_lock, LockType
 from time import perf_counter
 from typing import cast, Final
 
@@ -84,6 +81,115 @@ handler.setFormatter(logging.Formatter(
     "\x1b[0m\x1b[1;35m%(name)s\x1b[0m \x1b[5;31m➜\x1b[0m %(message)s"
 ))
 logger.addHandler(handler)
+_get_cookies = None
+
+
+def generate_cookies(
+    client: P115Client, 
+    app: None | str = None, 
+) -> Callable[[], str]:
+    """利用一个已登录设备的 cookies，产生另一个设备的若干 cookies
+
+    :param client: 115 网盘客户端对象
+    :param app: 自动扫码后绑定的 app
+
+    :return: 函数，调用以返回一个 cookies
+    """
+    if app:
+        if APP_TO_SSOENT.get(app) == client.login_ssoent:
+            raise ValueError("may cause login device conflicts")
+    else:
+        app = client.login_app()
+        if app == "tv":
+            app = "harmony"
+        else:
+            app = "tv"
+    refresh_token = client.login_without_app()
+    def call() -> str:
+        nonlocal refresh_token
+        while True:
+            try:
+                resp = client.login_qrcode_scan_result(refresh_token, app, timeout=3)
+            except ReadTimeout:
+                continue
+            if not resp["state"] and resp.get("errno") == 40101017:
+                refresh_token = client.login_without_app()
+                continue
+            return "; ".join(f"{k}={v}" for k, v in resp["data"]["cookie"].items())
+    return call
+
+
+# TODO: 如果一个 cookies 已经返回超过一定秒数，则把它取出，而不是创建信息
+def cookies_pool(
+    client: P115Client, 
+    app: None | str = None, 
+    min_size: int = 32, 
+    lock: bool | LockType = True, 
+) -> Callable[[], tuple[str, Callable[[], None]]]:
+    """cookies 池
+
+    :param client: 115 网盘客户端对象
+    :param app: 自动扫码后绑定的 app
+    :param min_size: cookies 池最小大小
+    :param lock: 多线程锁，如果不需要锁，传入 False
+
+    :return: 返回一个函数，调用后返回一个元组，包含 cookies 和 一个调用以在完成后把 cookies 返还池中
+    """
+    get_cookies = generate_cookies(client, app)
+    dq: deque[tuple[str, float]] = deque()
+    push, pop = dq.append, dq.popleft
+    def call():
+        if dq and dq[0][1] + 3 < perf_counter() or len(dq) >= min_size:
+            cookies = pop()[0]
+        else:
+            cookies = get_cookies()
+        return cookies, lambda: push((cookies, perf_counter()))
+    if lock is False:
+        return call
+    if lock is True:
+        lock = allocate_lock()
+    def locked_call():
+        with lock:
+            return call()
+    return locked_call
+
+
+def get_status(e: BaseException, /) -> None | int:
+    status = (
+        getattr(e, "status", None) or 
+        getattr(e, "code", None) or 
+        getattr(e, "status_code", None)
+    )
+    if status is None and hasattr(e, "response"):
+        response = e.response
+        status = (
+            getattr(response, "status", None) or 
+            getattr(response, "code", None) or 
+            getattr(response, "status_code", None)
+        )
+    return status
+
+
+def call_wrap(method, /, *args, headers=None, **kwds):
+    global _get_cookies
+    if _get_cookies is None:
+        _get_cookies = cookies_pool(method.__self__)
+    cookies, revert = _get_cookies()
+    while True:
+        if headers:
+            headers = {**headers, "Cookie": cookies}
+        else:
+            headers = {"Cookie": cookies}
+        try:
+            ret = check_response(method(*args, headers=headers, **kwds))
+            revert()
+            return ret
+        except BaseException as e:
+            if isinstance(e, AuthenticationError) or get_status(e) == 405:
+                cookies, revert = _get_cookies()
+                continue
+            revert()
+            raise
 
 
 def normalize_path(path: str, /) -> int | str:
@@ -878,7 +984,7 @@ def iterdir(
     seen: dict[int, dict] = {}
     def get_files():
         nonlocal count
-        resp = check_response(fs_files(payload))
+        resp = call_wrap(fs_files, payload)
         if int(resp["path"][-1]["cid"]) != id:
             if count < 0:
                 raise NotADirectoryError(ENOTDIR, f"not a dir or deleted: cid={id}")
@@ -1298,28 +1404,13 @@ def updatedb(
 
 
 if __name__ == "__main__":
-    if args.cookies:
-        cookies = args.cookies
-    else:
+    if not (cookies := args.cookies):
         from pathlib import Path
-
-        if args.cookies_path:
-            cookies = Path(args.cookies_path).absolute()
+        if cookies_path := args.cookies_path:
+            cookies = Path(cookies_path)
         else:
-            for path in (
-                Path("./115-cookies.txt").absolute(), 
-                Path("~/115-cookies.txt").expanduser(), 
-                Path(__file__).parent / "115-cookies.txt", 
-            ):
-                if path.is_file():
-                    cookies = path
-            else:
-                cookies = Path("~/115-cookies.txt").expanduser()
-
-    client = P115Client(cookies, check_for_relogin=True)
-    if not client.login_status():
-        client.cookies = P115Client.login_with_qrcode("qandroid")["data"]["cookie"]
-
+            cookies = Path("115-cookies.txt")
+    client = P115Client(cookies, ensure_cookies=True, app="harmony")
     updatedb(
         client, 
         dbfile=args.dbfile, 
@@ -1351,3 +1442,4 @@ if __name__ == "__main__":
 # TODO: 为数据库插入弄单独一个线程，就不需要等待数据库插入完成，就可以开始下一批数据拉取
 # TODO: 遇到悬空元素，如何处理，是 1) 忽略、2) 删除 3) 移走 还是 4) 报错
 # TODO: 还要处理一种情况，和悬空元素有关，某个目录被删除了，后来建立了同名的目录，然后有些文件还是移动入那个被删除的目录，就会造成这些元素悬空，更重要的是，不可有两个相同路径的目录，如果有的话，就要进行冲突处理，最多只能保留一个
+# TODO: 如果任务数比较多的话，而且没有-nm，可以先一次性把所有星标完整拉取一次，以后就不需要每次都检查，相当于是退化为-nm

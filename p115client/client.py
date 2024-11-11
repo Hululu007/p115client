@@ -12,7 +12,7 @@ from collections.abc import (
     ItemsView, Iterable, Iterator, Mapping, MutableMapping, Sequence, 
 )
 from contextlib import asynccontextmanager, closing
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from functools import cached_property, partial
 from hashlib import sha1
 from http.cookiejar import Cookie, CookieJar
@@ -776,6 +776,10 @@ class P115Client:
         self.__dict__.pop("session", None)
         self.__dict__.pop("async_session", None)
 
+    @cached_property
+    def login_uid(self, /) -> str:
+        return self.login_without_app()
+
     @overload
     def login(
         self, 
@@ -912,6 +916,145 @@ class P115Client:
                 )
                 setattr(self, "cookies", resp["data"]["cookie"])
             return self
+        return run_gen_step(gen_step, async_=async_)
+
+    @overload
+    def login_with_app(
+        self, 
+        /, 
+        app: None | str = None, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def login_with_app(
+        self, 
+        /, 
+        app: None | str = None, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def login_with_app(
+        self, 
+        /, 
+        app: None | str = None, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """执行一次自动扫登录二维码，然后绑定到指定设备
+
+        :param app: 绑定的 `app` （或者叫 `device`），如果为 None 或 ""，则和当前 client 的登录设备相同（也就是登录后会把此 client 的 cookies 顶掉）
+        :param async_: 是否异步
+        :param request_kwargs: 其它请求参数
+
+        :return: 响应信息，包含 cookies
+
+        -----
+
+        app 至少有 24 个可用值，目前找出 14 个：
+
+        - web
+        - ios
+        - 115ios
+        - android
+        - 115android
+        - 115ipad
+        - tv
+        - qandroid
+        - windows
+        - mac
+        - linux
+        - wechatmini
+        - alipaymini
+        - harmony
+
+        还有几个备选（暂不可用）：
+
+        - bios
+        - bandroid
+        - ipad（登录机制有些不同，暂时未破解）
+        - qios（登录机制有些不同，暂时未破解）
+        - desktop（就是 web，但是用 115 浏览器登录）
+
+        :设备列表如下:
+
+        +-------+----------+------------+-------------------------+
+        | No.   | ssoent   | app        | description             |
+        +=======+==========+============+=========================+
+        | 01    | A1       | web        | 网页版                  |
+        +-------+----------+------------+-------------------------+
+        | 02    | A2       | ?          | 未知: android           |
+        +-------+----------+------------+-------------------------+
+        | 03    | A3       | ?          | 未知: iphone            |
+        +-------+----------+------------+-------------------------+
+        | 04    | A4       | ?          | 未知: ipad              |
+        +-------+----------+------------+-------------------------+
+        | 05    | B1       | ?          | 未知: android           |
+        +-------+----------+------------+-------------------------+
+        | 06    | D1       | ios        | 115生活(iOS端)          |
+        +-------+----------+------------+-------------------------+
+        | 07    | D2       | ?          | 未知: ios               |
+        +-------+----------+------------+-------------------------+
+        | 08    | D3       | 115ios     | 115(iOS端)              |
+        +-------+----------+------------+-------------------------+
+        | 09    | F1       | android    | 115生活(Android端)      |
+        +-------+----------+------------+-------------------------+
+        | 10    | F2       | ?          | 未知: android           |
+        +-------+----------+------------+-------------------------+
+        | 11    | F3       | 115android | 115(Android端)          |
+        +-------+----------+------------+-------------------------+
+        | 12    | H1       | ipad       | 未知: ipad              |
+        +-------+----------+------------+-------------------------+
+        | 13    | H2       | ?          | 未知: ipad              |
+        +-------+----------+------------+-------------------------+
+        | 14    | H3       | 115ipad    | 115(iPad端)             |
+        +-------+----------+------------+-------------------------+
+        | 15    | I1       | tv         | 115网盘(Android电视端)  |
+        +-------+----------+------------+-------------------------+
+        | 16    | M1       | qandriod   | 115管理(Android端)      |
+        +-------+----------+------------+-------------------------+
+        | 17    | N1       | qios       | 115管理(iOS端)          |
+        +-------+----------+------------+-------------------------+
+        | 18    | O1       | ?          | 未知: ipad              |
+        +-------+----------+------------+-------------------------+
+        | 19    | P1       | windows    | 115生活(Windows端)      |
+        +-------+----------+------------+-------------------------+
+        | 20    | P2       | mac        | 115生活(macOS端)        |
+        +-------+----------+------------+-------------------------+
+        | 21    | P3       | linux      | 115生活(Linux端)        |
+        +-------+----------+------------+-------------------------+
+        | 22    | R1       | wechatmini | 115生活(微信小程序)     |
+        +-------+----------+------------+-------------------------+
+        | 23    | R2       | alipaymini | 115生活(支付宝小程序)   |
+        +-------+----------+------------+-------------------------+
+        | 24    | S1       | harmony    | 115(Harmony端)          |
+        +-------+----------+------------+-------------------------+
+        """
+        def gen_step():
+            nonlocal app
+            if not app:
+                app = yield self.login_app(async_=async_, **request_kwargs)
+            if not app:
+                raise ValueError("can't determine the login app")
+            has_uid = True
+            if not (uid := self.__dict__.get("login_uid")):
+                has_uid = False
+                uid = yield self.login_without_app(async_=async_, **request_kwargs)
+            resp = yield self.login_qrcode_scan_result(
+                uid, 
+                app, 
+                async_=async_, 
+                **request_kwargs, 
+            )
+            if not resp["state"] and has_uid and resp.get("errno") == 40101017:
+                self.__dict__.pop("login_uid", None)
+                return (yield self.login_with_app(app, async_=async_, **request_kwargs))
+            return resp
         return run_gen_step(gen_step, async_=async_)
 
     @overload
@@ -1132,6 +1275,7 @@ class P115Client:
                 async_=async_, 
                 **request_kwargs, 
             )))
+            self.login_uid = uid
             return uid
         return run_gen_step(gen_step, async_=async_)
 
@@ -1233,25 +1377,115 @@ class P115Client:
         +-------+----------+------------+-------------------------+
         """
         def gen_step():
-            nonlocal app
-            if not app:
-                app = yield self.login_app(async_=async_, **request_kwargs)
-                if not app:
-                    raise LoginError(errno.EIO, "can't determine app")
-            uid = yield self.login_without_app(async_=async_, **request_kwargs)
-            cookies = check_response((yield self.login_qrcode_scan_result(
-                uid, 
-                app, 
-                async_=async_, 
-                **request_kwargs, 
-            )))["data"]["cookie"]
+            resp = yield self.login_with_app(app, async_=async_, **request_kwargs)
+            cookies = check_response(resp)["data"]["cookie"]
             if replace:
                 setattr(self, "cookies", cookies)
                 return self
-            elif async_:
-                return (yield partial(to_thread, type(self), cookies))
             else:
                 return type(self)(cookies)
+        return run_gen_step(gen_step, async_=async_)
+
+    @overload
+    @classmethod
+    def login_bind_app(
+        cls, 
+        /, 
+        uid: str, 
+        app: str, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> Self:
+        ...
+    @overload
+    @classmethod
+    def login_bind_app(
+        cls, 
+        /, 
+        uid: str, 
+        app: str, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, Self]:
+        ...
+    @classmethod
+    def login_bind_app(
+        cls, 
+        /, 
+        uid: str, 
+        app: str, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> Self | Coroutine[Any, Any, Self]:
+        """绑定二维码扫描结果，以登录到某个设备（同一个设备最多同时一个在线，即最近登录的那个）
+
+        :param uid: 登录二维码的 uid
+        :param app: 待绑定的设备名称
+        :param async_: 是否异步
+        :param request_kwargs: 其它请求参数
+
+        :return: 新的实例
+
+        -----
+
+        :设备列表如下:
+
+        +-------+----------+------------+-------------------------+
+        | No.   | ssoent   | app        | description             |
+        +=======+==========+============+=========================+
+        | 01    | A1       | web        | 网页版                  |
+        +-------+----------+------------+-------------------------+
+        | 02    | A2       | ?          | 未知: android           |
+        +-------+----------+------------+-------------------------+
+        | 03    | A3       | ?          | 未知: iphone            |
+        +-------+----------+------------+-------------------------+
+        | 04    | A4       | ?          | 未知: ipad              |
+        +-------+----------+------------+-------------------------+
+        | 05    | B1       | ?          | 未知: android           |
+        +-------+----------+------------+-------------------------+
+        | 06    | D1       | ios        | 115生活(iOS端)          |
+        +-------+----------+------------+-------------------------+
+        | 07    | D2       | ?          | 未知: ios               |
+        +-------+----------+------------+-------------------------+
+        | 08    | D3       | 115ios     | 115(iOS端)              |
+        +-------+----------+------------+-------------------------+
+        | 09    | F1       | android    | 115生活(Android端)      |
+        +-------+----------+------------+-------------------------+
+        | 10    | F2       | ?          | 未知: android           |
+        +-------+----------+------------+-------------------------+
+        | 11    | F3       | 115android | 115(Android端)          |
+        +-------+----------+------------+-------------------------+
+        | 12    | H1       | ipad       | 未知: ipad              |
+        +-------+----------+------------+-------------------------+
+        | 13    | H2       | ?          | 未知: ipad              |
+        +-------+----------+------------+-------------------------+
+        | 14    | H3       | 115ipad    | 115(iPad端)             |
+        +-------+----------+------------+-------------------------+
+        | 15    | I1       | tv         | 115网盘(Android电视端)  |
+        +-------+----------+------------+-------------------------+
+        | 16    | M1       | qandriod   | 115管理(Android端)      |
+        +-------+----------+------------+-------------------------+
+        | 17    | N1       | qios       | 115管理(iOS端)          |
+        +-------+----------+------------+-------------------------+
+        | 18    | O1       | ?          | 未知: ipad              |
+        +-------+----------+------------+-------------------------+
+        | 19    | P1       | windows    | 115生活(Windows端)      |
+        +-------+----------+------------+-------------------------+
+        | 20    | P2       | mac        | 115生活(macOS端)        |
+        +-------+----------+------------+-------------------------+
+        | 21    | P3       | linux      | 115生活(Linux端)        |
+        +-------+----------+------------+-------------------------+
+        | 22    | R1       | wechatmini | 115生活(微信小程序)     |
+        +-------+----------+------------+-------------------------+
+        | 23    | R2       | alipaymini | 115生活(支付宝小程序)   |
+        +-------+----------+------------+-------------------------+
+        | 24    | S1       | harmony    | 115(Harmony端)          |
+        +-------+----------+------------+-------------------------+
+        """
+        def gen_step():
+            resp = yield cls.login_qrcode_scan_result(uid, app, async_=async_, **request_kwargs)
+            cookies = check_response(resp)["data"]["cookie"]
+            return cls(cookies)
         return run_gen_step(gen_step, async_=async_)
 
     @overload
@@ -8955,8 +9189,13 @@ class P115Client:
 
         GET https://proapi.115.com/{app}/2.0/user/upload_key
         """
-        api = f"https://proapi.115.com/{app}/2.0/user/upload_key"
-        return self.request(url=api, async_=async_, **request_kwargs)
+        def gen_step():
+            api = f"https://proapi.115.com/{app}/2.0/user/upload_key"
+            resp = yield self.request(url=api, async_=async_, **request_kwargs)
+            if resp["state"]:
+                self.user_key = resp["data"]["userkey"]
+            return resp
+        return run_gen_step(gen_step, async_=async_)
 
     @overload
     def upload_sample_init(
@@ -9002,7 +9241,7 @@ class P115Client:
 
     @overload
     @staticmethod
-    def upload_token(
+    def upload_gettoken(
         request: None | Callable = None, 
         base_url: bool | str = False, 
         *, 
@@ -9012,7 +9251,7 @@ class P115Client:
         ...
     @overload
     @staticmethod
-    def upload_token(
+    def upload_gettoken(
         request: None | Callable = None, 
         base_url: bool | str = False, 
         *, 
@@ -9021,7 +9260,7 @@ class P115Client:
     ) -> Coroutine[Any, Any, dict]:
         ...
     @staticmethod
-    def upload_token(
+    def upload_gettoken(
         request: None | Callable = None, 
         base_url: bool | str = False, 
         *, 
@@ -9038,6 +9277,16 @@ class P115Client:
             return get_default_request()(url=api, async_=async_, **request_kwargs)
         else:
             return request(url=api, **request_kwargs)
+
+    @property
+    def upload_token(self, /) -> dict:
+        token = self.__dict__.get("upload_token", {})
+        if not token or token["Expiration"] < (datetime.now() - timedelta(hours=7, minutes=30)).strftime("%FT%XZ"):
+            while True:
+                if token["StatusCode"] == "200":
+                    break
+                token = self.__dict__["upload_token"] = self.upload_gettoken()
+        return token
 
     @overload
     @staticmethod
@@ -9737,10 +9986,7 @@ class P115Client:
                     url = self.upload_endpoint_url(bucket, object)
                 token = multipart_resume_data.get("token")
                 if not token:
-                    while True:
-                        token = cast(dict, (yield self.upload_token(async_=async_)))
-                        if token["StatusCode"] == "200":
-                            break
+                    token = self.upload_token
                 return (yield oss_multipart_upload(
                     self.request, 
                     file, 
@@ -9788,10 +10034,7 @@ class P115Client:
             else:
                 raise P115OSError(errno.EINVAL, resp)
             url = self.upload_endpoint_url(bucket, object)
-            while True:
-                token = cast(dict, (yield self.upload_token(async_=async_)))
-                if token["StatusCode"] == "200":
-                    break
+            token = self.upload_token
             if partsize <= 0:
                 resp = yield oss_upload(
                     self.request, 
