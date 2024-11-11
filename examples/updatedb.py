@@ -113,9 +113,12 @@ def generate_cookies_factory(
                 resp = client.login_qrcode_scan_result(refresh_token, app, timeout=3)
             except ReadTimeout:
                 continue
-            if not resp["state"] and resp.get("errno") == 40101017:
-                refresh_token = client.login_without_app()
-                continue
+            if not resp["state"]:
+                if resp.get("errno") == 40101017:
+                    refresh_token = client.login_without_app()
+                    continue
+                else:
+                    check_response(resp)
             return "; ".join(f"{k}={v}" for k, v in resp["data"]["cookie"].items())
     return call
 
