@@ -173,9 +173,12 @@ def get_status(e: BaseException, /) -> None | int:
 
 def call_wrap(method: MethodType, /, *args, headers=None, **kwds):
     global _get_cookies
+    client_back = cast(P115Client, method.__self__)
     if _get_cookies is None:
-        _get_cookies = cookies_pool(cast(P115Client, method.__self__))
-    method = MethodType(method.__func__, P115Client(""))
+        _get_cookies = cookies_pool(cast(P115Client, client_back))
+    client = P115Client("")
+    client.session = client_back.session
+    method = MethodType(method.__func__, client)
     cookies, revert = _get_cookies()
     while True:
         if headers:
