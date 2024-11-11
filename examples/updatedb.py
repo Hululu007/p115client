@@ -68,6 +68,7 @@ from math import isnan, isinf
 from sqlite3 import connect, Connection, Cursor
 from _thread import allocate_lock, LockType
 from time import perf_counter
+from types import MethodType
 from typing import cast, Final
 
 
@@ -170,10 +171,11 @@ def get_status(e: BaseException, /) -> None | int:
     return status
 
 
-def call_wrap(method, /, *args, headers=None, **kwds):
+def call_wrap(method: MethodType, /, *args, headers=None, **kwds):
     global _get_cookies
     if _get_cookies is None:
-        _get_cookies = cookies_pool(method.__self__)
+        _get_cookies = cookies_pool(cast(P115Client, method.__self__))
+    method = MethodType(method.__func__, P115Client(""))
     cookies, revert = _get_cookies()
     while True:
         if headers:
@@ -978,7 +980,7 @@ def iterdir(
         "asc": 0, "cid": id, "custom_order": 1, "fc_mix": 1, "limit": first_page_size, 
         "show_dir": 1, "o": "user_utime", "offset": 0, **payload, 
     }
-    fs_files = client.fs_files
+    fs_files = cast(MethodType, client.fs_files)
     count = -1
     ancestors: list[dict] = []
     seen: dict[int, dict] = {}
@@ -1410,7 +1412,7 @@ if __name__ == "__main__":
             cookies = Path(cookies_path)
         else:
             cookies = Path("115-cookies.txt")
-    client = P115Client(cookies, ensure_cookies=True, app="harmony")
+    client = P115Client(cookies, check_for_relogin=True, ensure_cookies=True, app="harmony")
     updatedb(
         client, 
         dbfile=args.dbfile, 
