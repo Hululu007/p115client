@@ -82,7 +82,9 @@ handler.setFormatter(logging.Formatter(
     "\x1b[0m\x1b[1;35m%(name)s\x1b[0m \x1b[5;31m➜\x1b[0m %(message)s"
 ))
 logger.addHandler(handler)
+
 _get_cookies = None
+_lasttime_call_webapi: float = 0
 
 
 def generate_cookies_factory(
@@ -173,7 +175,7 @@ def get_status(e: BaseException, /) -> None | int:
     return status
 
 
-def call_wrap(method: MethodType, /, *args, headers=None, **kwds):
+def call_wrap_with_cookies_pool(method: MethodType, /, *args, headers=None, **kwds):
     global _get_cookies
     client_back = cast(P115Client, method.__self__)
     if _get_cookies is None:
@@ -983,7 +985,6 @@ def iterdir(
     client: P115Client, 
     id: int = 0, 
     /, 
-    page_size: int = 10_000, 
     first_page_size: None | int = None, 
     payload: dict = {}, 
 ) -> tuple[int, list[dict], dict[int, dict], Iterator[dict]]:
@@ -991,8 +992,7 @@ def iterdir(
 
     :param client: 115 网盘客户端对象
     :param id: 目录的 id
-    :param page_size: 分页大小，如果 <= 0，则用 10_000
-    :param first_page_size: 首次拉取的分页大小，如果为 None 或者 <= 0，则用 `page_size`
+    :param first_page_size: 首次拉取的分页大小，如果为 None 或者 <= 0，自动确定
     :param payload: 其它查询参数
 
     :return: 4 元组，分别是
@@ -1002,24 +1002,40 @@ def iterdir(
         3. 已经拉取的文件或目录的数据，key 是文件或目录的 id，value 是相应的数据
         4. 迭代器，用来获取数据
     """
-    if page_size <= 0:
-        page_size = 10_000
-    if not first_page_size or page_size <= 0:
-        first_page_size = page_size
     payload = {
-        "asc": 0, "cid": id, "custom_order": 1, "fc_mix": 1, "limit": first_page_size, 
-        "show_dir": 1, "o": "user_utime", "offset": 0, **payload, 
+        "asc": 0, "cid": id, "custom_order": 1, "fc_mix": 1, "o": "user_utime", "offset": 0, 
+        "show_dir": 1, **payload, 
     }
-    fs_files = cast(MethodType, client.fs_files)
+    if first_page_size and first_page_size > 0:
+        payload["limit"] = first_page_size
+    is_first_call = True
+    def fs_files(*a, **k):
+        global _lasttime_call_webapi
+        nonlocal is_first_call
+        current = perf_counter()
+        if current - _lasttime_call_webapi >= 1:
+            if is_first_call:
+                payload.setdefault("limit", 10_000)
+                is_first_call = False
+            else:
+                payload["limit"] = 10_000
+            _lasttime_call_webapi = current
+            return client.fs_files(*a, **k)
+        else:
+            if is_first_call:
+                payload.setdefault("limit", 7_000)
+                is_first_call = False
+            else:
+                payload["limit"] = 7_000
+            _lasttime_call_webapi = current
+            return client.fs_files_app(*a, **k)
     count = -1
     ancestors: list[dict] = []
     seen: dict[int, dict] = {}
     def get_files():
         global flow_total
         nonlocal count
-        # TODO: call_wrap 实现为 aps、app、web 的 3 端分流，app 端的权重更高，可安排更多的任务给它
-        # TODO: 如果要批量拉，app 端的分页大小不能太大，8000 都可能报错
-        #resp = call_wrap(fs_files, payload)
+        #resp = call_wrap_with_cookies_pool(fs_files, payload)
         resp = fs_files(payload)
         if int(resp["path"][-1]["cid"]) != id:
             if count < 0:
@@ -1039,7 +1055,6 @@ def iterdir(
     def iterate():
         nonlocal resp
         offset = 0
-        payload["limit"] = page_size
         while True:
             for attr in map(normalize_attr, resp["data"]):
                 if attr["id"] in seen:

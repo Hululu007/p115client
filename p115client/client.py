@@ -383,11 +383,16 @@ def normalize_attr_web(
         attr["utime"] = int(info["tu"])
     if (t := info.get("t")) and t.isdecimal():
         attr["time"] = int(t)
+    if "fdes" in info:
+        val = info["fdes"]
+        if isinstance(val, str):
+            attr["desc"] = val
+        attr["has_desc"] = bool(val)
     for key, name in (
-        ("fdes", "has_desc"), 
         ("hdf", "hidden"), 
         ("issct", "is_shortcut"), 
         ("ispl", "show_play_long"), 
+        ("is_top", "is_top"), 
         #("iv", "is_video"), 
         ("m", "star"), 
         ("c", "violated"), 
