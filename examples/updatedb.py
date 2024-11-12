@@ -2,7 +2,7 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 0, 12)
+__version__ = (0, 0, 13)
 __all__ = ["updatedb", "updatedb_one", "updatedb_tree"]
 __doc__ = "遍历 115 网盘的目录信息导出到数据库"
 __requirements__ = ["p115client", "posixpatht"]
@@ -40,7 +40,7 @@ try:
     from httpx import HTTPStatusError, ReadTimeout
     from p115client import check_response, P115Client
     from p115client.const import APP_TO_SSOENT
-    from p115client.exception import AuthenticationError, BusyOSError
+    from p115client.exception import AuthenticationError, BusyOSError, DataError
     from p115client.tool.edit import update_desc, update_star
     from p115client.tool.iterdir import ensure_attr_path, filter_na_ids, get_path_to_cid, iter_stared_dirs, DirNode, DirNodeTuple
     from posixpatht import escape, joins, normpath
@@ -51,7 +51,7 @@ except ImportError:
     from httpx import HTTPStatusError, ReadTimeout
     from p115client import check_response, P115Client
     from p115client.const import APP_TO_SSOENT
-    from p115client.exception import AuthenticationError, BusyOSError
+    from p115client.exception import AuthenticationError, BusyOSError, DataError
     from p115client.tool.edit import update_desc, update_star
     from p115client.tool.iterdir import ensure_attr_path, filter_na_ids, get_path_to_cid, iter_stared_dirs, DirNode, DirNodeTuple
     from posixpatht import escape, joins, normpath
@@ -82,9 +82,7 @@ handler.setFormatter(logging.Formatter(
     "\x1b[0m\x1b[1;35m%(name)s\x1b[0m \x1b[5;31m➜\x1b[0m %(message)s"
 ))
 logger.addHandler(handler)
-
 _get_cookies = None
-_lasttime_call_webapi: float = 0
 
 
 def generate_cookies_factory(
@@ -280,7 +278,7 @@ def normalize_dir_attr(info: Mapping, /) -> dict:
     if "fn" in info:
         return {
             "id": int(info["fid"]), 
-            "parent_id": int(info["cid"]), 
+            "parent_id": int(info["pid"]), 
             "pickcode": info["pc"], 
             "name": info["fn"], 
             "ctime": int(info["uppt"]), 
@@ -973,6 +971,7 @@ def update_id_to_dirnode(
         first_page_size=32, 
         id_to_dirnode=ID_TO_DIRNODE, 
         normalize_attr=normalize_dir_attr, 
+        app="android", 
     )))
     if data:
         insert_dir_items(con, data)
@@ -986,6 +985,7 @@ def iterdir(
     id: int = 0, 
     /, 
     first_page_size: None | int = None, 
+    page_size: int = 10_000, 
     payload: dict = {}, 
 ) -> tuple[int, list[dict], dict[int, dict], Iterator[dict]]:
     """拉取一个目录中的文件或目录的数据
@@ -993,6 +993,7 @@ def iterdir(
     :param client: 115 网盘客户端对象
     :param id: 目录的 id
     :param first_page_size: 首次拉取的分页大小，如果为 None 或者 <= 0，自动确定
+    :param page_size: 分页大小
     :param payload: 其它查询参数
 
     :return: 4 元组，分别是
@@ -1002,33 +1003,24 @@ def iterdir(
         3. 已经拉取的文件或目录的数据，key 是文件或目录的 id，value 是相应的数据
         4. 迭代器，用来获取数据
     """
+    if page_size <= 0:
+        page_size = 10_000
+    if not first_page_size or first_page_size <= 0:
+        first_page_size = page_size
     payload = {
         "asc": 0, "cid": id, "custom_order": 1, "fc_mix": 1, "o": "user_utime", "offset": 0, 
-        "show_dir": 1, **payload, 
+        "limit": first_page_size, "show_dir": 1, **payload, 
     }
-    if first_page_size and first_page_size > 0:
-        payload["limit"] = first_page_size
-    is_first_call = True
     def fs_files(*a, **k):
-        global _lasttime_call_webapi
-        nonlocal is_first_call
-        current = perf_counter()
-        if current - _lasttime_call_webapi >= 1:
-            if is_first_call:
-                payload.setdefault("limit", 10_000)
-                is_first_call = False
-            else:
-                payload["limit"] = 10_000
-            _lasttime_call_webapi = current
-            return client.fs_files(*a, **k)
-        else:
-            if is_first_call:
-                payload.setdefault("limit", 7_000)
-                is_first_call = False
-            else:
-                payload["limit"] = 7_000
-            _lasttime_call_webapi = current
-            return client.fs_files_app(*a, **k)
+        while True:
+            try:
+                return client.fs_files_app(*a, **k)
+            except DataError:
+                if payload["limit"] <= 1150:
+                    raise
+                payload["limit"] -= 1_000
+                if payload["limit"] < 1150:
+                    payload["limit"] = 1150
     count = -1
     ancestors: list[dict] = []
     seen: dict[int, dict] = {}
@@ -1052,6 +1044,7 @@ def iterdir(
             raise BusyOSError(EBUSY, f"detected count changes during iteration: cid={id}")
         return resp
     resp = get_files()
+    payload["limit"] = page_size
     def iterate():
         nonlocal resp
         offset = 0

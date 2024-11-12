@@ -55,11 +55,11 @@ class SharePayload(TypedDict):
     receive_code: None | str
 
 
-def _get_ans_cid(info: Mapping, /) -> int:
-    cid = info.get("cid")
-    if cid in ("", None):
-        cid = info["fid"]
-    return int(cast(int | str, cid))
+def _get_fid(info: Mapping, /) -> int:
+    fid = info.get("fid")
+    if fid in ("", None):
+        fid = info["cid"]
+    return int(cast(int | str, fid))
 
 
 def type_of_attr(attr: Mapping, /) -> int:
@@ -153,11 +153,11 @@ def get_path_to_cid(
         if cid and (refresh or cid not in id_to_dirnode):
             resp = yield client.fs_files({"cid": cid, "limit": 1}, async_=async_, **request_kwargs)
             check_response(resp)
-            if cid and _get_ans_cid(resp["path"][-1]) != cid:
+            if cid and int(resp["path"][-1]["cid"]) != cid:
                 raise FileNotFoundError(errno.ENOENT, cid)
             parts.extend(info["name"] for info in resp["path"][1:])
             for info in resp["path"][1:]:
-                id_to_dirnode[_get_ans_cid(info)] = DirNode(info["name"], int(info["pid"]))
+                id_to_dirnode[int(info["cid"])] = DirNode(info["name"], int(info["pid"]))
         else:
             while cid and (not root_id or cid != root_id):
                 name, cid = id_to_dirnode[cid]
@@ -236,11 +236,11 @@ def get_ancestors_to_cid(
         if cid and (refresh or cid not in id_to_dirnode):
             resp = yield client.fs_files({"cid": cid, "limit": 1}, async_=async_, **request_kwargs)
             check_response(resp)
-            if cid and _get_ans_cid(resp["path"][-1]) != cid:
+            if cid and int(resp["path"][-1]["cid"]) != cid:
                 raise FileNotFoundError(errno.ENOENT, cid)
             parts.append({"id": 0, "name": "", "parent_id": 0})
             for info in resp["path"][1:]:
-                id, pid, name = _get_ans_cid(info), int(info["pid"]), info["name"]
+                id, pid, name = int(info["cid"]), int(info["pid"]), info["name"]
                 id_to_dirnode[id] = DirNode(name, pid)
                 parts.append({"id": id, "name": name, "parent_id": pid})
         else:
@@ -388,7 +388,7 @@ def get_id_to_path(
                             if is_file:
                                 return int(info["fid"])
                         elif not is_file:
-                            return _get_ans_cid(info)
+                            return _get_fid(info)
                 else:
                     raise error
             return (yield request)
@@ -400,7 +400,7 @@ def get_id_to_path(
                         if is_file:
                             return int(info["fid"])
                     elif not is_file:
-                        return _get_ans_cid(info)
+                        return _get_fid(info)
             else:
                 raise error
     return run_gen_step(gen_step, async_=async_)
@@ -568,11 +568,11 @@ def _iter_fs_files(
         payload["limit"] = page_size
         while True:
             check_response(resp)
-            if cid and _get_ans_cid(resp["path"][-1]) != cid:
+            if cid and int(resp["path"][-1]["cid"]) != cid:
                 raise FileNotFoundError(errno.ENOENT, cid)
             cur_ans = [(0, "")]
             for info in resp["path"][1:]:
-                pid, name = _get_ans_cid(info), info["name"]
+                pid, name = int(info["cid"]), info["name"]
                 id_to_dirnode[pid] = DirNode(name, int(info["pid"]))
                 cur_ans.append((pid, "name"))
             if ans and ans != cur_ans:
@@ -586,16 +586,16 @@ def _iter_fs_files(
                 else:
                     warn(message, category=P115Warning)
                 count = int(resp.get(key_of_count) or 0)
-            if not count or offset != resp["offset"]:
+            if not count and not len(resp["data"]) or offset != resp["offset"]:
                 return
             for info in resp["data"]:
                 if "pid" in info:
-                    id_to_dirnode[_get_ans_cid(info)] = DirNode((info.get("n") or info["fn"]), int(info["pid"]))
+                    id_to_dirnode[_get_fid(info)] = DirNode((info.get("n") or info["fn"]), int(info["pid"]))
                 elif only_dirs:
                     return
                 yield Yield(info, identity=True)
             offset += len(resp["data"])
-            if offset >= count:
+            if count and offset >= count or offset >= resp["count"]:
                 return
             payload["offset"] = offset
             while True:
@@ -916,7 +916,7 @@ def ensure_attr_path(
             if pid:
                 pids.add(pid)
         def take_while(info, /) -> bool:
-            find_ids.discard(_get_ans_cid(info))
+            find_ids.discard(_get_fid(info))
             if int(info["te"]) < start:
                 return False
             return bool(find_ids)
@@ -1864,10 +1864,10 @@ def traverse_files(
                             **request_kwargs, 
                             "timeout": auto_splitting_statistics_timeout, 
                         })))
-                        if cid and _get_ans_cid(resp["path"][-1]) != cid:
+                        if cid and int(resp["path"][-1]["cid"]) != cid:
                             continue
                         for info in resp["path"][1:]:
-                            id_to_dirnode[_get_ans_cid(info)] = DirNode(info["name"], int(info["pid"]))
+                            id_to_dirnode[int(info["cid"])] = DirNode(info["name"], int(info["pid"]))
                     except (ReadTimeout, TimeoutError):
                         file_count = float("inf")
                     else:
@@ -2509,14 +2509,14 @@ def iter_dangling_files(
         payload = {"cid": cid, "limit": page_size, "offset": 0, "suffix": suffix, "type": type}
         while True:
             resp = yield client.fs_files(payload, async_=async_, **request_kwargs)
-            if cid and _get_ans_cid(resp) != cid:
+            if cid and _get_fid(resp) != cid:
                 break
             if resp["offset"] != payload["offset"]:
                 break
             pids = {
                 pid 
                 for info in resp["data"] 
-                if (pid := _get_ans_cid(info)) not in na_cids
+                if (pid := _get_fid(info)) not in na_cids
                     and pid not in ok_cids
             }
             if pids:
@@ -2529,7 +2529,7 @@ def iter_dangling_files(
                     )
                 ok_cids |= pids - na_cids
             for info in resp["data"]:
-                if _get_ans_cid(info) in na_cids:
+                if _get_fid(info) in na_cids:
                     yield Yield(normalize_attr(info), identity=True)
             payload["offset"] += len(resp["data"]) # type: ignore
             if payload["offset"] >= resp["count"]:
