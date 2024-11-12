@@ -451,7 +451,7 @@ def normalize_attr_app(
     attr["labels"] = info["fl"]
     attr["ico"] = info.get("ico", "folder" if attr["is_dir"] else "")
     if "ftype" in info:
-        attr["ftype"] = int(info["ftype"])
+        attr["ftype"] = int(info["ftype"] or 0)
     if "thumb" in info:
         attr["thumb"] = f"https://imgjump.115.com?{info['thumb']}&size=0&sha1={info['sha1']}"
     if "uppt" in info: # pptime
@@ -4132,6 +4132,9 @@ class P115Client:
         .. hint::
             如果要遍历获取所有文件，需要指定 show_dir=0 且 cur=0（或不指定 cur），这个接口并没有 type=99 时获取所有文件的意义
 
+        .. note::
+            如果 `app` 为 "wechatmini" 或 "alipaymini"，则返回结果和手机客户端并不相同
+
         :payload:
             - cid: int | str = 0 💡 目录 id
             - limit: int = 32 💡 分页大小
@@ -5691,6 +5694,53 @@ class P115Client:
             - files_new_name[{file_id}]: str 💡 值为新的文件名（basename）
         """
         api = complete_webapi("/files/batch_rename", base_url=base_url)
+        if isinstance(payload, tuple) and len(payload) == 2 and isinstance(payload[0], (int, str)):
+            payload = {f"files_new_name[{payload[0]}]": payload[1]}
+        elif not isinstance(payload, dict):
+            payload = {f"files_new_name[{fid}]": name for fid, name in payload}
+        if not payload:
+            return {"state": False, "message": "no op"}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_rename_app(
+        self, 
+        payload: tuple[int | str, str] | dict | Iterable[tuple[int | str, str]], 
+        /, 
+        app: str = "android", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_rename_app(
+        self, 
+        payload: tuple[int | str, str] | dict | Iterable[tuple[int | str, str]], 
+        /, 
+        app: str = "android", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_rename_app(
+        self, 
+        payload: tuple[int | str, str] | dict | Iterable[tuple[int | str, str]], 
+        /, 
+        app: str = "android", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """重命名文件或目录
+
+        POST https://proapi.115.com/{app}/files/batch_rename
+
+        :payload:
+            - files_new_name[{file_id}]: str 💡 值为新的文件名（basename）
+        """
+        api = f"https://proapi.115.com/{app}/files/batch_rename"
         if isinstance(payload, tuple) and len(payload) == 2 and isinstance(payload[0], (int, str)):
             payload = {f"files_new_name[{payload[0]}]": payload[1]}
         elif not isinstance(payload, dict):

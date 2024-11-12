@@ -1035,7 +1035,7 @@ def iterdir(
     def get_files():
         global flow_total
         nonlocal count
-        #resp = call_wrap_with_cookies_pool(fs_files, payload)
+        #resp = call_wrap_with_cookies_pool(client.fs_files, payload)
         resp = fs_files(payload)
         if int(resp["path"][-1]["cid"]) != id:
             if count < 0:
@@ -1098,7 +1098,7 @@ def diff_dir(
     upsert_add = upsert_list.append
     dirs_add = dirs.append
     if tree:
-        count, ancestors, seen, data_it = iterdir(client, id, first_page_size=128 if n else 0, payload={"type": 99})
+        count, ancestors, seen, data_it = iterdir(client, id, first_page_size=128 if n else 0, payload={"show_dir": 0})
     else:
         count, ancestors, seen, data_it = iterdir(client, id, first_page_size=16 if n else 0)
     result = delete_list, upsert_list
