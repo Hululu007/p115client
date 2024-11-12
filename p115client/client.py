@@ -2,7 +2,7 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__all__ = ["check_response", "normalize_attr", "normalize_attr_app", "P115Client"]
+__all__ = ["check_response", "normalize_attr", "normalize_attr_web", "normalize_attr_app", "P115Client"]
 
 import errno
 
@@ -339,7 +339,7 @@ def check_response(resp: dict | Awaitable[dict], /) -> dict | Coroutine[Any, Any
         return check_await()
 
 
-def normalize_attr(
+def normalize_attr_web(
     info: Mapping, 
     /, 
     keep_raw: bool = False, 
@@ -349,6 +349,7 @@ def normalize_attr(
 
     :param info: 原始数据
     :param keep_raw: 是否保留原始数据，如果为 True，则保存到 "raw" 字段
+    :param dict_cls: 字典类型
 
     :return: 翻译后的 dict 类型数据
     """
@@ -428,6 +429,7 @@ def normalize_attr_app(
 
     :param info: 原始数据
     :param keep_raw: 是否保留原始数据，如果为 True，则保存到 "raw" 字段
+    :param dict_cls: 字典类型
 
     :return: 翻译后的 dict 类型数据
     """
@@ -485,6 +487,26 @@ def normalize_attr_app(
     if keep_raw:
         attr["raw"] = info
     return attr
+
+
+def normalize_attr(
+    info: Mapping, 
+    /, 
+    keep_raw: bool = False, 
+    dict_cls: type[AttrDict] = AttrDict, 
+) -> AttrDict[str, Any]:
+    """翻译获取自罗列目录、搜索、获取文件信息等接口的数据，使之便于阅读
+
+    :param info: 原始数据
+    :param keep_raw: 是否保留原始数据，如果为 True，则保存到 "raw" 字段
+    :param dict_cls: 字典类型
+
+    :return: 翻译后的 dict 类型数据
+    """
+    if "fn" in info:
+        return normalize_attr_app(info, keep_raw=keep_raw, dict_cls=dict_cls)
+    else:
+        return normalize_attr_web(info, keep_raw=keep_raw, dict_cls=dict_cls)
 
 
 class P115Client:

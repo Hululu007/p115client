@@ -59,7 +59,7 @@ except ImportError:
 import logging
 
 from collections import deque
-from collections.abc import Callable, Collection, Iterator, Iterable, Mapping, Sequence, Set
+from collections.abc import Callable, Collection, Iterator, Iterable, Mapping, Set
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from errno import EBUSY, ENOENT, ENOTDIR
@@ -237,20 +237,35 @@ def normalize_attr(info: Mapping, /) -> dict:
 
     :return: 经过规范化后的数据
     """
-    is_dir = "fid" not in info
-    if is_dir:
-        attr: dict = {"id": int(info["cid"]), "parent_id": int(info["pid"])}
+    if "fn" in info:
+        is_dir = info["fc"] == "0"
+        return {
+            "id": int(info["fid"]), 
+            "parent_id": int(info["pid"]), 
+            "pickcode": info["pc"], 
+            "name": info["fn"], 
+            "size": int(info.get("fs") or 0), 
+            "sha1": info.get("sha1") or "", 
+            "is_dir": is_dir, 
+            "is_image": not is_dir and bool(info.get("thumb")), 
+            "ctime": int(info["uppt"]), 
+            "mtime": int(info["upt"])
+        }
     else:
-        attr = {"id": int(info["fid"]), "parent_id": int(info["cid"])}
-    attr["pickcode"] = info["pc"]
-    attr["name"] = info["n"]
-    attr["size"] = info.get("s") or 0
-    attr["sha1"] = info.get("sha") or ""
-    attr["is_dir"] = is_dir
-    attr["is_image"] = not is_dir and bool(info.get("u"))
-    attr["ctime"] = int(info.get("tp", 0))
-    attr["mtime"] = int(info.get("te", 0))
-    return attr
+        is_dir = "fid" not in info
+        if is_dir:
+            attr: dict = {"id": int(info["cid"]), "parent_id": int(info["pid"])}
+        else:
+            attr = {"id": int(info["fid"]), "parent_id": int(info["cid"])}
+        attr["pickcode"] = info["pc"]
+        attr["name"] = info["n"]
+        attr["size"] = int(info.get("s") or 0)
+        attr["sha1"] = info.get("sha") or ""
+        attr["is_dir"] = is_dir
+        attr["is_image"] = not is_dir and bool(info.get("u"))
+        attr["ctime"] = int(info.get("tp", 0))
+        attr["mtime"] = int(info.get("te", 0))
+        return attr
 
 
 def normalize_dir_attr(info: Mapping, /) -> dict:
@@ -260,14 +275,24 @@ def normalize_dir_attr(info: Mapping, /) -> dict:
 
     :return: 经过规范化后的数据
     """
-    return {
-        "id": int(info["cid"]), 
-        "parent_id": int(info["pid"]), 
-        "pickcode": info["pc"], 
-        "name": info["n"], 
-        "ctime": int(info["tp"]), 
-        "mtime": int(info["te"]), 
-    }
+    if "fn" in info:
+        return {
+            "id": int(info["fid"]), 
+            "parent_id": int(info["cid"]), 
+            "pickcode": info["pc"], 
+            "name": info["fn"], 
+            "ctime": int(info["uppt"]), 
+            "mtime": int(info["upt"]), 
+        }
+    else:
+        return {
+            "id": int(info["cid"]), 
+            "parent_id": int(info["pid"]), 
+            "pickcode": info["pc"], 
+            "name": info["n"], 
+            "ctime": int(info["tp"]), 
+            "mtime": int(info["te"]), 
+        }
 
 
 def get_dir_path(cid: int = 0, /) -> str:
@@ -990,8 +1015,12 @@ def iterdir(
     ancestors: list[dict] = []
     seen: dict[int, dict] = {}
     def get_files():
+        global flow_total
         nonlocal count
-        resp = call_wrap(fs_files, payload)
+        # TODO: call_wrap 实现为 aps、app、web 的 3 端分流，app 端的权重更高，可安排更多的任务给它
+        # TODO: 如果要批量拉，app 端的分页大小不能太大，8000 都可能报错
+        #resp = call_wrap(fs_files, payload)
+        resp = fs_files(payload)
         if int(resp["path"][-1]["cid"]) != id:
             if count < 0:
                 raise NotADirectoryError(ENOTDIR, f"not a dir or deleted: cid={id}")

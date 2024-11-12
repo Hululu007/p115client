@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 3, 8)
+__version__ = (0, 3, 8, 1)
 __requirements__ = ["cachetools", "flask", "Flask-Compress", "httpagentparser", "orjson", "path_predicate", "pysubs2", "python-115", "python-encode_uri", "urllib3_request", "werkzeug", "wsgidav"]
 __doc__ = """\
     🕸️ 获取你的 115 网盘账号上文件信息和下载链接 🕷️
@@ -542,7 +542,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
   document.querySelectorAll('.play-with-artplayer').forEach(function(anchor) {
     const attr = JSON.parse(anchor.parentElement.dataset.attr);
-    let multiQualities, subtitles, subtitle = "";
+    let multiQualities, subtitles, subtitle;
     anchor.addEventListener('click', async (event) => {
       event.preventDefault();
       if (player) player.destroy();
@@ -564,26 +564,30 @@ document.addEventListener('DOMContentLoaded', function () {
           html: "源文件", 
           url: anchor.href, 
         }];
-        try {
-          const resp = await fetch(`/?method=m3u8&pickcode=${attr.pickcode}`);
-          const json = await resp.json();
-          if (json instanceof Array && json.length)
-            multiQualities.push(...json.map(({title, url})=>({html: title, url, type: "m3u8"})));
-        } catch (e) {
-          console.error(`can't get multi qualities for ${attr.name}: ${e.message}`);
-        }
+        const pickcode = attr.pickcode;
+        if (pickcode)
+          try {
+            const resp = await fetch(`/?method=m3u8&pickcode=${pickcode}`);
+            const json = await resp.json();
+            if (json instanceof Array && json.length)
+              multiQualities.push(...json.map(({title, url})=>({html: title, url, type: "m3u8"})));
+          } catch (e) {
+            console.error(`can't get multi qualities for ${attr.name}: ${e.message}`);
+          }
       }
       if (!subtitles) {
         subtitles = [];
         try {
-          const resp = await fetch(`/?method=sub&pickcode=${attr.pickcode}`);
-          const json = await resp.json();
+          const sharecode = attr.share_code;
           const prefix = attr.name.slice(0, attr.name.lastIndexOf("."));
-          if (json instanceof Object && json.list.length) {
-            for (const {title, url, type, sha1} of json.list) {
-              if (!sha1)
+          if (sharecode) {
+            const resp = await fetch(`/<share?id=${attr.parent_id}&share_code=${sharecode}&method=list`);
+            const filelist = await resp.json();
+            for (const {name, url} of filelist) {
+              if (/(?i:.ass|.srt|.ssa|.vtt)$/.test(name) && name.startsWith(prefix)) {
+                const type = name.slice(name.lastIndexOf(".") + 1);
                 subtitles.push({
-                  html: `${title} ${type}`, 
+                  html: name.slice(prefix.length + 1), 
                   {%- if args.load_libass %}
                   url: type === "srt" ? `/a.ass?method=srt2ass&url=${encodeURIComponent(url)}` : url, 
                   type: type === "srt" ? "ass" : type, 
@@ -593,27 +597,49 @@ document.addEventListener('DOMContentLoaded', function () {
                   {%- endif %}
                   escape: false, 
                 });
-              else if (title.startsWith(prefix)) {
-                subtitles.push({
-                  html: title.slice(prefix.length + 1), 
-                  {%- if args.load_libass %}
-                  url: type === "srt" ? `/a.ass?method=srt2ass&url=${encodeURIComponent(url)}` : `/a.${type}?method=redirect&url=${encodeURIComponent(url)}`, 
-                  type: type === "srt" ? "ass" : type, 
-                  {%- else %}
-                  url, 
-                  type, 
-                  {%- endif %}
-                  escape: false, 
-                });
-                if (!subtitle) subtitle = subtitles.at(-1);
+              }
+              if (!subtitle) subtitle = subtitles.at(-1);
+            }
+          } else {
+            const resp = await fetch(`/?method=sub&pickcode=${attr.pickcode}`);
+            const json = await resp.json();
+            if (json instanceof Object && json.list.length) {
+              for (const {title, url, type, sha1} of json.list) {
+                if (!sha1)
+                  subtitles.push({
+                    html: `${title} ${type}`, 
+                    {%- if args.load_libass %}
+                    url: type === "srt" ? `/a.ass?method=srt2ass&url=${encodeURIComponent(url)}` : url, 
+                    type: type === "srt" ? "ass" : type, 
+                    {%- else %}
+                    url, 
+                    type, 
+                    {%- endif %}
+                    escape: false, 
+                  });
+                else if (title.startsWith(prefix)) {
+                  subtitles.push({
+                    html: title.slice(prefix.length + 1), 
+                    {%- if args.load_libass %}
+                    url: type === "srt" ? `/a.ass?method=srt2ass&url=${encodeURIComponent(url)}` : `/a.${type}?method=redirect&url=${encodeURIComponent(url)}`, 
+                    type: type === "srt" ? "ass" : type, 
+                    {%- else %}
+                    url, 
+                    type, 
+                    {%- endif %}
+                    escape: false, 
+                  });
+                  if (!subtitle) subtitle = subtitles.at(-1);
+                }
               }
             }
-            if (!subtitle) subtitle = subtitles[0];
           }
+          if (!subtitle) subtitle = subtitles[0];
         } catch (e) {
           console.error(`can't get multi subtitles for ${attr.name}: ${e.message}`);
         }
       }
+      if (!subtitle) subtitle = {};
       player = new Artplayer({
         container: playerContainer, 
         url: anchor.href, 
@@ -1430,6 +1456,8 @@ def normalize_attr(
             "ancestors", "ctime", "mtime", "atime", "time", "thumb", "ico", "share_code",  
         ) if k in info
     }
+    attr["id"] = str(attr["id"])
+    attr["parent_id"] = str(attr["parent_id"])
     if share_code := attr.get("share_code"):
         url = f"{origin}/<share/{share_code}{encode_uri_component_loose(attr['path'], quote_slash=False)}?share_code={share_code}&id={attr['id']}"
         if attr["is_directory"]:
