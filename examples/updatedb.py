@@ -1221,7 +1221,7 @@ def updatedb_tree(
         try:
             to_delete, to_replace = diff_dir(con, client, id, tree=True)
             custom_no_dir_moved = no_dir_moved
-            dir_ids: set[int] = set()
+            dir_ids: dict[int, dict] = {}
             if to_delete:
                 # 找出所有待删除记录的祖先节点 id，并更新它们的 mtime
                 all_pids: set[int] = set()
@@ -1248,7 +1248,7 @@ def updatedb_tree(
                             update_desc(client, find_ids)
                         else:
                             update_desc(client, pids)
-                        dir_ids.update(a["id"] for a in update_id_to_dirnode(con, client))
+                        dir_ids.update((a["id"], a) for a in update_id_to_dirnode(con, client))
                         no_dir_moved = True
                     elif not custom_no_dir_moved:
                         update_desc(client, pids)
@@ -1261,7 +1261,8 @@ def updatedb_tree(
                    logging.warning("found some dangling directory ids, please clean them up, otherwise it will slow down the update speed: %r", na_pids)
             # TODO: 想办法减少调用 update_id_to_dirnode，就可以极大减少更新时间，如果前一次拉取后，可以确定后续都可以只在必要时更新，则可以减少大量时间
             if not no_dir_moved:
-                dir_ids.update(a["id"] for a in update_id_to_dirnode(con, client))
+                dir_ids.update((a["id"], a) for a in update_id_to_dirnode(con, client))
+                ensure_attr_path(client, dir_ids.values(), id_to_dirnode=ID_TO_DIRNODE, with_path=False, errors="warn")
             if to_replace: 
                 if all_pids:
                     # 把所有相关的目录 id 添加到待更替列表

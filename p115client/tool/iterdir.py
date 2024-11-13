@@ -844,8 +844,6 @@ def ensure_attr_path(
 
     :return: 返回这一组文件信息
     """
-    if not (with_ancestors or with_path):
-        raise ValueError("`with_ancestors` and `with_path` can't be False at the same time")
     if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if page_size <= 0:
