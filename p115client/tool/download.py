@@ -23,7 +23,7 @@ from os.path import dirname, join as joinpath, normpath, splitext
 from threading import Lock
 from time import perf_counter
 from typing import overload, Any, Final, Literal, TypedDict
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from uuid import uuid4
 from warnings import warn
 
@@ -40,6 +40,14 @@ from .iterdir import get_path_to_cid, iter_files, iter_files_raw, DirNode, DirNo
 TRANSTAB3: Final = {c: f"%{c:02x}" for c in b"%?#"}
 TRANSTAB4: Final = {c: f"%{c:02x}" for c in b"/%?#"}
 translate = str.translate
+
+
+def reduce_image_url_layers(url: str, /) -> str:
+    if not url.startswith(("http://thumb.115.com/", "https://thumb.115.com/")):
+        return url
+    urlp = urlsplit(url)
+    sha1 = urlp.path.rsplit("/")[-1].split("_")[0]
+    return f"https://imgjump.115.com/?sha1={sha1}&{urlp.query}&size=0"
 
 
 class MakeStrmResult(TypedDict):
@@ -145,7 +153,12 @@ def batch_get_url(
         client = P115Client(client, check_for_relogin=True)
     def gen_step():
         if isinstance(id_or_pickcode, int):
-            resp = yield client.fs_file_skim(id_or_pickcode, async_=async_, **request_kwargs)
+            resp = yield client.fs_file_skim(
+                id_or_pickcode, 
+                base_url=True, 
+                async_=async_, 
+                **request_kwargs, 
+            )
             if not resp or not resp["state"]:
                 return {}
             pickcode = resp["data"][0]["pick_code"]
@@ -160,7 +173,12 @@ def batch_get_url(
                 else:
                     pickcodes.append(val)
             if ids:
-                resp = yield client.fs_file_skim(ids, async_=async_, **request_kwargs)
+                resp = yield client.fs_file_skim(
+                    ids, 
+                    base_url=True, 
+                    async_=async_, 
+                    **request_kwargs, 
+                )
                 if resp and resp["state"]:
                     pickcodes.extend(info["pick_code"] for info in resp["data"])
             if not pickcodes:
@@ -199,6 +217,7 @@ def iter_images_with_url(
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False] = False, 
@@ -216,6 +235,7 @@ def iter_images_with_url(
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[True], 
@@ -232,6 +252,7 @@ def iter_images_with_url(
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False, True] = False, 
@@ -251,6 +272,7 @@ def iter_images_with_url(
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param app: 使用某个 app （设备）的接口
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
@@ -271,9 +293,9 @@ def iter_images_with_url(
     )
     def gen_step():
         if suffixes is None:
-            it = iter_files(client, cid, type=2, **params, **request_kwargs) # type: ignore
+            it = iter_files(client, cid, type=2, app=app, **params, **request_kwargs) # type: ignore
         elif isinstance(suffixes, str):
-            it = iter_files(client, cid, suffix=suffixes, **params, **request_kwargs) # type: ignore
+            it = iter_files(client, cid, suffix=suffixes, app=app, **params, **request_kwargs) # type: ignore
         else:
             for suffix in suffixes:
                 yield YieldFrom(
@@ -285,7 +307,7 @@ def iter_images_with_url(
         while True:
             try:
                 attr = yield partial(do_next, it)
-                attr["url"] = attr["thumb"].replace("_100?", "_0?")
+                attr["url"] = reduce_image_url_layers(attr["thumb"])
             except (StopIteration, StopAsyncIteration):
                 break
             except KeyError:
@@ -322,6 +344,7 @@ def iter_subtitles_with_url(
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False] = False, 
@@ -339,6 +362,7 @@ def iter_subtitles_with_url(
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[True], 
@@ -355,6 +379,7 @@ def iter_subtitles_with_url(
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False, True] = False, 
@@ -379,6 +404,7 @@ def iter_subtitles_with_url(
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param app: 使用某个 app （设备）的接口
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
@@ -404,6 +430,7 @@ def iter_subtitles_with_url(
                 escape=escape, 
                 normalize_attr=normalize_attr, 
                 id_to_dirnode=id_to_dirnode, 
+                app=app, 
                 raise_for_changed_count=raise_for_changed_count, 
                 async_=async_, 
                 **request_kwargs, 
@@ -438,6 +465,7 @@ def iter_subtitles_with_url(
                     client, 
                     scid, 
                     first_page_size=1, 
+                    base_url=True, 
                     async_=async_, 
                     **request_kwargs, 
                 ))
@@ -552,6 +580,7 @@ def iter_subtitle_batches(
                     client, 
                     scid, 
                     first_page_size=1, 
+                    base_url=True, 
                     async_=async_, 
                     **request_kwargs, 
                 ))
@@ -585,6 +614,7 @@ def make_strm(
     max_workers: None | int = None, 
     update: bool = False, 
     discard: bool = True, 
+    app: str = "web", 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -604,6 +634,7 @@ def make_strm(
     max_workers: None | int = None, 
     update: bool = False, 
     discard: bool = True, 
+    app: str = "web", 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -622,6 +653,7 @@ def make_strm(
     max_workers: None | int = None, 
     update: bool = False, 
     discard: bool = True, 
+    app: str = "web", 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -648,6 +680,7 @@ def make_strm(
     :param max_workers: 最大并发数，主要用于限制同时打开的文件数
     :param update: 是否更新 strm 文件，如果为 False，则跳过已存在的路径
     :param discard: 是否清理 strm 文件，如果为 True，则删除未取得的路径（不在本次的路径集合内）
+    :param app: 使用某个 app （设备）的接口
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
     """
@@ -801,6 +834,7 @@ def make_strm(
                     type=4, 
                     with_path=use_abspath is not None, 
                     escape=None, 
+                    app=app, 
                     async_=True, 
                     **request_kwargs, 
                 ):
@@ -894,6 +928,7 @@ def make_strm(
                 type=4, 
                 with_path=use_abspath is not None, 
                 escape=None, 
+                app=app, 
                 **request_kwargs, 
             ))
             executor.shutdown(wait=True)

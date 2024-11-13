@@ -42,7 +42,17 @@ CRE_SHARE_LINK_search2 = re_compile(r"(?P<share_code>[a-z0-9]+)(?:-(?P<receive_c
 
 class DirNode(NamedTuple):
     name: str
-    parent_id: int = 0
+    parent_id: int
+
+
+class OverviewAttr(NamedTuple):
+    is_dir: bool
+    id: int
+    parent_id: int
+    name: str
+    ctime: int
+    mtime: int
+
 
 DirNodeTuple = NewType("DirNodeTuple", tuple[str, int])
 
@@ -55,11 +65,40 @@ class SharePayload(TypedDict):
     receive_code: None | str
 
 
-def _get_fid(info: Mapping, /) -> int:
-    fid = info.get("fid")
-    if fid in ("", None):
-        fid = info["cid"]
-    return int(cast(int | str, fid))
+def _overview_attr(info: Mapping, /) -> OverviewAttr:
+    if "n" in info:
+        is_dir = "fid" not in info
+        name = info["n"]
+        if is_dir:
+            id = int(info["cid"])
+            pid = int(info["pid"])
+        else:
+            id = int(info["fid"])
+            pid = int(info["cid"])
+        ctime = int(info["tp"])
+        mtime = int(info["te"])
+    elif "fn" in info:
+        is_dir = info["fc"] == "0"
+        name = info["fn"]
+        cid = int(info["fid"])
+        pid = int(info["pid"])
+        ctime = int(info["uppt"])
+        mtime = int(info["upt"])
+    elif "file_name" in info:
+        is_dir = "file_id" not in info
+        if is_dir:
+            name = info["category_name"]
+            cid = int(info["category_id"])
+            pid = int(info["parent_id"])
+        else:
+            name = info["file_name"]
+            cid = int(info["file_id"])
+            pid = int(info["category_id"])
+        ctime = int(info["user_pptime"])
+        mtime = int(info["user_ptime"])
+    else:
+        raise ValueError(f"can't overview attr data: {info!r}")
+    return OverviewAttr(is_dir, id, pid, name, ctime, mtime)
 
 
 def type_of_attr(attr: Mapping, /) -> int:
@@ -149,7 +188,7 @@ def get_path_to_cid(
         nonlocal cid
         parts: list[str] = []
         if cid and (refresh or cid not in id_to_dirnode):
-            resp = yield client.fs_files({"cid": cid, "limit": 1}, async_=async_, **request_kwargs)
+            resp = yield client.fs_files({"cid": cid, "limit": 16}, base_url=True, async_=async_, **request_kwargs)
             check_response(resp)
             if cid and int(resp["path"][-1]["cid"]) != cid:
                 raise FileNotFoundError(errno.ENOENT, cid)
@@ -232,7 +271,7 @@ def get_ancestors_to_cid(
         nonlocal cid
         parts: list[dict] = []
         if cid and (refresh or cid not in id_to_dirnode):
-            resp = yield client.fs_files({"cid": cid, "limit": 1}, async_=async_, **request_kwargs)
+            resp = yield client.fs_files({"cid": cid, "limit": 16}, base_url=True, async_=async_, **request_kwargs)
             check_response(resp)
             if cid and int(resp["path"][-1]["cid"]) != cid:
                 raise FileNotFoundError(errno.ENOENT, cid)
@@ -259,6 +298,7 @@ def get_id_to_path(
     ensure_file: None | bool = None, 
     refresh: bool = False, 
     id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    app: str = "web", 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -271,6 +311,7 @@ def get_id_to_path(
     ensure_file: None | bool = None, 
     refresh: bool = False, 
     id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    app: str = "web", 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -282,6 +323,7 @@ def get_id_to_path(
     ensure_file: None | bool = None, 
     refresh: bool = False, 
     id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    app: str = "web", 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -298,6 +340,7 @@ def get_id_to_path(
 
     :param refresh: 是否刷新。如果为 True，则会执行网络请求以查询；如果为 False，则直接从 `id_to_dirnode` 中获取
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param app: 使用某个 app （设备）的接口
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -352,7 +395,7 @@ def get_id_to_path(
                 cid = pid
             else:
                 dirname = "/".join(patht[:i])
-                resp = yield client.fs_dir_getid(dirname, async_=async_, **request_kwargs)
+                resp = yield client.fs_dir_getid(dirname, async_=async_, base_url=True, **request_kwargs)
                 if not (resp["state"] and (cid := resp["id"])):
                     raise error
                 cid = int(cid)
@@ -362,43 +405,45 @@ def get_id_to_path(
             if async_:
                 async def request():
                     nonlocal cid
-                    async for info in iterdir_raw(client, cid, only_dirs=True, async_=True, **request_kwargs):
-                        if (info.get("n") or info["fn"]) == name:
-                            cid = int(info["pid"])
+                    async for info in iterdir_raw(client, cid, only_dirs=True, app=app, async_=True, **request_kwargs):
+                        attr = _overview_attr(info)
+                        if attr.name == name:
+                            cid = attr.parent_id
                             break
                     else:
                         raise error
                 yield request
             else:
-                for info in iterdir_raw(client, cid, only_dirs=True, **request_kwargs):
-                    if (info.get("n") or info["fn"]) == name:
-                        cid = int(info["pid"])
+                for info in iterdir_raw(client, cid, only_dirs=True, app=app, **request_kwargs):
+                    attr = _overview_attr(info)
+                    if attr.name == name:
+                        cid = attr.parent_id
                         break
                 else:
                     raise error
         name = patht[-1]
         if async_:
             async def request():
-                async for info in iterdir_raw(client, cid, async_=True, **request_kwargs):
-                    if (info.get("n") or info["fn"]) == name:
-                        is_file = "fid" in info
+                async for info in iterdir_raw(client, cid, app=app, async_=True, **request_kwargs):
+                    attr = _overview_attr(info)
+                    if attr.name == name:
                         if ensure_file:
-                            if is_file:
-                                return int(info["fid"])
-                        elif not is_file:
-                            return _get_fid(info)
+                            if not attr.is_dir:
+                                return attr.id
+                        elif attr.is_dir:
+                            return attr.id
                 else:
                     raise error
             return (yield request)
         else:
-            for info in iterdir_raw(client, cid, **request_kwargs):
-                if (info.get("n") or info["fn"]) == name:
-                    is_file = "fid" in info
+            for info in iterdir_raw(client, cid, app=app, **request_kwargs):
+                attr = _overview_attr(info)
+                if attr.name == name:
                     if ensure_file:
-                        if is_file:
-                            return int(info["fid"])
-                    elif not is_file:
-                        return _get_fid(info)
+                        if not attr.is_dir:
+                            return attr.id
+                    elif attr.is_dir:
+                        return attr.id
             else:
                 raise error
     return run_gen_step(gen_step, async_=async_)
@@ -452,7 +497,7 @@ def filter_na_ids(
             ids_it = iter(ids)
             it = takewhile(bool, (tuple(islice(ids_it, batch_size)) for _ in count()))
         for batch in it:
-            resp = yield file_skim(batch, async_=async_, **request_kwargs)
+            resp = yield file_skim(batch, base_url=True, async_=async_, **request_kwargs)
             if resp.get("error") == "文件不存在":
                 yield YieldFrom(map(int, batch), identity=True)
             else:
@@ -587,8 +632,9 @@ def _iter_fs_files(
             if not count and not len(resp["data"]) or offset != resp["offset"]:
                 return
             for info in resp["data"]:
-                if "pid" in info:
-                    id_to_dirnode[_get_fid(info)] = DirNode((info.get("n") or info["fn"]), int(info["pid"]))
+                attr = _overview_attr(info)
+                if attr.is_dir:
+                    id_to_dirnode[attr.id] = DirNode(attr.name, attr.parent_id)
                 elif only_dirs:
                     return
                 yield Yield(info, identity=True)
@@ -790,6 +836,7 @@ def ensure_attr_path(
     with_path: bool = True, 
     escape: None | Callable[[str], str] = escape, 
     id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    app: str = "web", 
     errors: Literal["ignore", "raise", "warn"] = "raise", 
     *, 
     async_: Literal[False] = False, 
@@ -805,6 +852,7 @@ def ensure_attr_path(
     with_path: bool = True, 
     escape: None | Callable[[str], str] = escape, 
     id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    app: str = "web", 
     errors: Literal["ignore", "raise", "warn"] = "raise", 
     *, 
     async_: Literal[True], 
@@ -819,6 +867,7 @@ def ensure_attr_path(
     with_path: bool = True, 
     escape: None | Callable[[str], str] = escape, 
     id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    app: str = "web", 
     errors: Literal["ignore", "raise", "warn"] = "raise", 
     *, 
     async_: Literal[False, True] = False, 
@@ -833,6 +882,7 @@ def ensure_attr_path(
     :param with_path: 文件信息中是否要包含 "path"
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param app: 使用某个 app （设备）的接口
     :param errors: 如何处理错误
 
         - "ignore": 忽略异常后继续
@@ -895,6 +945,7 @@ def ensure_attr_path(
                 yield walk_through(iter_stared_dirs_raw(
                     client, 
                     id_to_dirnode=id_to_dirnode, 
+                    app=app, 
                     async_=async_, 
                     **request_kwargs, 
                 ))
@@ -912,8 +963,9 @@ def ensure_attr_path(
             if pid:
                 pids.add(pid)
         def take_while(info, /) -> bool:
-            find_ids.discard(_get_fid(info))
-            if int(info["te"]) < start:
+            attr = _overview_attr(info)
+            find_ids.discard(attr.id)
+            if int(attr.mtime) < start:
                 return False
             return bool(find_ids)
         start: float
@@ -930,6 +982,7 @@ def ensure_attr_path(
                                 pid, 
                                 first_page_size=1, 
                                 id_to_dirnode=id_to_dirnode, 
+                                app=app, 
                                 async_=async_, 
                                 **request_kwargs, 
                             ), None)
@@ -948,6 +1001,7 @@ def ensure_attr_path(
                             order="user_utime", 
                             asc=0, 
                             id_to_dirnode=id_to_dirnode, 
+                            app=app, 
                             async_=async_, 
                             **request_kwargs, 
                         ), take_while=take_while)
@@ -972,6 +1026,7 @@ def ensure_attr_path(
                                     pid, 
                                     first_page_size=1, 
                                     id_to_dirnode=id_to_dirnode, 
+                                    app=app, 
                                     async_=async_, 
                                     **request_kwargs, 
                                 ), None)
@@ -1395,8 +1450,8 @@ def iter_files(
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
-    raise_for_changed_count: bool = False, 
     app: str = "web", 
+    raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -1418,8 +1473,8 @@ def iter_files(
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
-    raise_for_changed_count: bool = False, 
     app: str = "web", 
+    raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -1440,8 +1495,8 @@ def iter_files(
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
-    raise_for_changed_count: bool = False, 
     app: str = "web", 
+    raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -1480,8 +1535,8 @@ def iter_files(
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
-    :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param app: 使用某个 app （设备）的接口
+    :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -1572,6 +1627,7 @@ def iter_files(
                 with_path=with_path, 
                 escape=escape, 
                 id_to_dirnode=id_to_dirnode, 
+                app=app, 
                 async_=async_, 
                 **request_kwargs, 
             ))
@@ -1593,6 +1649,7 @@ def dict_files(
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False] = False, 
@@ -1614,6 +1671,7 @@ def dict_files(
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[True], 
@@ -1634,6 +1692,7 @@ def dict_files(
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False, True] = False, 
@@ -1672,6 +1731,7 @@ def dict_files(
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param app: 使用某个 app （设备）的接口
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
@@ -1692,6 +1752,7 @@ def dict_files(
             cur=cur, 
             normalize_attr=normalize_attr, 
             id_to_dirnode=id_to_dirnode, 
+            app=app, 
             raise_for_changed_count=raise_for_changed_count, 
             async_=async_, # type: ignore
             **request_kwargs, 
@@ -1711,6 +1772,7 @@ def dict_files(
                 with_path=with_path, 
                 escape=escape, 
                 id_to_dirnode=id_to_dirnode, 
+                app=app, 
                 async_=async_, # type: ignore
                 **request_kwargs, 
             )
@@ -1733,6 +1795,7 @@ def traverse_files(
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False] = False, 
@@ -1754,6 +1817,7 @@ def traverse_files(
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[True], 
@@ -1774,6 +1838,7 @@ def traverse_files(
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False, True] = False, 
@@ -1804,6 +1869,7 @@ def traverse_files(
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param app: 使用某个 app （设备）的接口
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
@@ -1824,6 +1890,7 @@ def traverse_files(
             escape=escape, 
             normalize_attr=normalize_attr, 
             id_to_dirnode=id_to_dirnode, 
+            app=app, 
             raise_for_changed_count=raise_for_changed_count, 
             async_=async_, # type: ignore
             **request_kwargs, 
@@ -1856,10 +1923,15 @@ def traverse_files(
                             "asc": 1, "cid": cid, "cur": 0, "limit": 16, "o": "user_ptime", "offset": 0, 
                             "show_dir": 0, "suffix": suffix, "type": type, 
                         }
-                        resp = check_response((yield client.fs_files(payload, async_=async_, **{
-                            **request_kwargs, 
-                            "timeout": auto_splitting_statistics_timeout, 
-                        })))
+                        resp = check_response((yield client.fs_files(
+                            payload, 
+                            base_url=True, 
+                            async_=async_, 
+                            **{
+                                **request_kwargs, 
+                                "timeout": auto_splitting_statistics_timeout, 
+                            }, 
+                        )))
                         if cid and int(resp["path"][-1]["cid"]) != cid:
                             continue
                         for info in resp["path"][1:]:
@@ -1880,6 +1952,7 @@ def traverse_files(
                                     with_path=with_path, 
                                     escape=escape, 
                                     id_to_dirnode=id_to_dirnode, 
+                                    app=app, 
                                     async_=async_, 
                                     **request_kwargs, 
                                 )
@@ -1896,6 +1969,7 @@ def traverse_files(
                                 escape=escape, 
                                 normalize_attr=normalize_attr, 
                                 id_to_dirnode=id_to_dirnode, 
+                                app=app, 
                                 raise_for_changed_count=raise_for_changed_count, 
                                 async_=async_, 
                                 **request_kwargs, 
@@ -1910,6 +1984,7 @@ def traverse_files(
                     escape=escape, 
                     normalize_attr=normalize_attr, 
                     id_to_dirnode=id_to_dirnode, 
+                    app=app, 
                     raise_for_changed_count=raise_for_changed_count, 
                     async_=async_, 
                     **request_kwargs, 
@@ -1946,6 +2021,7 @@ def iter_dupfiles(
     auto_splitting_statistics_timeout: None | int | float = 5, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False] = False, 
@@ -1966,6 +2042,7 @@ def iter_dupfiles(
     auto_splitting_statistics_timeout: None | int | float = 5, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[True], 
@@ -1985,6 +2062,7 @@ def iter_dupfiles(
     auto_splitting_statistics_timeout: None | int | float = 5, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False, True] = False, 
@@ -2020,6 +2098,7 @@ def iter_dupfiles(
     :param auto_splitting_statistics_timeout: 如果执行统计超过此时间，则立即终止，并认为文件是无限多
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param app: 使用某个 app （设备）的接口
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
@@ -2037,6 +2116,7 @@ def iter_dupfiles(
         auto_splitting_statistics_timeout=auto_splitting_statistics_timeout, 
         normalize_attr=normalize_attr, 
         id_to_dirnode=id_to_dirnode, 
+        app=app, 
         raise_for_changed_count=raise_for_changed_count, 
         async_=async_, # type: ignore
         **request_kwargs, 
@@ -2074,6 +2154,7 @@ def dict_dupfiles(
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False] = False, 
@@ -2097,6 +2178,7 @@ def dict_dupfiles(
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[True], 
@@ -2119,6 +2201,7 @@ def dict_dupfiles(
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False, True] = False, 
@@ -2157,6 +2240,7 @@ def dict_dupfiles(
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param app: 使用某个 app （设备）的接口
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
@@ -2177,6 +2261,7 @@ def dict_dupfiles(
             auto_splitting_statistics_timeout=auto_splitting_statistics_timeout, 
             normalize_attr=normalize_attr, 
             id_to_dirnode=id_to_dirnode, 
+            app=app, 
             raise_for_changed_count=raise_for_changed_count, 
             async_=async_, # type: ignore
             **request_kwargs, 
@@ -2196,6 +2281,7 @@ def dict_dupfiles(
                 with_path=with_path, 
                 escape=escape, 
                 id_to_dirnode=id_to_dirnode, 
+                app=app, 
                 async_=async_, # type: ignore
                 **request_kwargs, 
             )
@@ -2417,6 +2503,7 @@ def dict_image_files(
                 with_path=with_path, 
                 escape=escape, 
                 id_to_dirnode=id_to_dirnode, 
+                app="android", 
                 async_=async_, # type: ignore
                 **request_kwargs, 
             )
@@ -2488,6 +2575,7 @@ def iter_dangling_files(
         - 99: 仅文件
 
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
+    :param app: 使用某个 app （设备）的接口
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -2504,15 +2592,15 @@ def iter_dangling_files(
         ok_cids: set[int] = set()
         payload = {"cid": cid, "limit": page_size, "offset": 0, "suffix": suffix, "type": type}
         while True:
-            resp = yield client.fs_files(payload, async_=async_, **request_kwargs)
-            if cid and _get_fid(resp) != cid:
+            resp = yield client.fs_files(payload, base_url=True, async_=async_, **request_kwargs)
+            if cid and int(resp["path"][-1]["cid"]) != cid:
                 break
             if resp["offset"] != payload["offset"]:
                 break
+            t = tuple(map(_overview_attr, resp["data"]))
             pids = {
-                pid 
-                for info in resp["data"] 
-                if (pid := _get_fid(info)) not in na_cids
+                pid for a in t
+                if (pid := a.parent_id) not in na_cids
                     and pid not in ok_cids
             }
             if pids:
@@ -2524,8 +2612,8 @@ def iter_dangling_files(
                         filter_na_ids(client, pids, async_=True, **request_kwargs), 
                     )
                 ok_cids |= pids - na_cids
-            for info in resp["data"]:
-                if _get_fid(info) in na_cids:
+            for a, info in zip(t, resp["data"]):
+                if a.parent_id in na_cids:
                     yield Yield(normalize_attr(info), identity=True)
             payload["offset"] += len(resp["data"]) # type: ignore
             if payload["offset"] >= resp["count"]:
@@ -2638,7 +2726,7 @@ def share_iterdir(
         }
         count = 0
         while True:
-            resp = yield client.share_snap(payload, async_=async_, **request_kwargs)
+            resp = yield client.share_snap(payload, base_url=True, async_=async_, **request_kwargs)
             check_response(resp)
             if count == (count := resp["data"]["count"]):
                 break
