@@ -28,6 +28,7 @@ from uuid import uuid4
 from warnings import warn
 
 from asynctools import async_chain_from_iterable
+from encode_uri import encode_uri_component_loose
 from iterutils import run_gen_step, run_gen_step_iter, Yield, YieldFrom
 from p115client import check_response, normalize_attr, P115Client, P115URL
 from p115client.exception import P115Warning
@@ -35,11 +36,6 @@ from posixpatht import escape
 
 from .export_dir import export_dir_parse_iter
 from .iterdir import get_path_to_cid, iter_files, iter_files_raw, DirNode, DirNodeTuple, ID_TO_DIRNODE_CACHE
-
-
-TRANSTAB3: Final = {c: f"%{c:02x}" for c in b"%?#"}
-TRANSTAB4: Final = {c: f"%{c:02x}" for c in b"/%?#"}
-translate = str.translate
 
 
 def reduce_image_url_layers(url: str, /) -> str:
@@ -687,10 +683,6 @@ def make_strm(
     origin = origin.rstrip("/")
     savedir = fsdecode(save_dir)
     makedirs(savedir, exist_ok=True)
-    if ensure_ascii:
-        encode = lambda attr: quote(attr["name"], safe="@[]:!$&'()*+,;=")
-    else:
-        encode = lambda attr: translate(attr["name"], TRANSTAB4)
     if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
@@ -778,7 +770,7 @@ def make_strm(
                     async with sema:
                         return await save(attr)
                 path = normalize_path(attr)
-                url = f"{origin}/{encode(attr)}?pickcode={attr['pickcode']}&id={attr['id']}&sha1={attr['sha1']}&size={attr['size']}"
+                url = f"{origin}/{encode_uri_component_loose(attr['name'], ensure_ascii=ensure_ascii)}?pickcode={attr['pickcode']}&id={attr['id']}&sha1={attr['sha1']}&size={attr['size']}"
                 try:
                     try:
                         async with async_open(path, mode) as f:
@@ -892,7 +884,7 @@ def make_strm(
                 except FileNotFoundError:
                     makedirs(dirname(path), exist_ok=True)
                     f = open(path,  "w")
-                f.write(f"{origin}/{encode(attr)}?pickcode={attr['pickcode']}&id={attr['id']}&sha1={attr['sha1']}&size={attr['size']}")
+                f.write(f"{origin}/{encode_uri_component_loose(attr['name'], ensure_ascii=ensure_ascii)}?pickcode={attr['pickcode']}&id={attr['id']}&sha1={attr['sha1']}&size={attr['size']}")
                 if log is not None:
                     log(MakeStrmLog(
                         f"[OK] path={path!r} attr={attr!r}", 
@@ -1044,10 +1036,6 @@ def make_strm_by_export_dir(
     origin = origin.rstrip("/")
     savedir = fsdecode(save_dir)
     makedirs(savedir, exist_ok=True)
-    if ensure_ascii:
-        encode = lambda path: quote(path, safe="/@[]:!$&'()*+,;=")
-    else:
-        encode = lambda path: translate(path, TRANSTAB3)
     if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     mode = "w" if update else "x"
@@ -1101,7 +1089,7 @@ def make_strm_by_export_dir(
                     async with sema:
                         return await save(remote_path)
                 path = normalize_path(remote_path)
-                url = f"{origin}/{encode(remote_path)}"
+                url = f"{origin}/{encode_uri_component_loose(remote_path, ensure_ascii=ensure_ascii)}"
                 try:
                     try:
                         async with async_open(path, mode) as f:
@@ -1201,7 +1189,7 @@ def make_strm_by_export_dir(
                 except FileNotFoundError:
                     makedirs(dirname(path), exist_ok=True)
                     f = open(path,  "w")
-                f.write(f"{origin}/{encode(remote_path)}")
+                f.write(f"{origin}/{encode_uri_component_loose(remote_path, ensure_ascii=ensure_ascii)}")
                 if log is not None:
                     log(MakeStrmLog(
                         f"[OK] path={path!r} remote_path={remote_path!r}", 

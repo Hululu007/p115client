@@ -346,7 +346,7 @@ def make_application(
             payload["fc_mix"] = 0
         else:
             payload["show_dir"] = 0
-        return _iter_fs_files(client, payload, only_dirs=only_dirs, async_=True, request=request)
+        return _iter_fs_files(client, payload, only_dirs=only_dirs, app="android", async_=True, request=request)
 
     async def get_attr_by_id(
         client: P115Client, 
@@ -356,7 +356,7 @@ def make_application(
     ) -> dict:
         """获取 id 对应的文件的 信息
         """
-        resp = await client.fs_file(id, async_=True, request=request)
+        resp = await client.fs_file(id, base_url=True, async_=True, request=request)
         if not resp["state"]:
             resp["file_id"] = id
             raise FileNotFoundError(errno.ENOENT, resp)
@@ -442,7 +442,7 @@ def make_application(
                 raise error
         for name in patht[i:-1]:
             async for info in iterdir(client, cid, only_dirs_or_files=True, request=request):
-                if info["n"] == name:
+                if info["fn"] == name:
                     cid = info["pid"]
                     dirname += "/" + escape(name)
                     break

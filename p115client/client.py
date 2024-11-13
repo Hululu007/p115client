@@ -977,7 +977,7 @@ class P115Client:
             if not app:
                 app = yield self.login_app(async_=async_, **request_kwargs)
             if not app:
-                app = "tv"
+                app = "alipaymini"
             if uid := self.__dict__.get("login_uid"):
                 resp = yield self.login_qrcode_scan_result(
                     uid, 
@@ -7255,7 +7255,7 @@ class P115Client:
     @staticmethod
     def login_qrcode_scan_result(
         uid: str, 
-        app: str = "tv", 
+        app: str = "alipaymini", 
         request: None | Callable = None, 
         *, 
         async_: Literal[False] = False, 
@@ -7266,7 +7266,7 @@ class P115Client:
     @staticmethod
     def login_qrcode_scan_result(
         uid: str, 
-        app: str = "tv", 
+        app: str = "alipaymini", 
         request: None | Callable = None, 
         *, 
         async_: Literal[True], 
@@ -7276,7 +7276,7 @@ class P115Client:
     @staticmethod
     def login_qrcode_scan_result(
         uid: str, 
-        app: str = "tv", 
+        app: str = "alipaymini", 
         request: None | Callable = None, 
         *, 
         async_: Literal[False, True] = False, 

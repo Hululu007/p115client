@@ -8,7 +8,7 @@ __doc__ = """\
         \x1b[5m🚄\x1b[0m \x1b[1m115 302 服务(针对视频)\x1b[0m \x1b[5m🌊\x1b[0m
 
 \x1b[1mTIPS\x1b[0m: 请在当前工作目录下，创建一个 \x1b[1;4m\x1b[34m115-cookies.txt\x1b[0m 文件，并写入 cookies
-      如果没有，则会自动创建，并要求你扫码，默认自动绑定到 harmony 端（即 115 鸿蒙版）
+      如果没有，则会自动创建，并要求你扫码，默认自动绑定到 alipaymini 端（支付宝小程序）
 
 此程序用于请求视频文件的直链，支持 2 种调用方式
 
@@ -186,7 +186,7 @@ def make_application(
         "加载一个目录中的所有视频的 名字 和 pickcode 到缓存"
         client = app.services.resolve(ClientSession)
         p115client = app.services.resolve(P115Client)
-        fs_files = partial(p115client.fs_files, async_=True, request=blacksheep_request, session=client)
+        fs_files = partial(p115client.fs_files_app, request=blacksheep_request, session=client, async_=True)
         cid = str(cid)
         last_max_mtime = MAX_MTIME_MAP.get(cid, "0")
         page_size = 10_000 if last_max_mtime == "0" else 32
@@ -199,18 +199,18 @@ def make_application(
             cid != "0" and resp["path"][-1]["cid"] != cid or 
             resp["count"] == 0):
             return 0
-        this_max_mtime = resp["data"][0]["te"]
+        this_max_mtime = resp["data"][0]["upt"]
         if last_max_mtime >= this_max_mtime:
             return 0
         count = 0
         payload["limit"] = 10_000
         while True:
             for info in resp["data"]:
-                mtime = info["te"]
+                mtime = info["upt"]
                 if mtime <= last_max_mtime:
                     MAX_MTIME_MAP[cid] = this_max_mtime
                     return count
-                NAME_TO_PICKCODE[info["n"]] = info["pc"]
+                NAME_TO_PICKCODE[info["fn"]] = info["pc"]
                 count += 1
             payload["offset"] += len(resp["data"]) # type: ignore
             if payload["offset"] >= resp["count"]:

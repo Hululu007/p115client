@@ -80,7 +80,7 @@ def _overview_attr(info: Mapping, /) -> OverviewAttr:
     elif "fn" in info:
         is_dir = info["fc"] == "0"
         name = info["fn"]
-        cid = int(info["fid"])
+        id = int(info["fid"])
         pid = int(info["pid"])
         ctime = int(info["uppt"])
         mtime = int(info["upt"])
@@ -88,11 +88,11 @@ def _overview_attr(info: Mapping, /) -> OverviewAttr:
         is_dir = "file_id" not in info
         if is_dir:
             name = info["category_name"]
-            cid = int(info["category_id"])
+            id = int(info["category_id"])
             pid = int(info["parent_id"])
         else:
             name = info["file_name"]
-            cid = int(info["file_id"])
+            id = int(info["file_id"])
             pid = int(info["category_id"])
         ctime = int(info["user_pptime"])
         mtime = int(info["user_ptime"])
