@@ -97,14 +97,17 @@ def generate_cookies_factory(
     :return: 函数，调用以返回一个 cookies
     """
     if app:
-        if APP_TO_SSOENT.get(app) == client.login_ssoent:
+        not_allowed_apps = ("web", "desktop", "harmony")
+        if app in not_allowed_apps:
+            raise ValueError(f"don't use app in {not_allowed_apps}")
+        elif APP_TO_SSOENT.get(app) == client.login_ssoent:
             raise ValueError("may cause login device conflicts")
     else:
         app = client.login_app()
-        if app == "tv":
-            app = "harmony"
-        else:
+        if app == "alipaymini":
             app = "tv"
+        else:
+            app = "alipaymini"
     refresh_token = client.login_without_app()
     def call() -> str:
         nonlocal refresh_token
@@ -1025,7 +1028,6 @@ def iterdir(
     ancestors: list[dict] = []
     seen: dict[int, dict] = {}
     def get_files():
-        global flow_total
         nonlocal count
         #resp = call_wrap_with_cookies_pool(client.fs_files, payload)
         resp = fs_files(payload)
@@ -1199,6 +1201,7 @@ def updatedb_one(
 
 
 # TODO: 文件如果被移动位置，并且还在一个根目录之下，由此它自己的 mtime 不变，这要怎么处理？或许需要结合 115 事件
+# TODO: 如果从未被拉过，应该得到专门的处理，使用并发，以加快速度，增量拉则不上这种手段
 def updatedb_tree(
     client: str | P115Client, 
     dbfile: None | str | Connection | Cursor = None, 
@@ -1226,6 +1229,7 @@ def updatedb_tree(
                 while pids := [id for id in select_parent_ids(con, pids) if id != 0 and id not in all_pids]:
                     all_pids.update(pids)
                 if all_pids:
+                    # 删除可能意味着被移动，而移动并不会更新 mtime，所以需要强制进行更新
                     if not custom_no_dir_moved:
                         update_desc(client, all_pids)
                         no_dir_moved = False
@@ -1255,6 +1259,7 @@ def updatedb_tree(
                    # 直接忽略找不到的目录 id
                    all_pids -= na_pids
                    logging.warning("found some dangling directory ids, please clean them up, otherwise it will slow down the update speed: %r", na_pids)
+            # TODO: 想办法减少调用 update_id_to_dirnode，就可以极大减少更新时间，如果前一次拉取后，可以确定后续都可以只在必要时更新，则可以减少大量时间
             if not no_dir_moved:
                 dir_ids.update(a["id"] for a in update_id_to_dirnode(con, client))
             if to_replace: 
@@ -1406,6 +1411,7 @@ def updatedb(
                     if need_to_split_tasks or not recursive:
                         updatedb_one(client, con, id)
                     else:
+                        # TODO: 为了优化，完全可以把星标目录全量拉取一遍，那么 no_dir_moved 就可以安全设置为 False
                         updatedb_tree(client, con, id, no_dir_moved=no_dir_moved)
                 except (FileNotFoundError, NotADirectoryError):
                     pass
@@ -1454,7 +1460,7 @@ if __name__ == "__main__":
             cookies = Path(cookies_path)
         else:
             cookies = Path("115-cookies.txt")
-    client = P115Client(cookies, check_for_relogin=True, ensure_cookies=True, app="harmony")
+    client = P115Client(cookies, check_for_relogin=True, ensure_cookies=True, app="alipaymini")
     updatedb(
         client, 
         dbfile=args.dbfile, 
@@ -1487,3 +1493,6 @@ if __name__ == "__main__":
 # TODO: 遇到悬空元素，如何处理，是 1) 忽略、2) 删除 3) 移走 还是 4) 报错
 # TODO: 还要处理一种情况，和悬空元素有关，某个目录被删除了，后来建立了同名的目录，然后有些文件还是移动入那个被删除的目录，就会造成这些元素悬空，更重要的是，不可有两个相同路径的目录，如果有的话，就要进行冲突处理，最多只能保留一个
 # TODO: 如果任务数比较多的话，而且没有-nm，可以先一次性把所有星标完整拉取一次，以后就不需要每次都检查，相当于是退化为-nm
+
+# TODO: 重要，全量拉取使用 10 并发，但是一旦 count 变了，可能要全部直接取消，然后重新跑
+

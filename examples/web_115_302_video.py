@@ -307,7 +307,7 @@ def make_application(
     async def register_p115client(app: Application):
         client = P115Client(
             cookies_path, 
-            app="harmony", 
+            app="alipaymini", 
             check_for_relogin=True, 
         )
         async with client.async_session:

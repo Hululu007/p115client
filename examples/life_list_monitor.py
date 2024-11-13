@@ -299,7 +299,7 @@ def main(
 ):
     if collect is None:
         collect = logger.info
-    client = P115Client(cookies, app="harmony", ensure_cookies=True, check_for_relogin=True)
+    client = P115Client(cookies, app="alipaymini", ensure_cookies=True, check_for_relogin=True)
     urlopen = partial(request, pool=PoolManager(num_pools=50))
     client.life_calendar_setoption(request=urlopen)
     log_error = logger.exception

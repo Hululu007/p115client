@@ -260,7 +260,7 @@ if not (cookies := args.cookies):
         cookies = Path(cookies_path)
     else:
         cookies = Path("115-cookies.txt")
-client = P115Client(cookies, check_for_relogin=True, ensure_cookies=True, app="harmony")
+client = P115Client(cookies, check_for_relogin=True, ensure_cookies=True, app="alipaymini")
 fs = client.get_fs(cache_id_to_readdir=65536, cache_path_to_id=args.path_cache_size, request=urlopen)
 
 # NOTE: id 到 pickcode 的映射

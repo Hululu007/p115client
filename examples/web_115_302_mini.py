@@ -39,7 +39,7 @@ if __name__ == "__main__":
     cookies_path = Path(args.cookies_path or "115-cookies.txt")
 else:
     cookies_path = Path("115-cookies.txt")
-client = P115Client(cookies_path, app="harmony", check_for_relogin=True)
+client = P115Client(cookies_path, app="alipaymini", check_for_relogin=True)
 
 app = Application()
 # NOTE: id 到 pickcode 的映射

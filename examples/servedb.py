@@ -182,7 +182,7 @@ def make_application(
         cookies_path = Path(cookies_path)
     else:
         cookies_path = Path("115-cookies.txt")
-    client = P115Client(cookies_path, app="harmony", check_for_relogin=True)
+    client = P115Client(cookies_path, app="alipaymini", check_for_relogin=True)
     urlopen = partial(urllib3_request, pool=PoolManager(num_pools=50))
 
     CON: Connection
