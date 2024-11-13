@@ -88,8 +88,6 @@ def type_of_attr(attr: Mapping, /) -> int:
         return type
     if "video_type" in attr:
         return 4
-    if attr.get("thumb"):
-        return 2
     return 99
 
 

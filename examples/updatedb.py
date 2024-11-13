@@ -97,7 +97,7 @@ def generate_cookies_factory(
     :return: 函数，调用以返回一个 cookies
     """
     if app:
-        not_allowed_apps = ("web", "desktop", "harmony")
+        not_allowed_apps = ("web", "desktop", "harmony", "linux", "mac", "windows")
         if app in not_allowed_apps:
             raise ValueError(f"don't use app in {not_allowed_apps}")
         elif APP_TO_SSOENT.get(app) == client.login_ssoent:
@@ -250,7 +250,7 @@ def normalize_attr(info: Mapping, /) -> dict:
             "size": int(info.get("fs") or 0), 
             "sha1": info.get("sha1") or "", 
             "is_dir": is_dir, 
-            "is_image": not is_dir and bool(info.get("thumb")), 
+            "is_image": not is_dir and info.get("thumb", "").startswith("?s="), 
             "ctime": int(info["uppt"]), 
             "mtime": int(info["upt"])
         }
@@ -265,7 +265,7 @@ def normalize_attr(info: Mapping, /) -> dict:
         attr["size"] = int(info.get("s") or 0)
         attr["sha1"] = info.get("sha") or ""
         attr["is_dir"] = is_dir
-        attr["is_image"] = not is_dir and bool(info.get("u"))
+        attr["is_image"] = not is_dir and info.get("class") in ("PIC", "JG_PIC")
         attr["ctime"] = int(info.get("tp", 0))
         attr["mtime"] = int(info.get("te", 0))
         return attr
@@ -1495,4 +1495,4 @@ if __name__ == "__main__":
 # TODO: 如果任务数比较多的话，而且没有-nm，可以先一次性把所有星标完整拉取一次，以后就不需要每次都检查，相当于是退化为-nm
 
 # TODO: 重要，全量拉取使用 10 并发，但是一旦 count 变了，可能要全部直接取消，然后重新跑
-
+# TODO: 先拉取一次 115 的更新事件，这个事件从数据库中最新一条数据的更新事件开始，如果没有数据，则为当前（不需要立即拉一次），以后轮到下一个任务时，只需要在最近一次拉取时间之后进行拉取，如果事件发生时间在当前记录的更新时间之前，则忽略此事件

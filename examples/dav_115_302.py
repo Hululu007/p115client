@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 3, 8, 1)
+__version__ = (0, 3, 8, 2)
 __requirements__ = ["cachetools", "flask", "Flask-Compress", "httpagentparser", "orjson", "path_predicate", "pysubs2", "python-115", "python-encode_uri", "urllib3_request", "werkzeug", "wsgidav"]
 __doc__ = """\
     🕸️ 获取你的 115 网盘账号上文件信息和下载链接 🕷️
@@ -1148,7 +1148,7 @@ class FileResource(DavPathBase, DAVNonCollection):
                 url += "&image=true"
         else:
             url = f"{origin}/{name}?method=file&pickcode={attr['pickcode']}&id={attr['id']}&sha1={attr['sha1']}"
-            if attr.get("class") == "PIC" or attr.get("thumb"):
+            if attr.get("class") in ("PIC", "JG_PIC"):
                 url += "&image=true"
         return bytes(url, "utf-8")
 

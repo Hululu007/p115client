@@ -221,6 +221,7 @@ def make_application(
     ) -> dict:
         """对文件信息进行规范化
         """
+        is_image = False
         if "file_id" in info or "file_name" in info:
             file_id = info.get("file_id", "")
             if file_id:
@@ -237,14 +238,28 @@ def make_application(
                 thumb = info["origin_url"]
             elif "img_url" in info:
                 thumb = info["img_url"]
+                is_image = True
             else:
                 thumb = ""
         else:
-            file_id = str(info["fid"])
-            file_name = cast(str, info["n"])
-            pick_code = cast(str, info["pc"])
-            file_sha1 = cast(str, info["sha"])
-            thumb = info.get("u", "")
+            if "fn" in info:
+                file_id = str(info["fid"])
+                file_name = cast(str, info["fn"])
+                pick_code = cast(str, info["pc"])
+                file_sha1 = cast(str, info["sha1"])
+                thumb = info.get("thumb", "")
+                if thumb.startswith("?"):
+                    is_image = True
+                    thumb = f"https://imgjump.115.com{thumb}&size=0&sha1={file_sha1}"
+            else:
+                file_id = str(info["fid"])
+                file_name = cast(str, info["n"])
+                pick_code = cast(str, info["pc"])
+                file_sha1 = cast(str, info["sha"])
+                thumb = info.get("u", "")
+                if info.get("class") in ("PIC", "JG_PIC"):
+                    is_image = True
+                    thumb = reduce_image_url_layers(thumb)
         if file_sha1:
             SHA1_TO_PICKCODE[file_sha1] = pick_code
         if file_id:
@@ -253,7 +268,9 @@ def make_application(
             PATH_TO_PICKCODE[dirname + "/" + escape(file_name)] = pick_code
         attr = {"id": file_id, "name": file_name, "pickcode": pick_code, "sha1": file_sha1}
         if thumb:
-            attr["thumb"] = IMAGE_URL_CACHE[pick_code] = bytes(reduce_image_url_layers(thumb), "utf-8")
+            attr["thumb"] = bytes(thumb, "utf-8")
+        if is_image:
+            IMAGE_URL_CACHE[pick_code] = attr["thumb"]
         return attr
 
     async def load_files(
@@ -275,14 +292,15 @@ def make_application(
             with_path=with_path, 
             request=blacksheep_request, 
             session=client, 
+            app="android", 
         ):
             pickcode = attr["pickcode"]
             ID_TO_PICKCODE[str(attr["id"])] = pickcode
             SHA1_TO_PICKCODE[attr["sha1"]] = pickcode
             if with_path:
                 PATH_TO_PICKCODE[attr["path"]] = pickcode # type: ignore
-            if thumb := attr.get("thumb"):
-                IMAGE_URL_CACHE[pickcode] = bytes(reduce_image_url_layers(thumb), "utf-8")
+            if (thumb := attr.get("thumb")) and thumb.startswith("https://imgjump.115.com"):
+                IMAGE_URL_CACHE[pickcode] = thumb
             count += 1
         return count
 

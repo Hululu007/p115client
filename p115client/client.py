@@ -74,7 +74,7 @@ ED2K_NAME_TRANSTAB: Final = dict(zip(b"/|", ("%2F", "%7C")))
 _httpx_request = None
 
 
-def make_webapi_prefix_generator(
+def make_prefix_generator(
     n: int = 1, 
     /, 
     seq=("/category", "/files", "/history", "/label", "/movies", "/offine", "/photo", "/rb", "/share", "/user", "/usershare"), 
@@ -123,13 +123,37 @@ def complete_webapi(
     path: str, 
     /, 
     base_url: bool | str = False, 
-    get_prefix: None | Callable[[], str] = None, #make_webapi_prefix_generator(4), 
+    get_prefix: None | Callable[[], str] = None, #make_prefix_generator(4), 
 ) -> str:
     if get_prefix is not None:
         if path and not path.startswith("/"):
             path = "/" + path
         path = get_prefix() + path
     return complete_api(path, base="webapi", base_url=base_url)
+
+
+def complete_lixian_api(
+    path: str | Mapping | Sequence[tuple], 
+    /, 
+    base_url: None | bool | str = None, 
+    get_prefix: None | Callable[[], str] = make_prefix_generator(4, ("/web", "/lixian")), 
+) -> str:
+    if not isinstance(path, str):
+        query = urlencode(path)
+        if query:
+            path = "/lixian/?" + query
+        else:
+            path = "/lixian/"
+    if get_prefix is not None:
+        if path and not path.startswith("/"):
+            path = "/" + path
+        path = get_prefix() + path
+    if base_url is None:
+        base = "lixian"
+        base_url = False
+    else:
+        base = ""
+    return complete_api(path, base, base_url=base_url)
 
 
 def json_loads(content: bytes, /):
@@ -449,13 +473,16 @@ def normalize_attr_app(
         attr["pickcode"] = attr["pick_code"] = info["pc"]
     attr["name"] = info["fn"]
     attr["size"] = int(info.get("fs") or 0)
-    attr["sha1"] = info.get("sha1")
+    sha1 = attr["sha1"] = info.get("sha1")
     attr["labels"] = info["fl"]
     attr["ico"] = info.get("ico", "folder" if attr["is_dir"] else "")
     if "ftype" in info:
         attr["ftype"] = int(info["ftype"] or 0)
     if "thumb" in info:
-        attr["thumb"] = f"https://imgjump.115.com?{info['thumb']}&size=0&sha1={info['sha1']}"
+        thumb = info["thumb"]
+        if thumb.startswith("?"):
+            thumb = f"https://imgjump.115.com{thumb}&size=0&sha1={sha1}"
+        attr["thumb"] = thumb
     if "uppt" in info: # pptime
         attr["ctime"] = attr["user_ptime"] = int(info["uppt"])
     if "upt" in info: # ptime
@@ -615,9 +642,7 @@ class P115Client:
                 setattr(self, "cookies", cookies)
             if ensure_cookies:
                 self.login(app, console_qrcode=console_qrcode)
-        if check_for_relogin is True:
-            check_for_relogin = default_check_for_relogin
-        self.check_for_relogin = check_for_relogin
+        setattr(self, "check_for_relogin", check_for_relogin)
         self._request_lock = Lock()
         self._request_alock = AsyncLock()
 
@@ -809,6 +834,21 @@ class P115Client:
     def login_uid(self, /) -> str:
         return self.login_without_app()
 
+    @property
+    def check_for_relogin(self, /) -> None | Callable[[BaseException], bool | int]:
+        return self.__dict__.get("check_for_relogin")
+
+    @check_for_relogin.setter
+    def check_for_relogin(self, call: None | bool | Callable[[BaseException], bool | int], /):
+        if call is None:
+            self.__dict__["check_for_relogin"] = None
+        elif call is False:
+            self.__dict__.pop("check_for_relogin", None)
+        else:
+            if call is True:
+                call = default_check_for_relogin
+            self.__dict__["check_for_relogin"] = call
+
     @overload
     def login(
         self, 
@@ -932,18 +972,27 @@ class P115Client:
         def gen_step():
             nonlocal app
             status = yield self.login_status(async_=async_, **request_kwargs)
-            if not status:
-                if not app:
-                    app = yield self.login_app(async_=async_, **request_kwargs)
-                if not app:
-                    app = "qandroid"
+            if status:
+                return self
+            if not app:
+                app = yield self.login_app(async_=async_, **request_kwargs)
+            if not app:
+                app = "tv"
+            if uid := self.__dict__.get("login_uid"):
+                resp = yield self.login_qrcode_scan_result(
+                    uid, 
+                    app, 
+                    async_=async_, 
+                    **request_kwargs, 
+                )
+            else:
                 resp = yield self.login_with_qrcode(
                     app, 
                     console_qrcode=console_qrcode, 
                     async_=async_, 
                     **request_kwargs, 
                 )
-                setattr(self, "cookies", resp["data"]["cookie"])
+            setattr(self, "cookies", resp["data"]["cookie"])
             return self
         return run_gen_step(gen_step, async_=async_)
 
@@ -1416,7 +1465,9 @@ class P115Client:
                 setattr(self, "cookies", cookies)
                 return self
             else:
-                return type(self)(cookies)
+                inst = type(self)(cookies)
+                inst.login_uid = self.login_uid
+                return inst
         return run_gen_step(gen_step, async_=async_)
 
     @overload
@@ -1525,7 +1576,9 @@ class P115Client:
         def gen_step():
             resp = yield cls.login_qrcode_scan_result(uid, app, async_=async_, **request_kwargs)
             cookies = check_response(resp)["data"]["cookie"]
-            return cls(cookies)
+            inst = cls(cookies)
+            inst.login_uid = uid
+            return inst
         return run_gen_step(gen_step, async_=async_)
 
     @overload
@@ -1642,7 +1695,7 @@ class P115Client:
         if params:
             url = make_url(url, params)
         need_cookie_header = CRE_115_DOMAIN_match(url) is None
-        check_for_relogin = getattr(self, "check_for_relogin", None)
+        check_for_relogin = self.check_for_relogin
         request_kwargs.setdefault("parse", default_parse)
         if not need_cookie_header:
             need_cookie_header = request is not None
@@ -4497,6 +4550,52 @@ class P115Client:
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
+    def fs_files_top(
+        self, 
+        payload: int | str | dict, 
+        /, 
+        base_url: bool | str = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_files_top(
+        self, 
+        payload: int | str | dict, 
+        /, 
+        base_url: bool | str = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_files_top(
+        self, 
+        payload: int | str | dict, 
+        /, 
+        base_url: bool | str = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """文件或目录置顶
+
+        GET https://webapi.115.com/files/top
+
+        :payload:
+            - file_id: int | str 💡 文件或目录的 id，多个用逗号 "," 隔开
+            - top: 0 | 1 = 1
+        """
+        api = complete_webapi("/files/top", base_url=base_url)
+        if isinstance(payload, (int, str)):
+            payload = {"top": 1, "file_id": payload}
+        else:
+            payload = {"top": 1, **payload}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
     def fs_folder_playlong(
         self, 
         payload: int | str | dict, 
@@ -7156,7 +7255,7 @@ class P115Client:
     @staticmethod
     def login_qrcode_scan_result(
         uid: str, 
-        app: str = "qandroid", 
+        app: str = "tv", 
         request: None | Callable = None, 
         *, 
         async_: Literal[False] = False, 
@@ -7167,7 +7266,7 @@ class P115Client:
     @staticmethod
     def login_qrcode_scan_result(
         uid: str, 
-        app: str = "qandroid", 
+        app: str = "tv", 
         request: None | Callable = None, 
         *, 
         async_: Literal[True], 
@@ -7177,7 +7276,7 @@ class P115Client:
     @staticmethod
     def login_qrcode_scan_result(
         uid: str, 
-        app: str = "qandroid", 
+        app: str = "tv", 
         request: None | Callable = None, 
         *, 
         async_: Literal[False, True] = False, 
