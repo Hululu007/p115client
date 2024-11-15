@@ -4,12 +4,12 @@
 from __future__ import annotations
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 0, 0)
+__version__ = (0, 0, 1)
 __all__ = ["make_application"]
 __doc__ = """\
 115 数据库 WebDAV 服务，请先用 updatedb.py 采集数据
 """
-__requirements__ = ["flask", "Flask-Compress", "p115client", "path_predicate", "pyyaml", "urllib3", "urllib3_request", "werkzeug", "wsgidav"]
+__requirements__ = ["blacksheep", "blacksheep_client_request", "p115client", "path_predicate", "python-encode_uri", "python-property", "pyyaml", "urllib3", "wsgidav"]
 
 if __name__ == "__main__":
     from argparse import ArgumentParser, RawTextHelpFormatter
@@ -70,7 +70,8 @@ if __name__ == "__main__":
 """)
     parser.add_argument("-H", "--host", default="0.0.0.0", help="ip 或 hostname，默认值：'0.0.0.0'")
     parser.add_argument("-P", "--port", default=8000, type=int, help="端口号，默认值：8000")
-    parser.add_argument("-d", "--debug", action="store_true", help="启用 debug 模式，当文件变动时自动重启 + 输出详细的错误信息")
+    parser.add_argument("-d", "--debug", action="store_true", help="启用 debug 模式（会输出更详细的信息）")
+    parser.add_argument("-C", "--config", help="将被作为 JSON 解析然后作为关键字参数传给 `uvicorn.run`")
     parser.add_argument("-v", "--version", action="store_true", help="输出版本号")
 
     args = parser.parse_args()
@@ -79,13 +80,17 @@ if __name__ == "__main__":
         raise SystemExit(0)
 
 try:
-    from flask import redirect, request, Flask
-    from flask_compress import Compress
-    from path_predicate import MappingPath, make_predicate
+    from blacksheep import redirect, Application, Request
+    from blacksheep.client import ClientSession
+    from blacksheep.server.compression import use_gzip_compression
+    from blacksheep.server.remotes.forwarding import ForwardedHeadersMiddleware
+    from blacksheep_client_request import request as blacksheep_request
+    from encode_uri import encode_uri_component_loose
     from p115client import P115Client
+    from path_predicate import MappingPath, make_predicate
+    from property import locked_cacheproperty
     from urllib3.poolmanager import PoolManager
-    from urllib3_request import request as urllib3_request
-    from werkzeug.middleware.dispatcher import DispatcherMiddleware
+    from uvicorn.middleware.wsgi import WSGIMiddleware
     from wsgidav.wsgidav_app import WsgiDAVApp
     from wsgidav.dav_error import DAVError
     from wsgidav.dav_provider import DAVCollection, DAVNonCollection, DAVProvider
@@ -95,13 +100,17 @@ except ImportError:
     from sys import executable
     from subprocess import run
     run([executable, "-m", "pip", "install", "-U", *__requirements__], check=True)
-    from flask import redirect, request, Flask
-    from flask_compress import Compress # type: ignore
-    from path_predicate import MappingPath, make_predicate
+    from blacksheep import redirect, Application, Request
+    from blacksheep.client import ClientSession
+    from blacksheep.server.compression import use_gzip_compression
+    from blacksheep.server.remotes.forwarding import ForwardedHeadersMiddleware
+    from blacksheep_client_request import request as blacksheep_request
+    from encode_uri import encode_uri_component_loose
     from p115client import P115Client
+    from path_predicate import MappingPath, make_predicate
+    from property import locked_cacheproperty
     from urllib3.poolmanager import PoolManager
-    from urllib3_request import request as urllib3_request
-    from werkzeug.middleware.dispatcher import DispatcherMiddleware
+    from uvicorn.middleware.wsgi import WSGIMiddleware
     from wsgidav.wsgidav_app import WsgiDAVApp # type: ignore
     from wsgidav.dav_error import DAVError # type: ignore
     from wsgidav.dav_provider import DAVCollection, DAVNonCollection, DAVProvider # type: ignore
@@ -109,7 +118,7 @@ except ImportError:
     from yaml import load, Loader
 
 from collections.abc import Callable, Mapping, ItemsView
-from functools import cached_property, partial
+from functools import partial
 from io import BytesIO
 from os import fsdecode, PathLike
 from pathlib import Path
@@ -118,10 +127,6 @@ from sqlite3 import connect, Connection, OperationalError
 from threading import Lock
 from typing import Literal
 from urllib.parse import quote
-
-
-transtab = {c: f"%{c:02x}" for c in b"#%/?"}
-translate = str.translate
 
 
 class LRUDict(dict):
@@ -173,7 +178,7 @@ def make_application(
     cookies_path: str | Path = "", 
     predicate: None | Callable = None, 
     strm_predicate: None | Callable = None, 
-) -> DispatcherMiddleware:
+) -> Application:
     if config_path:
         config = load(open(config_path, encoding="utf-8"), Loader=Loader)
     else:
@@ -183,7 +188,7 @@ def make_application(
     else:
         cookies_path = Path("115-cookies.txt")
     client = P115Client(cookies_path, app="alipaymini", check_for_relogin=True)
-    urlopen = partial(urllib3_request, pool=PoolManager(num_pools=50))
+    urlopen = partial(PoolManager(num_pools=128).request, "GET", preload_content=False)
 
     CON: Connection
     CON_FILE: Connection
@@ -201,19 +206,19 @@ def make_application(
             except KeyError as e:
                 raise AttributeError(attr) from e
 
-        @cached_property
+        @locked_cacheproperty
         def creationdate(self, /) -> float:
             return self.ctime
 
-        @cached_property
+        @locked_cacheproperty
         def ctime(self, /) -> float:
             return self.attr["ctime"]
 
-        @cached_property
+        @locked_cacheproperty
         def mtime(self, /) -> float:
             return self.attr["mtime"]
 
-        @cached_property
+        @locked_cacheproperty
         def name(self, /) -> str:
             return self.attr["name"]
 
@@ -258,23 +263,23 @@ def make_application(
             if is_strm:
                 STRM_CACHE[path] = self
 
-        @cached_property
+        @property
         def origin(self, /) -> str:
             return f"{self.environ['wsgi.url_scheme']}://{self.environ['HTTP_HOST']}"
 
-        @cached_property
+        @property
         def size(self, /) -> int:
             if self.is_strm:
                 return len(self.strm_data)
             return self.attr["size"]
 
-        @cached_property
+        @property
         def strm_data(self, /) -> bytes:
             attr = self.attr
-            name = translate(attr["name"], transtab)
+            name = encode_uri_component_loose(attr["name"])
             return bytes(f"{self.origin}/{name}?pickcode={attr['pickcode']}&id={attr['id']}&sha1={attr['sha1']}&size={attr['size']}", "utf-8")
 
-        @cached_property
+        @property
         def url(self, /) -> str:
             scheme = self.environ["wsgi.url_scheme"]
             host = self.environ["HTTP_HOST"]
@@ -328,7 +333,7 @@ ON CONFLICT(id) DO UPDATE SET data=excluded.data;""", (fid, self.attr["size"]))
             super().__init__(path, environ)
             self.attr = attr
 
-        @cached_property
+        @locked_cacheproperty
         def children(self, /) -> dict[str, FileResource | FolderResource]:
             sql = """\
 SELECT id, name, path, ctime, mtime, sha1, size, pickcode, is_dir
@@ -498,16 +503,29 @@ CREATE TABLE IF NOT EXISTS data (
         def is_readonly(self, /) -> bool:
             return True
 
-    flask_app = Flask(__name__)
-    Compress(flask_app)
+    app = Application()
+    use_gzip_compression(app)
 
-    @flask_app.route("/", methods=["GET", "HEAD"])
-    def index():
-        if pickcode := request.args.get("pickcode"):
-            resp = client.download_url_app(
+    @app.on_middlewares_configuration
+    def configure_forwarded_headers(app: Application):
+        app.middlewares.insert(0, ForwardedHeadersMiddleware(accept_only_proxied_requests=False))
+
+    @app.lifespan
+    async def register_client(app: Application):
+        async with ClientSession(follow_redirects=False) as client:
+            app.services.register(ClientSession, instance=client)
+            yield
+
+    @app.router.route("/", methods=["GET", "HEAD"])
+    async def index(request: Request, session: ClientSession, pickcode: str = ""):
+        if pickcode:
+            user_agent = (request.get_first_header(b"User-agent") or b"").decode("latin-1")
+            resp = await client.download_url_app(
                 pickcode, 
-                headers={"User-Agent": request.headers.get("User-Agent") or ""}, 
-                request=urlopen, 
+                headers={"User-Agent": user_agent}, 
+                request=blacksheep_request, 
+                session=session, 
+                async_=True, 
             )
             if not resp["state"]:
                 return resp, 500
@@ -518,27 +536,27 @@ CREATE TABLE IF NOT EXISTS data (
         else:
             return redirect("/d")
 
-    @flask_app.route("/", methods=[
+    @app.router.route("/", methods=[
         "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", 
         "TRACE", "PATCH", "MKCOL", "COPY", "MOVE", "PROPFIND", 
         "PROPPATCH", "LOCK", "UNLOCK", "REPORT", "ACL", 
     ])
-    def redirect_to_dav():
+    async def redirect_to_dav():
         return redirect("/d")
 
-    @flask_app.route("/<path:path>", methods=["GET", "HEAD"])
-    def resolve_path(path: str):
-        if pickcode := request.args.get("pickcode"):
+    @app.router.route("/<path:path>", methods=["GET", "HEAD"])
+    async def resolve_path(request: Request, session: ClientSession, pickcode: str = "", path: str = ""):
+        if pickcode:
             return redirect(f"/?pickcode={pickcode}")
         else:
             return redirect(f"/d/{path}")
 
-    @flask_app.route("/<path:path>", methods=[
+    @app.router.route("/<path:path>", methods=[
         "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", 
         "TRACE", "PATCH", "MKCOL", "COPY", "MOVE", "PROPFIND", 
         "PROPPATCH", "LOCK", "UNLOCK", "REPORT", "ACL", 
     ])
-    def resolve_path_to_dav(path: str):
+    async def resolve_path_to_dav(path: str):
         return redirect(f"/d/{path}")
 
     config.update({
@@ -548,12 +566,13 @@ CREATE TABLE IF NOT EXISTS data (
         "provider_mapping": {"/": ServeDBProvider(dbfile)}, 
     })
     wsgidav_app = WsgiDAVApp(config)
-    return DispatcherMiddleware(flask_app, {"/d": wsgidav_app})
+    app.mount("/d", WSGIMiddleware(wsgidav_app, workers=64, send_queue_size=128))
+    return app
 
 
 if __name__ == "__main__":
     import re
-    from werkzeug.serving import run_simple
+    import uvicorn
 
     if args.fast_strm:
         predicate = make_predicate("""(
@@ -578,15 +597,35 @@ if __name__ == "__main__":
         predicate=predicate, 
         strm_predicate=strm_predicate, 
     )
-    run_simple(
-        hostname=args.host, 
-        port=args.port, 
-        application=app, 
-        use_reloader=args.debug, 
-        use_debugger=args.debug, 
-        use_evalex=args.debug, 
-        threaded=True, 
-    )
+    if args.config:
+        from orjson import loads
+        kwargs = loads(args.config)
+    else:
+        kwargs = {}
+    debug = args.debug
+    if debug:
+        getattr(app, "logger").level = 10
+        app.show_error_details = True
+        kwargs["reload"] = True
+    kwargs["host"] = args.host
+    if args.port:
+        kwargs["port"] = args.port
+    elif not kwargs.get("port"):
+        from socket import create_connection
+        def get_available_ip(start: int = 1024, stop: int = 65536) -> int:
+            for port in range(start, stop):
+                try:
+                    with create_connection(("127.0.0.1", port), timeout=1):
+                        pass
+                except OSError:
+                    return port
+            raise RuntimeError("no available ports")
+        kwargs["port"] = get_available_ip()
+    kwargs.setdefault("proxy_headers", True)
+    kwargs.setdefault("server_header", False)
+    kwargs.setdefault("forwarded_allow_ips", "*")
+    kwargs.setdefault("timeout_graceful_shutdown", 1)
+    uvicorn.run(app, **kwargs)
 
 # TODO: wsgidav 速度比较一般，我需要自己实现一个 webdav
 # TODO: 目前 webdav 是只读的，之后需要支持写入和删除，写入小文件不会上传，因此需要一个本地的 id，如果路径上原来有记录，则替换掉此记录（删除记录，生成本地 id 的数据，插入数据）
