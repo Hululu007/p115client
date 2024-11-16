@@ -2,7 +2,7 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 0, 13)
+__version__ = (0, 0, 13, 1)
 __all__ = ["updatedb", "updatedb_one", "updatedb_tree"]
 __doc__ = "遍历 115 网盘的目录信息导出到数据库"
 __requirements__ = ["p115client", "posixpatht"]
@@ -1017,7 +1017,7 @@ def iterdir(
     def fs_files(*a, **k):
         while True:
             try:
-                return client.fs_files_app(*a, **k)
+                return check_response(client.fs_files_app(*a, **k))
             except DataError:
                 if payload["limit"] <= 1150:
                     raise
@@ -1374,7 +1374,7 @@ def updatedb(
                     return sum(v["count"] for k, v in resp["type_summury"].items() if k.isupper())
                 else:
                     try:
-                        resp = client.fs_category_get(cid, base_url=True, timeout=auto_splitting_statistics_timeout)
+                        resp = client.fs_category_get_app(cid, timeout=auto_splitting_statistics_timeout)
                         if not resp:
                             return 0
                         check_response(resp)
@@ -1497,3 +1497,5 @@ if __name__ == "__main__":
 
 # TODO: 重要，全量拉取使用 10 并发，但是一旦 count 变了，可能要全部直接取消，然后重新跑
 # TODO: 先拉取一次 115 的更新事件，这个事件从数据库中最新一条数据的更新事件开始，如果没有数据，则为当前（不需要立即拉一次），以后轮到下一个任务时，只需要在最近一次拉取时间之后进行拉取，如果事件发生时间在当前记录的更新时间之前，则忽略此事件
+
+# TODO: 移除创建时间 ctime，增加文件是否违规标记 is_collect
