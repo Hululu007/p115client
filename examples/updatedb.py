@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
+__licence__ = "GPLv3"
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __version__ = (0, 0, 13, 1)
 __all__ = ["updatedb", "updatedb_one", "updatedb_tree"]
@@ -1363,7 +1364,7 @@ def updatedb(
             if not top_ids:
                 return
         if auto_splitting_threshold > 0:
-            executor = ThreadPoolExecutor()
+            executor = ThreadPoolExecutor(max_workers=1)
             submit = executor.submit
             cache_futures: dict[int, Future] = {}
             def get_dir_size(cid: int = 0, /) -> int | float:
