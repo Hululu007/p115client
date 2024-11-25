@@ -6,6 +6,7 @@ const { request } = require("https");
 const { networkInterfaces } = require("os");
 const { parse } = require("url");
 
+const LICENSE = "GPLv3"
 const VERSION = "0.0.2"
 const AUTHOR = "ChenyangGao <https://chenyanggao.github.io>"
 const DOC = `usage: web_115_302_tiny.js [-h] [-c COOKIES] [-cp COOKIES_PATH] [-H HOST] [-P PORT] [-v]

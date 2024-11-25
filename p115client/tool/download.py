@@ -35,7 +35,7 @@ from p115client.exception import P115Warning
 from posixpatht import escape
 
 from .export_dir import export_dir_parse_iter
-from .iterdir import get_path_to_cid, iter_files, iter_files_raw, DirNode, DirNodeTuple, ID_TO_DIRNODE_CACHE
+from .iterdir import get_path_to_cid, iter_files, iter_files_raw, DirNode, ID_TO_DIRNODE_CACHE
 
 
 def reduce_image_url_layers(url: str, /) -> str:
@@ -160,13 +160,15 @@ def batch_get_url(
             pickcode = resp["data"][0]["pick_code"]
         elif isinstance(id_or_pickcode, str):
             pickcode = id_or_pickcode
+            if not (len(pickcode) == 17 and pickcode.isalnum()):
+                return {}
         else:
             ids: list[int] = []
             pickcodes: list[str] = []
             for val in id_or_pickcode:
                 if isinstance(val, int):
                     ids.append(val)
-                else:
+                elif len(val) == 17 and val.isalnum():
                     pickcodes.append(val)
             if ids:
                 resp = yield client.fs_file_skim(
@@ -212,7 +214,7 @@ def iter_images_with_url(
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
@@ -230,7 +232,7 @@ def iter_images_with_url(
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
@@ -247,7 +249,7 @@ def iter_images_with_url(
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
@@ -339,7 +341,7 @@ def iter_subtitles_with_url(
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
@@ -357,7 +359,7 @@ def iter_subtitles_with_url(
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
@@ -374,7 +376,7 @@ def iter_subtitles_with_url(
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, DirNode | DirNodeTuple] = None, 
+    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 

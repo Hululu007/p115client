@@ -13,7 +13,7 @@ from collections.abc import (
 )
 from contextlib import asynccontextmanager, closing
 from datetime import date, datetime, timedelta
-from functools import cached_property, partial
+from functools import partial
 from hashlib import sha1
 from http.cookiejar import Cookie, CookieJar
 from http.cookies import Morsel
@@ -49,6 +49,7 @@ from httpfile import HTTPFileReader, AsyncHTTPFileReader
 from iterutils import run_gen_step
 from orjson import dumps, loads
 from p115cipher.fast import rsa_encode, rsa_decode, ecdh_aes_decode, make_upload_payload
+from property import locked_cacheproperty
 from startfile import startfile, startfile_async # type: ignore
 from urlopen import urlopen
 from yarl import URL
@@ -65,10 +66,10 @@ from ._upload import make_dataiter, oss_upload, oss_multipart_upload
 T = TypeVar("T")
 CRE_SHARE_LINK_search: Final = re_compile(r"/s/(?P<share_code>\w+)(\?password=(?P<receive_code>\w+))?").search
 CRE_SET_COOKIE: Final = re_compile(r"[0-9a-f]{32}=[0-9a-f]{32}.*")
-CRE_CLIENT_API_search: Final = re_compile("^ +((?:GET|POST) .*)", MULTILINE).search
+CRE_CLIENT_API_search: Final = re_compile(r"^ +((?:GET|POST) .*)", MULTILINE).search
 CRE_SHARE_LINK_search1: Final = re_compile(r"(?:/s/|share\.115\.com/)(?P<share_code>[a-z0-9]+)\?password=(?P<receive_code>[a-z0-9]{4})").search
 CRE_SHARE_LINK_search2: Final = re_compile(r"(?P<share_code>[a-z0-9]+)-(?P<receive_code>[a-z0-9]{4})").search
-CRE_115_DOMAIN_match: Final = re_compile("https?://(?:[^.]+\.)*115.com").match
+CRE_115_DOMAIN_match: Final = re_compile(r"https?://(?:[^.]+\.)*115.com").match
 ED2K_NAME_TRANSTAB: Final = dict(zip(b"/|", ("%2F", "%7C")))
 
 _httpx_request = None
@@ -265,7 +266,7 @@ def check_response(resp: dict, /) -> dict:
 def check_response(resp: Awaitable[dict], /) -> Coroutine[Any, Any, dict]:
     ...
 def check_response(resp: dict | Awaitable[dict], /) -> dict | Coroutine[Any, Any, dict]:
-    """检测 115 的某个接口的响应，如果成功则直接返回，否则根据具体情况抛出一个异常
+    """检测 115 的某个接口的响应，如果成功则直接返回，否则根据具体情况抛出一个异常，基本上是 OSError 的实例
     """
     def check(resp, /) -> dict:
         if not isinstance(resp, dict):
@@ -348,6 +349,13 @@ def check_response(resp: dict | Awaitable[dict], /) -> dict | Coroutine[Any, Any
             match resp["code"]:
                 case 99:
                     raise AuthenticationError(errno.EIO, resp)
+                # {"state": false, "code": 20018, "message": "文件不存在或已删除。"}
+                # {"state": false, "code": 800001, 'message': "目录不存在。"}
+                case 20018 | 800001:
+                    raise FileNotFoundError(errno.ENOENT, resp)
+                # {"state": false, "code": 990002, "message": "参数错误。"}
+                case 990002:
+                    raise P115OSError(errno.EINVAL, resp)
         elif "msg_code" in resp:
             match resp["msg_code"]:
                 case 50028:
@@ -407,8 +415,11 @@ def normalize_attr_web(
         attr["atime"] = attr["user_otime"] = int(info["to"])
     if "tu" in info:
         attr["utime"] = int(info["tu"])
-    if (t := info.get("t")) and t.isdecimal():
-        attr["time"] = int(t)
+    if t := info.get("t"):
+        if isinstance(t, (int, float)):
+            attr["time"] = t
+        elif t.isdecimal():
+            attr["time"] = int(t)
     if "fdes" in info:
         val = info["fdes"]
         if isinstance(val, str):
@@ -620,6 +631,8 @@ class P115Client:
     | 24    | S1       | harmony    | 115(Harmony端)          |
     +-------+----------+------------+-------------------------+
     """
+    cookies_path: None | PurePath = None
+
     def __init__(
         self, 
         /, 
@@ -629,22 +642,14 @@ class P115Client:
         app: None | str = None, 
         console_qrcode: bool = True, 
     ):
-        if cookies is None:
-            self.login(app, console_qrcode=console_qrcode)
-        else:
-            if isinstance(cookies, (bytes, PathLike)):
-                if isinstance(cookies, PurePath) and hasattr(cookies, "open"):
-                    self.cookies_path = cookies
-                else:
-                    self.cookies_path = Path(fsdecode(cookies))
-                self._read_cookies()
-            elif cookies:
-                setattr(self, "cookies", cookies)
-            if ensure_cookies:
-                self.login(app, console_qrcode=console_qrcode)
-        setattr(self, "check_for_relogin", check_for_relogin)
-        self._request_lock = Lock()
-        self._request_alock = AsyncLock()
+        self.init(
+            cookies=cookies, 
+            check_for_relogin=check_for_relogin, 
+            ensure_cookies=ensure_cookies, 
+            app=app, 
+            console_qrcode=console_qrcode, 
+            instance=self, 
+        )
 
     def __del__(self, /):
         self.close()
@@ -655,7 +660,10 @@ class P115Client:
         except AttributeError:
             return False
 
-    @cached_property
+    def __hash__(self, /) -> int:
+        return id(self)
+
+    @locked_cacheproperty
     def session(self, /):
         """同步请求的 session 对象
         """
@@ -669,7 +677,7 @@ class P115Client:
         setattr(session, "_cookies", self.cookies)
         return session
 
-    @cached_property
+    @locked_cacheproperty
     def async_session(self, /):
         """异步请求的 session 对象
         """
@@ -772,7 +780,7 @@ class P115Client:
             })
             return headers
 
-    @cached_property
+    @locked_cacheproperty
     def user_id(self, /) -> int:
         cookie_uid = self.cookies.get("UID")
         if cookie_uid:
@@ -780,7 +788,7 @@ class P115Client:
         else:
             return 0
 
-    @cached_property
+    @locked_cacheproperty
     def user_key(self, /) -> str:
         return check_response(self.upload_key())["data"]["userkey"]
 
@@ -830,9 +838,100 @@ class P115Client:
         self.__dict__.pop("session", None)
         self.__dict__.pop("async_session", None)
 
-    @cached_property
+    @overload
+    @classmethod
+    def init(
+        cls, 
+        /, 
+        cookies: None | str | bytes | PathLike | Mapping[str, str] | Iterable[Mapping | Cookie | Morsel] = None, 
+        check_for_relogin: bool | Callable[[BaseException], bool | int] = False, 
+        ensure_cookies: bool = False, 
+        app: None | str = None, 
+        console_qrcode: bool = True, 
+        instance: None | Self = None, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> Self:
+        ...
+    @overload
+    @classmethod
+    def init(
+        cls, 
+        /, 
+        cookies: None | str | bytes | PathLike | Mapping[str, str] | Iterable[Mapping | Cookie | Morsel] = None, 
+        check_for_relogin: bool | Callable[[BaseException], bool | int] = False, 
+        ensure_cookies: bool = False, 
+        app: None | str = None, 
+        console_qrcode: bool = True, 
+        instance: None | Self = None, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, Self]:
+        ...
+    @classmethod
+    def init(
+        cls, 
+        /, 
+        cookies: None | str | bytes | PathLike | Mapping[str, str] | Iterable[Mapping | Cookie | Morsel] = None, 
+        check_for_relogin: bool | Callable[[BaseException], bool | int] = False, 
+        ensure_cookies: bool = False, 
+        app: None | str = None, 
+        console_qrcode: bool = True, 
+        instance: None | Self = None, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> Self | Coroutine[Any, Any, Self]:
+        def gen_step():
+            if instance is None:
+                self = cls.__new__(cls)
+            else:
+                self = instance
+            if cookies is None:
+                yield self.login(
+                    app, 
+                    console_qrcode=console_qrcode, 
+                    async_=async_, 
+                    **request_kwargs, 
+                )
+            else:
+                if isinstance(cookies, (bytes, PathLike)):
+                    if isinstance(cookies, PurePath) and hasattr(cookies, "open"):
+                        self.cookies_path = cookies
+                    else:
+                        self.cookies_path = Path(fsdecode(cookies))
+                    if async_:
+                        yield ensure_async(self._read_cookies, threaded=True)
+                    else:
+                        self._read_cookies()
+                elif cookies:
+                    setattr(self, "cookies", cookies)
+                if ensure_cookies:
+                    yield self.login(
+                        app, 
+                        console_qrcode=console_qrcode, 
+                        async_=async_, 
+                        **request_kwargs, 
+                    )
+            setattr(self, "check_for_relogin", check_for_relogin)
+            return self
+        return run_gen_step(gen_step, async_=async_)
+
+    @locked_cacheproperty
     def login_uid(self, /) -> str:
+        """相当于是获取 cookies 的 refresh token
+        """
         return self.login_without_app()
+
+    @locked_cacheproperty
+    def request_lock(self, /) -> Lock:
+        return Lock()
+
+    @locked_cacheproperty
+    def request_alock(self, /) -> AsyncLock:
+        return AsyncLock()
 
     @property
     def check_for_relogin(self, /) -> None | Callable[[BaseException], bool | int]:
@@ -1502,7 +1601,7 @@ class P115Client:
         **request_kwargs, 
     ) -> Self | Coroutine[Any, Any, Self]:
         """获取绑定到某个设备的 cookies
-        
+
         .. hint::
             同一个设备可以有多个 cookies 同时在线
 
@@ -1736,7 +1835,7 @@ class P115Client:
                             if cookies != cookies_old:
                                 continue
                             cookies_mtime = getattr(self, "cookies_mtime", 0)
-                            async with self._request_alock:
+                            async with self.request_alock:
                                 cookies_new = self.cookies_str
                                 cookies_mtime_new = getattr(self, "cookies_mtime", 0)
                                 if cookies == cookies_new:
@@ -1769,7 +1868,7 @@ class P115Client:
                         if cookies != cookies_old:
                             continue
                         cookies_mtime = getattr(self, "cookies_mtime", 0)
-                        with self._request_lock:
+                        with self.request_lock:
                             cookies_new = self.cookies_str
                             cookies_mtime_new = getattr(self, "cookies_mtime", 0)
                             if cookies == cookies_new:
@@ -3800,6 +3899,49 @@ class P115Client:
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
+    def fs_dir_getid_app(
+        self, 
+        payload: str | dict, 
+        /, 
+        app: str = "android", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_dir_getid_app(
+        self, 
+        payload: str | dict, 
+        /, 
+        app: str = "android", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_dir_getid_app(
+        self, 
+        payload: str | dict, 
+        /, 
+        app: str = "android", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """由路径获取对应的 id（但只能获取目录，不能获取文件）
+
+        GET https://proapi.115.com/{app}/files/getid
+
+        :payload:
+            - path: str
+        """
+        api = f"https://proapi.115.com/{app}/files/getid"
+        if isinstance(payload, str):
+            payload = {"path": payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
     def fs_edit(
         self, 
         payload: list | dict, 
@@ -4080,7 +4222,9 @@ class P115Client:
             4. show_dir=0 且 cur=0（或不指定 cur）
 
         .. hint::
-            如果仅指定 cid 和 natsort=1 和 o="file_name"，则可仅统计当前目录的总数，而不返回具体的文件信息
+            如果仅指定 natsort=1&show_dir=1，以及一个可选的 cid，则当文件数不大于 1150 时可仅统计某个目录内的文件或目录总数，而不返回具体的文件信息，超过那个数值时，则会返回完整的文件列表
+
+            但如果不指定或者指定的 cid 不存在，则会视为 cid=0 进行处理
 
         :payload:
             - cid: int | str = 0 💡 目录 id
@@ -4094,7 +4238,7 @@ class P115Client:
             - cur: 0 | 1 = <default> 💡 是否只搜索当前目录
             - custom_order: 0 | 1 = <default> 💡 启用自定义排序，如果指定了 "asc"、"fc_mix"、"o" 中其一，则此参数会被自动设置为 1 
             - date: str = <default> 💡 筛选日期
-            - fc_mix: 0 | 1 = <default> 💡 是否目录和文件混合，如果为 0 则目录在前
+            - fc_mix: 0 | 1 = <default> 💡 是否目录和文件混合，如果为 0 则目录在前（目录置顶）
             - fields: str = <default>
             - format: str = "json" 💡 返回格式，默认即可
             - hide_data: str = <default>
@@ -4201,6 +4345,9 @@ class P115Client:
         .. note::
             如果 `app` 为 "wechatmini" 或 "alipaymini"，则返回结果和手机客户端并不相同
 
+        .. caution::
+            这个接口有些问题，当 custom_order=1 时，则 fc_mix 无论怎么设置，都和 fc_mix=0 的效果相同（即目录总是置顶）
+
         :payload:
             - cid: int | str = 0 💡 目录 id
             - limit: int = 32 💡 分页大小，最大值不一定，看数据量，7,000 应该总是安全的，10,000 有可能报错，但有时也可以 20,000 而成功
@@ -4213,7 +4360,7 @@ class P115Client:
             - cur: 0 | 1 = <default> 💡 是否只搜索当前目录
             - custom_order: 0 | 1 = <default> 💡 启用自定义排序，如果指定了 "asc"、"fc_mix"、"o" 中其一，则此参数会被自动设置为 1 
             - date: str = <default> 💡 筛选日期
-            - fc_mix: 0 | 1 = <default> 💡 是否目录和文件混合，如果为 0 则目录在前
+            - fc_mix: 0 | 1 = <default> 💡 是否目录和文件混合，如果为 0 则目录在前（目录置顶）
             - fields: str = <default>
             - format: str = "json" 💡 返回格式，默认即可
             - hide_data: str = <default>
@@ -4277,6 +4424,119 @@ class P115Client:
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
+    def fs_files_app2(
+        self, 
+        payload: int | str | dict = 0, 
+        /, 
+        app: str = "android", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_files_app2(
+        self, 
+        payload: int | str | dict = 0, 
+        /, 
+        app: str = "android", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_files_app2(
+        self, 
+        payload: int | str | dict = 0, 
+        /, 
+        app: str = "android", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取目录中的文件列表和基本信息
+
+        GET https://proapi.115.com/{app}/files
+
+        .. hint::
+            如果要遍历获取所有文件，需要指定 show_dir=0 且 cur=0（或不指定 cur），这个接口并没有 type=99 时获取所有文件的意义
+
+        :payload:
+            - cid: int | str = 0 💡 目录 id
+            - limit: int = 32 💡 分页大小，最大值不一定，看数据量，7,000 应该总是安全的，10,000 有可能报错，但有时也可以 20,000 而成功
+            - offset: int = 0 💡 分页开始的索引，索引从 0 开始计算
+
+            - aid: int | str = 1 💡 area_id，默认即可
+            - asc: 0 | 1 = <default> 💡 是否升序排列。0: 降序 1: 升序
+            - code: int | str = <default>
+            - count_folders: 0 | 1 = 1 💡 统计文件数和目录数
+            - cur: 0 | 1 = <default> 💡 是否只搜索当前目录
+            - custom_order: 0 | 1 = <default> 💡 启用自定义排序，如果指定了 "asc"、"fc_mix"、"o" 中其一，则此参数会被自动设置为 1 
+            - date: str = <default> 💡 筛选日期
+            - fc_mix: 0 | 1 = <default> 💡 是否目录和文件混合，如果为 0 则目录在前（目录置顶）
+            - fields: str = <default>
+            - format: str = "json" 💡 返回格式，默认即可
+            - hide_data: str = <default>
+            - is_q: 0 | 1 = <default>
+            - is_share: 0 | 1 = <default>
+            - min_size: int = 0 💡 最小的文件大小
+            - max_size: int = 0 💡 最大的文件大小
+            - natsort: 0 | 1 = <default> 💡 是否执行自然排序(natural sorting)
+            - o: str = <default> 💡 用某字段排序
+
+              - "file_name": 文件名
+              - "file_size": 文件大小
+              - "file_type": 文件种类
+              - "user_utime": 修改时间
+              - "user_ptime": 创建时间
+              - "user_otime": 上一次打开时间
+
+            - r_all: 0 | 1 = <default>
+            - record_open_time: 0 | 1 = 1 💡 是否要记录目录的打开时间
+            - scid: int | str = <default>
+            - show_dir: 0 | 1 = 1
+            - snap: 0 | 1 = <default>
+            - source: str = <default>
+            - sys_dir: int | str = <default>
+            - star: 0 | 1 = <default> 💡 是否星标文件
+            - stdir: 0 | 1 = <default>
+            - suffix: str = <default> 💡 后缀名（优先级高于 `type`）
+            - type: int = <default> 💡 文件类型
+
+              - 0: 全部（仅当前目录）
+              - 1: 文档
+              - 2: 图片
+              - 3: 音频
+              - 4: 视频
+              - 5: 压缩包
+              - 6: 应用
+              - 7: 书籍
+              - 8: 其它
+              - 9: 相当于 8
+              - 10: 相当于 8
+              - 11: 相当于 8
+              - 12: ？？？
+              - 13: ？？？
+              - 14: ？？？
+              - 15: 图片和视频，相当于 2 和 4
+              - >= 16: 相当于 8
+        """
+        api = f"https://proapi.115.com/{app}/files"
+        if isinstance(payload, (int, str)):
+            payload = {
+                "aid": 1, "count_folders": 1, "limit": 32, "offset": 0, 
+                "record_open_time": 1, "show_dir": 1, "cid": payload, 
+            }
+        else:
+            payload = {
+                "aid": 1, "count_folders": 1, "limit": 32, "offset": 0, 
+                "record_open_time": 1, "show_dir": 1, "cid": 0, **payload, 
+            }
+        if payload.keys() & frozenset(("asc", "fc_mix", "o")):
+            payload["custom_order"] = 1
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
     def fs_files_aps(
         self, 
         payload: int | str | dict = 0, 
@@ -4316,6 +4576,8 @@ class P115Client:
 
             但只要你所要拉取的数据总数在 1200 以内，就是安全的，这个接口由于用的少，所以不怎么会被风控，可以应应急 😂
 
+            另外很多参数都没有效果，例如 o 参数无效，但 asc 参数却有效，只支持按文件名排序
+
         :payload:
             - cid: int | str = 0 💡 目录 id
             - limit: int = 32 💡 分页大小，最大值是 1,200
@@ -4328,7 +4590,7 @@ class P115Client:
             - cur: 0 | 1 = <default> 💡 是否只搜索当前目录
             - custom_order: 0 | 1 = <default> 💡 启用自定义排序，如果指定了 "asc"、"fc_mix"、"o" 中其一，则此参数会被自动设置为 1 
             - date: str = <default> 💡 筛选日期
-            - fc_mix: 0 | 1 = <default> 💡 是否目录和文件混合，如果为 0 则目录在前
+            - fc_mix: 0 | 1 = <default> 💡 是否目录和文件混合，如果为 0 则目录在前（目录置顶）
             - fields: str = <default>
             - format: str = "json" 💡 返回格式，默认即可
             - hide_data: str = <default>
@@ -5762,10 +6024,67 @@ class P115Client:
 
             - file_id: int | str = 0 💡 目录 id
             - user_asc: 0 | 1 = <default> 💡 是否升序排列
-            - fc_mix: 0 | 1 = <default>   💡 是否目录和文件混合，如果为 0 则目录在前
+            - fc_mix: 0 | 1 = <default> 💡 是否目录和文件混合，如果为 0 则目录在前（目录置顶）
             - module: str = <default> 💡 "label_search" 表示用于搜索的排序
         """
         api = complete_webapi("/files/order", base_url=base_url)
+        if isinstance(payload, str):
+            payload = {"file_id": 0, "user_order": payload}
+        else:
+            payload = {"file_id": 0, **payload}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_order_set_app(
+        self, 
+        payload: str | dict, 
+        /, 
+        app: str = "android", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_order_set_app(
+        self, 
+        payload: str | dict, 
+        /, 
+        app: str = "android", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_order_set_app(
+        self, 
+        payload: str | dict, 
+        /, 
+        app: str = "android", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """设置某个目录内文件的默认排序
+
+        POST https://proapi.115.com/{app}/2.0/ufile/order
+
+        :payload:
+            - user_order: str 💡 用某字段排序
+
+              - "file_name": 文件名
+              - "file_size": 文件大小
+              - "file_type": 文件种类
+              - "user_utime": 修改时间
+              - "user_ptime": 创建时间
+              - "user_otime": 上一次打开时间
+
+            - file_id: int | str = 0 💡 目录 id
+            - user_asc: 0 | 1 = <default> 💡 是否升序排列
+            - fc_mix: 0 | 1 = <default> 💡 是否目录和文件混合，如果为 0 则目录在前（目录置顶）
+            - module: str = <default> 💡 "label_search" 表示用于搜索的排序
+        """
+        api = f"https://proapi.115.com/{app}/2.0/ufile/order"
         if isinstance(payload, str):
             payload = {"file_id": 0, "user_order": payload}
         else:
@@ -5964,7 +6283,7 @@ class P115Client:
     @overload
     def fs_search(
         self, 
-        payload: str | dict, 
+        payload: str | dict = ".", 
         /, 
         base_url: bool | str = False, 
         *, 
@@ -5975,7 +6294,7 @@ class P115Client:
     @overload
     def fs_search(
         self, 
-        payload: str | dict, 
+        payload: str | dict = ".", 
         /, 
         base_url: bool | str = False, 
         *, 
@@ -5985,7 +6304,7 @@ class P115Client:
         ...
     def fs_search(
         self, 
-        payload: str | dict, 
+        payload: str | dict = ".", 
         /, 
         base_url: bool | str = False, 
         *, 
@@ -6015,7 +6334,7 @@ class P115Client:
             - cid: int | str = 0 💡 目录 id
             - count_folders: 0 | 1 = <default> 💡 是否统计目录数，这样就会增加 "folder_count" 和 "file_count" 字段作为统计
             - date: str = <default> 💡 筛选日期，格式为 YYYY-MM-DD（或者 YYYY-MM 或 YYYY），具体可以看文件信息中的 "t" 字段的值
-            - fc_mix: 0 | 1 = <default> 💡 是否目录和文件混合，如果为 0 则目录在前
+            - fc_mix: 0 | 1 = <default> 💡 是否目录和文件混合，如果为 0 则目录在前（目录置顶）
             - file_label: int | str = <default> 💡 标签 id
             - format: str = "json" 💡 输出格式（不用管）
             - limit: int = 32 💡 一页大小，意思就是 page_size
@@ -6030,7 +6349,7 @@ class P115Client:
 
             - offset: int = 0  💡 索引偏移，索引从 0 开始计算
             - pick_code: str = <default> 💡 提取码
-            - search_value: str = <default> 💡 搜索文本，可以是 sha1
+            - search_value: str 💡 搜索文本，可以是 sha1
             - show_dir: 0 | 1 = 1     💡 是否显示目录
             - source: str = <default> 💡 来源
             - star: 0 | 1 = <default> 💡 是否打星标
@@ -6063,7 +6382,7 @@ class P115Client:
     @overload
     def fs_search_app(
         self, 
-        payload: str | dict, 
+        payload: str | dict = ".", 
         /, 
         app: str = "android", 
         *, 
@@ -6074,7 +6393,7 @@ class P115Client:
     @overload
     def fs_search_app(
         self, 
-        payload: str | dict, 
+        payload: str | dict = ".", 
         /, 
         app: str = "android", 
         *, 
@@ -6084,7 +6403,7 @@ class P115Client:
         ...
     def fs_search_app(
         self, 
-        payload: str | dict, 
+        payload: str | dict = ".", 
         /, 
         app: str = "android", 
         *, 
@@ -6104,7 +6423,7 @@ class P115Client:
             - cid: int | str = 0 💡 目录 id
             - count_folders: 0 | 1 = <default>
             - date: str = <default> 💡 筛选日期
-            - fc_mix: 0 | 1 = <default> 💡 是否目录和文件混合，如果为 0 则目录在前
+            - fc_mix: 0 | 1 = <default> 💡 是否目录和文件混合，如果为 0 则目录在前（目录置顶）
             - file_label: int | str = <default> 💡 标签 id
             - format: str = "json" 💡 输出格式（不用管）
             - limit: int = 32 💡 一页大小，意思就是 page_size
@@ -6616,6 +6935,49 @@ class P115Client:
             payload = {"pickcode": payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
+    @overload
+    def fs_video_subtitle_app(
+        self, 
+        payload: str | dict, 
+        /, 
+        app: str = "android", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_video_subtitle_app(
+        self, 
+        payload: str | dict, 
+        /, 
+        app: str = "android", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_video_subtitle_app(
+        self, 
+        payload: str | dict, 
+        /, 
+        app: str = "android", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取视频字幕
+
+        GET https://proapi.115.com/{app}/2.0/video/subtitle
+
+        :payload:
+            - pickcode: str
+        """
+        api = f"https://proapi.115.com/{app}/2.0/video/subtitle"
+        if isinstance(payload, str):
+            payload = {"pickcode": payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
     ########## Life API ##########
 
     @overload
@@ -7037,7 +7399,7 @@ class P115Client:
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
-        """获取登录信息
+        """获取登录信息日志列表
 
         GET https://passportapi.115.com/app/1.0/web/1.0/login_log/log
 
@@ -7233,7 +7595,7 @@ class P115Client:
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
-        """确认扫描二维码，payload 数据取自 `login_qrcode_scan` 接口响应
+        """取消扫描二维码，payload 数据取自 `login_qrcode_scan` 接口响应
 
         GET https://hnqrcodeapi.115.com/api/2.0/cancel.php
 
@@ -8862,6 +9224,74 @@ class P115Client:
         else:
             payload = {"ignore_warn": 1, "is_asc": 1, "order": "file_name", **payload}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def share_search(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: bool | str = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def share_search(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: bool | str = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def share_search(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: bool | str = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """从分享链接搜索文件或目录
+
+        GET https://webapi.115.com/share/search
+
+        .. attention::
+            最多只能取回前 10,000 条数据，也就是 limit + offset <= 10_000
+
+        :payload:
+            - share_code: str
+            - receive_code: str
+            - cid: int | str = 0 💡 目录 id
+            - limit: int = 32    💡 一页大小，意思就是 page_size
+            - o: str = <default> 💡 用某字段排序
+
+              - "file_name": 文件名
+              - "file_size": 文件大小
+              - "user_ptime": 创建时间/修改时间
+
+            - offset: int = 0   💡 索引偏移，索引从 0 开始计算
+            - search_value: str 💡 搜索文本，仅支持搜索文件名
+            - suffix: str = <default> 💡 文件后缀（扩展名），优先级高于 `type`
+            - type: int = <default>   💡 文件类型
+
+              - 0: 全部
+              - 1: 文档
+              - 2: 图片
+              - 3: 音频
+              - 4: 视频
+              - 5: 压缩包
+              - 6: 应用
+              - 7: 书籍
+              - 99: 仅文件
+        """
+        api = complete_webapi("/share/search", base_url=base_url)
+        payload = {"cid": 0, "limit": 32, "offset": 0, **payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
     @staticmethod

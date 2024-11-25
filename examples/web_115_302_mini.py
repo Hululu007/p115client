@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
+__licence__ = "GPLv3"
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __version__ = (0, 0, 2)
 __doc__ = "115 302 迷你版，仅支持用 pickcode、id 或 sha1 查询（排名越前，优先级越高）"
@@ -21,6 +22,7 @@ if __name__ == "__main__":
 
 try:
     from blacksheep import route, redirect, json, text, Application, Request
+    from blacksheep.server.compression import use_gzip_compression
     from cachetools import TTLCache
     from p115client import P115Client, P115OSError
 except ImportError:
@@ -28,6 +30,7 @@ except ImportError:
     from subprocess import run
     run([executable, "-m", "pip", "install", "-U", *__requirements__], check=True)
     from blacksheep import route, redirect, json, text, Application, Request
+    from blacksheep.server.compression import use_gzip_compression
     from cachetools import TTLCache
     from p115client import P115Client, P115OSError
 
@@ -42,6 +45,7 @@ else:
 client = P115Client(cookies_path, app="alipaymini", check_for_relogin=True)
 
 app = Application()
+use_gzip_compression(app)
 # NOTE: id 到 pickcode 的映射
 ID_TO_PICKCODE: dict[int, str] = {}
 # NOTE: sha1 到 pickcode 的映射

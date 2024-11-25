@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
-__licence__ = "GPLv3"
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 0, 13, 1)
+__version__ = (0, 0, 13, 2)
 __all__ = ["updatedb", "updatedb_one", "updatedb_tree"]
 __doc__ = "遍历 115 网盘的目录信息导出到数据库"
 __requirements__ = ["p115client", "posixpatht"]
+__licence__ = "GPLv3"
 
 if __name__ == "__main__":
     from argparse import ArgumentParser, RawTextHelpFormatter

@@ -2,7 +2,7 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__all__ = ["MultipartResumeData", "P115Cookies", "P115URL"]
+__all__ = ["MultipartResumeData", "P115Cookies", "P115DictAttrLikeMixin", "P115DictAttrLike", "P115URL"]
 
 from collections.abc import Callable
 from functools import cached_property
@@ -12,6 +12,7 @@ from types import MappingProxyType
 from typing import Any, Final, NotRequired, Self, TypedDict
 
 from cookietools import cookies_str_to_dict
+from undefined import undefined
 
 
 CRE_UID_FORMAT_match: Final = re_compile("(?P<user_id>[1-9][0-9]*)_(?P<login_ssoent>[A-Z][1-9][0-9]*)_(?P<login_timestamp>[1-9][0-9]{9,})").fullmatch
@@ -122,14 +123,7 @@ class P115Cookies(str):
         ))
 
 
-class P115URL(str):
-    """下载链接的封装
-    """
-    def __new__(cls, url: Any = "", /, *args, **kwds):
-        return super().__new__(cls, url)
-
-    def __init__(self, url: Any = "", /, *args, **kwds):
-        self.__dict__.update(*args, **kwds)
+class P115DictAttrLikeMixin:
 
     def __getattr__(self, attr: str, /):
         try:
@@ -140,10 +134,12 @@ class P115URL(str):
     def __delitem__(self, key: str, /):
         del self.__dict__[key]
 
-    def __getitem__(self, key: str, /): # type: ignore
-        if isinstance(key, str):
-            return self.__dict__[key]
-        return super().__getitem__(key)
+    def __getitem__(self, key, /):
+        try:
+            if isinstance(key, str):
+                return self.__dict__[key]
+        except KeyError:
+            return super().__getitem__(key) # type: ignore
 
     def __setitem__(self, key: str, val, /):
         self.__dict__[key] = val
@@ -154,7 +150,7 @@ class P115URL(str):
             name = cls.__qualname__
         else:
             name = f"{module}.{cls.__qualname__}"
-        return f"{name}({str(self)!r}, {self.__dict__!r})"
+        return f"{name}({super().__repr__()}, {self.__dict__!r})"
 
     @property
     def mapping(self, /) -> dict[str, Any]:
@@ -162,9 +158,6 @@ class P115URL(str):
 
     def get(self, key, /, default=None):
         return self.__dict__.get(key, default)
-
-    def geturl(self, /) -> str:
-        return str(self)
 
     def items(self, /):
         return self.__dict__.items()
@@ -174,6 +167,43 @@ class P115URL(str):
 
     def values(self, /):
         return self.__dict__.values()
+
+
+class P115DictAttrLike(P115DictAttrLikeMixin):
+
+    def __new__(cls, val: Any = undefined, /, *args, **kwds):
+        if val is undefined:
+            return super().__new__(cls)
+        else:
+            return super().__new__(cls, val) # type: ignore
+
+    def __init__(self, val: Any = undefined, /, *args, **kwds):
+        self.__dict__.update(*args, **kwds)
+
+    @classmethod
+    def of(cls, val: Any = undefined, /, ns: None | dict = None) -> Self:
+        if val is undefined:
+            self = cls.__new__(cls)
+        else:
+            self = cls.__new__(cls, val)
+        if ns is not None:
+            self.__dict__ = ns
+        return self
+
+    @classmethod
+    def derive(cls, base: type, name: str = "", /, **ns) -> type[Self]:
+        return type(name, (cls, base), ns)
+
+    @classmethod
+    def derive_backend(cls, base: type, name: str = "", /, **ns) -> type[Self]:
+        return type(name, (base, cls), ns)
+
+
+class P115URL(P115DictAttrLike, str):
+    """下载链接的封装
+    """
+    def geturl(self, /) -> str:
+        return str(self)
 
     url = property(geturl)
 

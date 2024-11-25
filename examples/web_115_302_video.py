@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
+__licence__ = "GPLv3"
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __version__ = (0, 0, 5)
 __all__ = ["make_application"]
@@ -71,6 +72,7 @@ try:
     from p115.tool import get_id_to_path
     from blacksheep import json, redirect, text, Application, FromJSON, Request, Router
     from blacksheep.client import ClientSession
+    from blacksheep.server.compression import use_gzip_compression
     from blacksheep.server.openapi.common import ParameterInfo
     from blacksheep.server.openapi.ui import ReDocUIProvider
     from blacksheep.server.openapi.v3 import OpenAPIHandler
@@ -86,6 +88,7 @@ except ImportError:
     from p115.tool import get_id_to_path
     from blacksheep import json, redirect, text, Application, FromJSON, Request, Router
     from blacksheep.client import ClientSession
+    from blacksheep.server.compression import use_gzip_compression
     from blacksheep.server.openapi.common import ParameterInfo
     from blacksheep.server.openapi.ui import ReDocUIProvider
     from blacksheep.server.openapi.v3 import OpenAPIHandler
@@ -148,6 +151,7 @@ def make_application(
     QUEUE: Queue[str] = Queue()
     # NOTE: blacksheep 应用
     app = Application(router=Router())
+    use_gzip_compression(app)
     # NOTE: 启用文档
     docs = OpenAPIHandler(info=Info(
         title="video-115-302.py web api docs", 

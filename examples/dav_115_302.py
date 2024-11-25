@@ -5,7 +5,7 @@ from __future__ import annotations
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __version__ = (0, 3, 8, 2)
-__requirements__ = ["cachetools", "flask", "Flask-Compress", "httpagentparser", "orjson", "path_predicate", "pysubs2", "python-115", "python-encode_uri", "urllib3_request", "werkzeug", "wsgidav"]
+__requirements__ = ["a2wsgi", "cachetools", "flask", "Flask-Compress", "httpagentparser", "orjson", "path_predicate", "pysubs2", "python-115", "python-encode_uri", "urllib3_request", "wsgidav"]
 __doc__ = """\
     🕸️ 获取你的 115 网盘账号上文件信息和下载链接 🕷️
 
@@ -174,10 +174,11 @@ else:
         args = parser.parse_args([])
 
 try:
+    from a2wsgi import WSGIMiddleware
+    from blacksheep import redirect, Request, Response
+    from blacksheep.server.compression import GzipMiddleware
     from cachetools import LRUCache, TTLCache
     from encode_uri import encode_uri, encode_uri_component_loose
-    from flask import request, redirect, render_template_string, send_file, Flask, Response
-    from flask_compress import Compress # type: ignore
     # NOTE: 其它可用模块
     # - https://pypi.org/project/user-agents/
     # - https://github.com/faisalman/ua-parser-js
@@ -190,9 +191,6 @@ try:
     from path_predicate import make_predicate
     from posixpatht import escape as escape_name, path_is_dir_form
     from pysubs2 import SSAFile
-    from urllib3.poolmanager import PoolManager
-    from urllib3_request import request as urllib3_request
-    from werkzeug.middleware.dispatcher import DispatcherMiddleware
     from wsgidav.wsgidav_app import WsgiDAVApp # type: ignore
     from wsgidav.dav_error import DAVError # type: ignore
     from wsgidav.dav_provider import DAVCollection, DAVNonCollection, DAVProvider # type: ignore
@@ -200,10 +198,11 @@ except ImportError:
     from sys import executable
     from subprocess import run
     run([executable, "-m", "pip", "install", "-U", *__requirements__], check=True)
+    from a2wsgi import WSGIMiddleware
+    from blacksheep import redirect, Request, Response
+    from blacksheep.server.compression import GzipMiddleware
     from cachetools import LRUCache, TTLCache
     from encode_uri import encode_uri, encode_uri_component_loose
-    from flask import request, redirect, render_template_string, send_file, Flask, Response
-    from flask_compress import Compress # type: ignore
     from httpagentparser import detect as detect_ua # type: ignore
     from jinja2 import Environment, DictLoader
     from orjson import dumps
@@ -213,9 +212,6 @@ except ImportError:
     from path_predicate import make_predicate
     from posixpatht import escape as escape_name, path_is_dir_form
     from pysubs2 import SSAFile # type: ignore
-    from urllib3.poolmanager import PoolManager
-    from urllib3_request import request as urllib3_request
-    from werkzeug.middleware.dispatcher import DispatcherMiddleware
     from wsgidav.wsgidav_app import WsgiDAVApp # type: ignore
     from wsgidav.dav_error import DAVError # type: ignore
     from wsgidav.dav_provider import DAVCollection, DAVNonCollection, DAVProvider # type: ignore
@@ -232,6 +228,10 @@ from time import time
 from typing import cast
 from urllib.parse import unquote, urlsplit
 
+from urllib3_request import request as urllib3_request
+from urllib3 import PoolManager
+from flask import Flask
+from flask_compress import Compress
 
 urlopen = partial(urllib3_request, pool=PoolManager(num_pools=256))
 
@@ -1339,7 +1339,7 @@ def reduce_image_url_layers(url: str, /) -> str:
     return f"https://imgjump.115.com/?sha1={sha1}&{urlp.query}&size=0"
 
 
-def flatten_image_url(url: str, /) -> P115URL:
+async def flatten_image_url(url: str, /) -> P115URL:
     if isinstance(url, P115URL):
         return url
     thumb = url
@@ -1349,7 +1349,7 @@ def flatten_image_url(url: str, /) -> P115URL:
     return P115URL(url, size=size, thumb=thumb)
 
 
-def get_image_url(pickcode: str, /) -> P115URL:
+async def get_image_url(pickcode: str, /) -> P115URL:
     url = IMAGE_URL_CACHE.get(pickcode, "")
     if not url:
         resp = check_response(client.fs_image(pickcode, request=urlopen))
@@ -1411,29 +1411,31 @@ def get_share_fs(share_code: str, /) -> P115ShareFileSystem:
         return SHARE_FS_MAP[share_code]
 
 
-def get_file_url(
+async def get_file_url(
     pickcode: str, 
     /, 
     user_agent: str = "", 
     use_web_api: bool = False, 
 ) -> P115URL:
-    return client.download_url(
+    return await client.download_url(
         pickcode, 
         headers={"User-Agent": user_agent}, 
         use_web_api=use_web_api, 
+        async_=True, 
     )
 
 
-def get_share_file_url(
+async def get_share_file_url(
     share_code: str, 
     receive_code: str, 
     file_id: int | str, 
     /, 
     use_web_api: bool = False, 
 ) -> P115URL:
-    return client.share_download_url(
+    return await client.share_download_url(
         {"share_code": share_code, "receive_code": receive_code, "file_id": file_id}, 
         use_web_api=use_web_api, 
+        async_=True, 
     )
 
 
@@ -1582,7 +1584,7 @@ def get_list(path: str = "", /):
     return [normalize_attr(attr, origin) for attr in children]
 
 
-def get_share_list(path: str = "", /, share_code: str = ""):
+async def get_share_list(path: str = "", /, share_code: str = ""):
     get_arg = request.args.get
     if not share_code:
         share_code = get_arg("share_code", "")
@@ -1618,7 +1620,7 @@ def get_share_list(path: str = "", /, share_code: str = ""):
     return [normalize_attr(attr, origin) for attr in children]
 
 
-def get_file_pickcode(path: str = "", /, pickcode: str = "") -> str | Response:
+async def get_file_pickcode(path: str = "", /, pickcode: str = "") -> str | Response:
     if root_dir:
         attr: dict
         get_arg = request.args.get
@@ -1649,7 +1651,7 @@ def get_file_pickcode(path: str = "", /, pickcode: str = "") -> str | Response:
         return root_pickcode
 
 
-def get_m3u8(path: str = "", /, pickcode: str = "") -> list[dict] | Response:
+async def get_m3u8(path: str = "", /, pickcode: str = "") -> list[dict] | Response:
     """获取 m3u8 文件链接
     """
     pickcode_resp = get_file_pickcode(path, pickcode)
@@ -1662,7 +1664,7 @@ def get_m3u8(path: str = "", /, pickcode: str = "") -> list[dict] | Response:
     return resp["data"]["video_url"]
 
 
-def get_subtitles(path: str = "", /, pickcode: str = "") -> None | dict | Response:
+async def get_subtitles(path: str = "", /, pickcode: str = "") -> None | dict | Response:
     """获取字幕（随便提供此文件夹内的任何一个文件的提取码即可）
     """
     pickcode_resp = get_file_pickcode(path, pickcode)
@@ -1673,7 +1675,7 @@ def get_subtitles(path: str = "", /, pickcode: str = "") -> None | dict | Respon
     return resp.get("data")
 
 
-def get_url(path: str = "", /, pickcode: str = "") -> dict | Response:
+async def get_url(path: str = "", /, pickcode: str = "") -> dict | Response:
     """获取下载链接
     """
     pickcode_resp = get_file_pickcode(path, pickcode)
@@ -1701,7 +1703,7 @@ def get_url(path: str = "", /, pickcode: str = "") -> dict | Response:
     return {"type": "file", "url": str(url), "headers": url["headers"], "web": use_web_api}
 
 
-def get_share_url(path: str = "", /, share_code: str = "", file_id: int | str = ""):
+async def get_share_url(path: str = "", /, share_code: str = "", file_id: int | str = ""):
     get_arg = request.args.get
     if not share_code:
         share_code = get_arg("share_code", "")
@@ -1749,7 +1751,7 @@ def get_share_url(path: str = "", /, share_code: str = "", file_id: int | str = 
     return {"type": "file", "url": str(url), "headers": url.get("headers"), "web": use_web_api}
 
 
-def open_file(url, /, headers: None | Mapping = None):
+async def open_file(url, /, headers: None | Mapping = None):
     if headers is None:
         headers = {}
     else:
@@ -1768,7 +1770,7 @@ def open_file(url, /, headers: None | Mapping = None):
     )
 
 
-def get_page(path: str = "", /, as_file: bool = False):
+async def get_page(path: str = "", /, as_file: bool = False):
     if not root_dir or as_file or request.args.get("pickcode", "").strip():
         resp = get_url(path)
         if isinstance(resp, Response):
@@ -1897,7 +1899,7 @@ def get_page(path: str = "", /, as_file: bool = False):
     )
 
 
-def get_share_page(path: str = "", /, share_code: str = "", as_file: bool = False):
+async def get_share_page(path: str = "", /, share_code: str = "", as_file: bool = False):
     if as_file:
         resp = get_share_url(path, share_code)
         if isinstance(resp, Response):
@@ -2105,7 +2107,7 @@ def index():
 
 @flask_app.get("/<path:path>")
 @redirect_exception_response
-def query(path: str = ""):
+async def query(path: str = ""):
     get_arg = request.args.get
     method = get_arg("method")
     if method in ("srt2ass", "download", "redirect"):
@@ -2158,16 +2160,23 @@ def query(path: str = ""):
 WSGIDAV_CONFIG = {
     "host": "0.0.0.0", 
     "port": 0, 
-    "mount_path": "/<dav", 
+    "mount_path": "/dav", 
     "provider_mapping": {"/": P115FileSystemProvider()}, 
     "simple_dc": {"user_mapping": {"*": True}}, 
 }
 wsgidav_app = WsgiDAVApp(WSGIDAV_CONFIG)
-application = DispatcherMiddleware(flask_app, {"/<dav": wsgidav_app})
+# application = DispatcherMiddleware(flask_app, {"/<dav": wsgidav_app})
 
+from blacksheep import Application
+
+
+app = Application()
+app.mount("/dav", WSGIMiddleware(wsgidav_app))
+import uvicorn
+uvicorn.run(app)
 
 if __name__ == "__main__":
-    from werkzeug.serving import run_simple
+    
 
     debug = args.debug
     kwargs = dict(
@@ -2199,4 +2208,6 @@ if __name__ == "__main__":
 # TODO: 在线播放：播放列表、字幕列表（自动执行绑定视频）、多码率列表
 # TODO: 支持自定义转换规则，把 srt 转换为 ass 时，添加样式和字体，或者添加一个在线的样式选择框，就像 115
 # TODO: 直接用 m3u8 实现播放列表和各种附加，这样一切都是流媒体
+# TODO: 移除对 python-115 的依赖，全部使用 p115client 实现，数据会被写入数据库，为和 servedb 融合做准备
+# TODO: 数据库支持 mongodb
 
