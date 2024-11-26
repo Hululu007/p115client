@@ -2,7 +2,7 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 0, 13, 2)
+__version__ = (0, 0, 13, 3)
 __all__ = ["updatedb", "updatedb_one", "updatedb_tree"]
 __doc__ = "遍历 115 网盘的目录信息导出到数据库"
 __requirements__ = ["p115client", "posixpatht"]
@@ -43,7 +43,7 @@ try:
     from p115client.const import APP_TO_SSOENT
     from p115client.exception import AuthenticationError, BusyOSError, DataError
     from p115client.tool.edit import update_desc, update_star
-    from p115client.tool.iterdir import ensure_attr_path, filter_na_ids, get_path_to_cid, iter_stared_dirs, DirNode, DirNodeTuple
+    from p115client.tool.iterdir import ensure_attr_path, filter_na_ids, get_path_to_cid, iter_stared_dirs, DirNode
     from posixpatht import escape, joins, normpath
 except ImportError:
     from sys import executable
@@ -54,7 +54,7 @@ except ImportError:
     from p115client.const import APP_TO_SSOENT
     from p115client.exception import AuthenticationError, BusyOSError, DataError
     from p115client.tool.edit import update_desc, update_star
-    from p115client.tool.iterdir import ensure_attr_path, filter_na_ids, get_path_to_cid, iter_stared_dirs, DirNode, DirNodeTuple
+    from p115client.tool.iterdir import ensure_attr_path, filter_na_ids, get_path_to_cid, iter_stared_dirs, DirNode
     from posixpatht import escape, joins, normpath
 
 import logging
@@ -74,7 +74,7 @@ from typing import cast, Final
 
 
 # NOTE: 目录的 id 到它的 名字 和 上级目录 id 的映射
-ID_TO_DIRNODE: Final[dict[int, DirNode | DirNodeTuple]] = {}
+ID_TO_DIRNODE: Final[dict[int, tuple[str, int] | DirNode]] = {}
 # NOTE: 初始化日志对象
 logger = logging.Logger("115-updatedb", level=logging.INFO)
 handler = logging.StreamHandler()
@@ -953,7 +953,7 @@ def load_id_to_dirnode(con: Connection | Cursor, /):
     """
     sql = "SELECT id, name, parent_id FROM dir"
     for id, name, parent_id in con.execute(sql):
-        ID_TO_DIRNODE[id] = DirNodeTuple((name, parent_id))
+        ID_TO_DIRNODE[id] = (name, parent_id)
 
 
 def update_id_to_dirnode(
@@ -1137,13 +1137,13 @@ def diff_dir(
             insert_dir_incomplete_items(con, ancestors)
             insert_ancestor_items(con, ancestors, commit=False)
             for a in ancestors:
-                ID_TO_DIRNODE[a["id"]] = DirNodeTuple((a["name"], a["parent_id"]))
+                ID_TO_DIRNODE[a["id"]] = (a["name"], a["parent_id"])
             if dir_ids is not None:
                 dir_ids.update(a["id"] for a in ancestors)
         if dirs:
             insert_dir_items(con, dirs)
             for a in dirs:
-                ID_TO_DIRNODE[a["id"]] = DirNodeTuple((a["name"], a["parent_id"]))
+                ID_TO_DIRNODE[a["id"]] = (a["name"], a["parent_id"])
             if dir_ids is not None:
                 dir_ids.update(a["id"] for a in dirs)
 
