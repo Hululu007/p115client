@@ -23,6 +23,7 @@ from operator import itemgetter
 from os import fsdecode, fstat, isatty, stat, PathLike, path as ospath
 from pathlib import Path, PurePath
 from re import compile as re_compile, MULTILINE
+from string import hexdigits
 from _thread import start_new_thread
 from tempfile import TemporaryFile
 from threading import Lock
@@ -557,14 +558,15 @@ def normalize_attr(
 class P115Client:
     """115 的客户端对象
 
-    :param cookies: 115 的 cookies，要包含 `UID`、`CID` 和 `SEID`
+    :param cookies: 115 的 cookies，要包含 `UID`、`CID` 和 `SEID`，可选择性包含 `uid` （相当于获取新的 cookies 的 refresh token）
 
         - 如果为 None，则会要求人工扫二维码登录
-        - 如果是 str，则要求是格式正确的 cookies 字符串，例如 "UID=...; CID=...; SEID=..."
-        - 如果是 bytes 或 os.PathLike，则视为路径，当更新 cookies 时，也会往此路径写入文件
+        - 如果是 str，则要求是格式正确的 cookies 字符串，例如 "UID=...; CID=...; SEID=..."，如果包含 "uid=..."（一个 sha1 哈希值的 16 进制表示），则会用来更新 `self.login_uid` 属性
+        - 如果是 bytes 或 os.PathLike，则视为路径，当更新 cookies 时，也会往此路径写入文件，格式要求同上面的 `str`
         - 如果是 collections.abc.Mapping，则是一堆 cookie 的名称到值的映射
         - 如果是 collections.abc.Iterable，则其中每一条都视为单个 cookie
 
+    :param login_uid: 已经确认扫码过的 token，可用于绑定设备以获取 cookies，这个比 cookies 中所提取的 uid 优先级更高。如果为 True 或者字符串，会在初始化代码时设置 `self.login_uid` 属性
     :param check_for_relogin: 网页请求抛出异常时，判断是否要重新登录并重试
 
         - 如果为 False，则不重试
@@ -637,6 +639,7 @@ class P115Client:
         self, 
         /, 
         cookies: None | str | bytes | PathLike | Mapping[str, str] | Iterable[Mapping | Cookie | Morsel] = None, 
+        login_uid: bool | str = False, 
         check_for_relogin: bool | Callable[[BaseException], bool | int] = False, 
         ensure_cookies: bool = False, 
         app: None | str = None, 
@@ -644,6 +647,7 @@ class P115Client:
     ):
         self.init(
             cookies=cookies, 
+            login_uid=login_uid, 
             check_for_relogin=check_for_relogin, 
             ensure_cookies=ensure_cookies, 
             app=app, 
@@ -715,15 +719,22 @@ class P115Client:
         if cookies is None:
             cookiejar.clear()
             if cookies_old != "":
-                self._write_cookies()
+                self._write_cookies("")
             return
         if isinstance(cookies, str):
             cookies = cookies.strip().rstrip(";")
             if not cookies:
                 return
+            if len(cookies) == 40 and not cookies.strip(hexdigits):
+                self.login_uid = cookies
+                return
             cookies = cookies_str_to_dict(cookies)
             if not cookies:
                 return
+            login_uid = cookies.pop("uid", "")
+            if "login_uid" not in self.__dict__:
+                if len(login_uid) == 40 and not login_uid.strip(hexdigits):
+                    self.login_uid = login_uid
         set_cookie = cookiejar.set_cookie
         clear_cookie = cookiejar.clear
         cookie: Mapping | Cookie | Morsel
@@ -818,13 +829,19 @@ class P115Client:
 
     def _write_cookies(
         self, 
-        cookies: str = "", 
+        cookies: None | str = None, 
         /, 
         encoding: str = "latin-1", 
     ):
         if not (cookies_path := self.__dict__.get("cookies_path")):
             return
+        if cookies is None:
+            cookies = str(self.cookies_str)
         cookies_bytes = bytes(cookies, encoding)
+        if login_uid := self.__dict__.get("login_uid", ""):
+            if cookies_bytes:
+                cookies_bytes += b"; "
+            cookies_bytes += b"uid=" + bytes(login_uid, "latin-1")
         with cookies_path.open("wb") as f:
             f.write(cookies_bytes)
         try:
@@ -844,6 +861,7 @@ class P115Client:
         cls, 
         /, 
         cookies: None | str | bytes | PathLike | Mapping[str, str] | Iterable[Mapping | Cookie | Morsel] = None, 
+        login_uid: bool | str = False, 
         check_for_relogin: bool | Callable[[BaseException], bool | int] = False, 
         ensure_cookies: bool = False, 
         app: None | str = None, 
@@ -860,6 +878,7 @@ class P115Client:
         cls, 
         /, 
         cookies: None | str | bytes | PathLike | Mapping[str, str] | Iterable[Mapping | Cookie | Morsel] = None, 
+        login_uid: bool | str = False, 
         check_for_relogin: bool | Callable[[BaseException], bool | int] = False, 
         ensure_cookies: bool = False, 
         app: None | str = None, 
@@ -875,6 +894,7 @@ class P115Client:
         cls, 
         /, 
         cookies: None | str | bytes | PathLike | Mapping[str, str] | Iterable[Mapping | Cookie | Morsel] = None, 
+        login_uid: bool | str = False, 
         check_for_relogin: bool | Callable[[BaseException], bool | int] = False, 
         ensure_cookies: bool = False, 
         app: None | str = None, 
@@ -889,6 +909,9 @@ class P115Client:
                 self = cls.__new__(cls)
             else:
                 self = instance
+            is_valid_uid = isinstance(login_uid, str) and len(login_uid) == 40 and not login_uid.strip(hexdigits)
+            if is_valid_uid:
+                self.login_uid = login_uid
             if cookies is None:
                 yield self.login(
                     app, 
@@ -908,6 +931,8 @@ class P115Client:
                         self._read_cookies()
                 elif cookies:
                     setattr(self, "cookies", cookies)
+                if is_valid_uid:
+                    self.login_uid = login_uid
                 if ensure_cookies:
                     yield self.login(
                         app, 
@@ -915,6 +940,8 @@ class P115Client:
                         async_=async_, 
                         **request_kwargs, 
                     )
+            if login_uid is not False and "login_uid" not in self.__dict__:
+                yield self.login_without_app(async_=async_, **request_kwargs)
             setattr(self, "check_for_relogin", check_for_relogin)
             return self
         return run_gen_step(gen_step, async_=async_)
@@ -1091,6 +1118,16 @@ class P115Client:
                     async_=async_, 
                     **request_kwargs, 
                 )
+            try:
+                check_response(resp)
+            except AuthenticationError:
+                resp = yield self.login_with_qrcode(
+                    app, 
+                    console_qrcode=console_qrcode, 
+                    async_=async_, 
+                    **request_kwargs, 
+                )
+                check_response(resp)
             setattr(self, "cookies", resp["data"]["cookie"])
             return self
         return run_gen_step(gen_step, async_=async_)
@@ -1462,6 +1499,7 @@ class P115Client:
         /, 
         app: None | str = None, 
         replace: bool = False, 
+        check_for_relogin: bool | Callable[[BaseException], bool | int] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -1473,6 +1511,7 @@ class P115Client:
         /, 
         app: None | str = None, 
         replace: bool = False, 
+        check_for_relogin: bool | Callable[[BaseException], bool | int] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -1483,6 +1522,7 @@ class P115Client:
         /, 
         app: None | str = None, 
         replace: bool = False, 
+        check_for_relogin: bool | Callable[[BaseException], bool | int] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -1498,6 +1538,12 @@ class P115Client:
 
         :param app: 要登录的 app，如果为 None，则用当前登录设备，如果无当前登录设备，则报错
         :param replace: 替换当前 client 对象的 cookie，否则返回新的 client 对象
+        :param check_for_relogin: 网页请求抛出异常时，判断是否要重新登录并重试
+
+            - 如果为 False，则不重试
+            - 如果为 True，则自动通过判断 HTTP 响应码为 405 时重新登录并重试
+            - 如果为 collections.abc.Callable，则调用以判断，当返回值为 bool 类型且值为 True，或者值为 405 时重新登录，然后循环此流程，直到成功或不可重试
+
         :param async_: 是否异步
         :param request_kwargs: 其它请求参数
 
@@ -1564,9 +1610,7 @@ class P115Client:
                 setattr(self, "cookies", cookies)
                 return self
             else:
-                inst = type(self)(cookies)
-                inst.login_uid = self.login_uid
-                return inst
+                return type(self)(cookies, login_uid=self.login_uid, check_for_relogin=check_for_relogin)
         return run_gen_step(gen_step, async_=async_)
 
     @overload
@@ -1575,7 +1619,9 @@ class P115Client:
         cls, 
         /, 
         uid: str, 
-        app: str, 
+        app: str = "alipaymini", 
+        check_for_relogin: bool | Callable[[BaseException], bool | int] = False, 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> Self:
@@ -1586,7 +1632,9 @@ class P115Client:
         cls, 
         /, 
         uid: str, 
-        app: str, 
+        app: str = "alipaymini", 
+        check_for_relogin: bool | Callable[[BaseException], bool | int] = False, 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, Self]:
@@ -1596,7 +1644,9 @@ class P115Client:
         cls, 
         /, 
         uid: str, 
-        app: str, 
+        app: str = "alipaymini", 
+        check_for_relogin: bool | Callable[[BaseException], bool | int] = False, 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> Self | Coroutine[Any, Any, Self]:
@@ -1611,6 +1661,12 @@ class P115Client:
 
         :param uid: 登录二维码的 uid （refresh token）
         :param app: 待绑定的设备名称
+        :param check_for_relogin: 网页请求抛出异常时，判断是否要重新登录并重试
+
+            - 如果为 False，则不重试
+            - 如果为 True，则自动通过判断 HTTP 响应码为 405 时重新登录并重试
+            - 如果为 collections.abc.Callable，则调用以判断，当返回值为 bool 类型且值为 True，或者值为 405 时重新登录，然后循环此流程，直到成功或不可重试
+
         :param async_: 是否异步
         :param request_kwargs: 其它请求参数
 
@@ -1675,9 +1731,7 @@ class P115Client:
         def gen_step():
             resp = yield cls.login_qrcode_scan_result(uid, app, async_=async_, **request_kwargs)
             cookies = check_response(resp)["data"]["cookie"]
-            inst = cls(cookies)
-            inst.login_uid = uid
-            return inst
+            return cls(cookies, login_uid=uid, check_for_relogin=check_for_relogin)
         return run_gen_step(gen_step, async_=async_)
 
     @overload
@@ -1831,6 +1885,12 @@ class P115Client:
                                 res = await res
                             if not res if isinstance(res, bool) else res != 405:
                                 raise
+                            if not i and "login_uid" in self.__dict__:
+                                if not all(map(self.cookies.__contains__, ("UID", "CID", "SEID"))):
+                                    app = await self.login_app(async_=True)
+                                    await self.login_another_app(app or "alipaymini", replace=True, async_=True)
+                                    continue
+                                raise
                             cookies = self.cookies_str
                             if cookies != cookies_old:
                                 continue
@@ -1863,6 +1923,12 @@ class P115Client:
                             raise
                         res = check_for_relogin(e)
                         if not res if isinstance(res, bool) else res != 405:
+                            raise
+                        if not i and "login_uid" in self.__dict__:
+                            if not all(map(self.cookies.__contains__, ("UID", "CID", "SEID"))):
+                                app = self.login_app()
+                                self.login_another_app(app or "alipaymini", replace=True)
+                                continue
                             raise
                         cookies = self.cookies_str
                         if cookies != cookies_old:
