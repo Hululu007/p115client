@@ -6,6 +6,9 @@ __all__ = [
     "LoginError", "MultipartUploadAbort", "NotSupportedError", "OperationalError", 
 ]
 
+import warnings
+
+from itertools import count
 from collections.abc import Mapping
 from functools import cached_property
 
@@ -15,6 +18,11 @@ from .type import MultipartResumeData
 class P115Warning(UserWarning):
     """本模块的最基础警示类
     """
+
+
+_count = count(1).__next__
+warnings.filterwarnings("always", category=UserWarning)
+warnings.formatwarning = lambda message, category, filename, lineno, line=None: f"\r\x1b[K\x1b[1;31;43m{category.__qualname__}\x1b[0m(\x1b[32m{_count()}\x1b[0m) @ \x1b[3;4;34m{filename}\x1b[0m:\x1b[36m{lineno}\x1b[0m \x1b[5;31m➜\x1b[0m \x1b[1m{message}\x1b[0m\n"
 
 
 class P115OSError(OSError):

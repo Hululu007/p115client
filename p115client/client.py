@@ -566,7 +566,7 @@ class P115Client:
         - 如果是 collections.abc.Mapping，则是一堆 cookie 的名称到值的映射
         - 如果是 collections.abc.Iterable，则其中每一条都视为单个 cookie
 
-    :param login_uid: 已经确认扫码过的 token，可用于绑定设备以获取 cookies，这个比 cookies 中所提取的 uid 优先级更高。如果为 True 或者字符串，会在初始化代码时设置 `self.login_uid` 属性
+    :param login_uid: 已经确认扫码过的 token 或者登录状态（即 cookies 为在线状态）的 client，可用于绑定设备以获取 cookies，这个比 cookies 中所提取的 uid 优先级更高。如果为 True 或者字符串，会在初始化代码时设置 `self.login_uid` 属性
     :param check_for_relogin: 网页请求抛出异常时，判断是否要重新登录并重试
 
         - 如果为 False，则不重试
@@ -639,7 +639,7 @@ class P115Client:
         self, 
         /, 
         cookies: None | str | bytes | PathLike | Mapping[str, str] | Iterable[Mapping | Cookie | Morsel] = None, 
-        login_uid: bool | str = False, 
+        login_uid: bool | str | Self = False, 
         check_for_relogin: bool | Callable[[BaseException], bool | int] = False, 
         ensure_cookies: bool = False, 
         app: None | str = None, 
@@ -861,7 +861,7 @@ class P115Client:
         cls, 
         /, 
         cookies: None | str | bytes | PathLike | Mapping[str, str] | Iterable[Mapping | Cookie | Morsel] = None, 
-        login_uid: bool | str = False, 
+        login_uid: bool | str | Self = False, 
         check_for_relogin: bool | Callable[[BaseException], bool | int] = False, 
         ensure_cookies: bool = False, 
         app: None | str = None, 
@@ -878,7 +878,7 @@ class P115Client:
         cls, 
         /, 
         cookies: None | str | bytes | PathLike | Mapping[str, str] | Iterable[Mapping | Cookie | Morsel] = None, 
-        login_uid: bool | str = False, 
+        login_uid: bool | str | Self = False, 
         check_for_relogin: bool | Callable[[BaseException], bool | int] = False, 
         ensure_cookies: bool = False, 
         app: None | str = None, 
@@ -894,7 +894,7 @@ class P115Client:
         cls, 
         /, 
         cookies: None | str | bytes | PathLike | Mapping[str, str] | Iterable[Mapping | Cookie | Morsel] = None, 
-        login_uid: bool | str = False, 
+        login_uid: bool | str | Self = False, 
         check_for_relogin: bool | Callable[[BaseException], bool | int] = False, 
         ensure_cookies: bool = False, 
         app: None | str = None, 
@@ -904,6 +904,10 @@ class P115Client:
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> Self | Coroutine[Any, Any, Self]:
+        # TODO: 支持用另一个 client 作为更新的基础，而 login_uid 就是另一个设备的 uid，通过 property 来获取
+        # TODO: 从此更新就依赖另一个 client 了，相关逻辑由它所支撑，最终落实到一个具体的 str 类型的 login_uid 之上
+        # TODO: login_another_app 时，如果 ssoent 相同，则可能时基础 client 的登录功能失效（当 uid 失效时），这要怎么处理？
+        # TODO: 或许应该限制 login_another_app 的 ssoent 不能和当前设备同，或者在相同时，给出警告信息
         def gen_step():
             if instance is None:
                 self = cls.__new__(cls)
@@ -946,6 +950,7 @@ class P115Client:
             return self
         return run_gen_step(gen_step, async_=async_)
 
+    # TODO: 改成 property，具有get、set、del
     @locked_cacheproperty
     def login_uid(self, /) -> str:
         """相当于是获取 cookies 的 refresh token
@@ -1498,7 +1503,7 @@ class P115Client:
         self, 
         /, 
         app: None | str = None, 
-        replace: bool = False, 
+        replace: bool | Self = False, 
         check_for_relogin: bool | Callable[[BaseException], bool | int] = False, 
         *, 
         async_: Literal[False] = False, 
@@ -1510,7 +1515,7 @@ class P115Client:
         self, 
         /, 
         app: None | str = None, 
-        replace: bool = False, 
+        replace: bool | Self = False, 
         check_for_relogin: bool | Callable[[BaseException], bool | int] = False, 
         *, 
         async_: Literal[True], 
@@ -1521,7 +1526,7 @@ class P115Client:
         self, 
         /, 
         app: None | str = None, 
-        replace: bool = False, 
+        replace: bool | Self = False, 
         check_for_relogin: bool | Callable[[BaseException], bool | int] = False, 
         *, 
         async_: Literal[False, True] = False, 
@@ -1537,7 +1542,12 @@ class P115Client:
             如果把二维码的 uid (refresh token) 扫码成功缓存起来，以后由它绑定同一设备获取 cookies，可以实现单设备多个同时登录
 
         :param app: 要登录的 app，如果为 None，则用当前登录设备，如果无当前登录设备，则报错
-        :param replace: 替换当前 client 对象的 cookie，否则返回新的 client 对象
+        :param replace: 替换某个 client 对象的 cookie
+
+            - 如果为 P115Client, 则把获取到的 `cookies` 更新到此对象
+            - 如果为 True，则把获取到的 `cookies` 更新到 `self`
+            - 如果为 False，否则返回新的 `P115Client` 对象
+
         :param check_for_relogin: 网页请求抛出异常时，判断是否要重新登录并重试
 
             - 如果为 False，则不重试
@@ -1604,9 +1614,15 @@ class P115Client:
         +-------+----------+------------+-------------------------+
         """
         def gen_step():
+            nonlocal app
+            if not app and isinstance(replace, P115Client):
+                app = yield replace.login_app(async_=True)
             resp = yield self.login_with_app(app, async_=async_, **request_kwargs)
             cookies = check_response(resp)["data"]["cookie"]
-            if replace:
+            if isinstance(replace, P115Client):
+                setattr(replace, "cookies", cookies)
+                return replace
+            elif replace:
                 setattr(self, "cookies", cookies)
                 return self
             else:
@@ -1885,12 +1901,13 @@ class P115Client:
                                 res = await res
                             if not res if isinstance(res, bool) else res != 405:
                                 raise
-                            if not i and "login_uid" in self.__dict__:
-                                if not all(map(self.cookies.__contains__, ("UID", "CID", "SEID"))):
-                                    app = await self.login_app(async_=True)
-                                    await self.login_another_app(app or "alipaymini", replace=True, async_=True)
-                                    continue
-                                raise
+                            if (not i and 
+                                "login_uid" in self.__dict__ and 
+                                not all(map(self.cookies.__contains__, ("UID", "CID", "SEID")))
+                            ):
+                                app = await self.login_app(async_=True)
+                                await self.login_another_app(app or "alipaymini", replace=True, async_=True)
+                                continue
                             cookies = self.cookies_str
                             if cookies != cookies_old:
                                 continue
@@ -1924,13 +1941,15 @@ class P115Client:
                         res = check_for_relogin(e)
                         if not res if isinstance(res, bool) else res != 405:
                             raise
-                        if not i and "login_uid" in self.__dict__:
-                            if not all(map(self.cookies.__contains__, ("UID", "CID", "SEID"))):
-                                app = self.login_app()
-                                self.login_another_app(app or "alipaymini", replace=True)
-                                continue
-                            raise
+                        if (not i and 
+                            "login_uid" in self.__dict__ and 
+                            not all(map(self.cookies.__contains__, ("UID", "CID", "SEID")))
+                        ):
+                            app = self.login_app()
+                            self.login_another_app(app or "alipaymini", replace=True)
+                            continue
                         cookies = self.cookies_str
+                        # TODO: 应该检查 UID 即可，其它不用检查
                         if cookies != cookies_old:
                             continue
                         cookies_mtime = getattr(self, "cookies_mtime", 0)
@@ -6867,7 +6886,9 @@ class P115Client:
         POST https://proapi.115.com/android/2.0/video/play
 
         .. important::
-            仅这几种设备可用：`115android`, `115ios`, `115ipad`, `android`, `ios`, `qandroid`, `qios`, **wechatmini**, **alipaymini**, **tv**
+            网页端设备，即 `harmony`, `web`, `desktop` 不可用此接口，实际上任何 `proapi` 接口都不可用
+
+            也就是说仅这几种设备可用：`115android`, `115ios`, `115ipad`, `android`, `ios`, `qandroid`, `qios`, **wechatmini**, **alipaymini**, **tv**
 
         :payload:
             - pickcode: str 💡 提取码
@@ -7051,7 +7072,7 @@ class P115Client:
         self, 
         payload: str | dict = "", 
         /, 
-        app: str = "web", 
+        app: str = "android", 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -7062,7 +7083,7 @@ class P115Client:
         self, 
         payload: str | dict = "", 
         /, 
-        app: str = "web", 
+        app: str = "android", 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -7072,14 +7093,14 @@ class P115Client:
         self, 
         payload: str | dict = "", 
         /, 
-        app: str = "web", 
+        app: str = "android", 
         *,
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
         """获取 life_list 操作记录明细
 
-        GET https://proapi.115.com/web/1.0/behavior/detail
+        GET https://proapi.115.com/{app}/1.0/behavior/detail
 
         :payload:
             - type: str 💡 操作类型
