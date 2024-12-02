@@ -6,38 +6,55 @@ from __future__ import annotations
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __all__ = ["make_application"]
 
-from collections.abc import Callable
+from asyncio import to_thread
+from collections.abc import Callable, Mapping, MutableMapping
+from contextlib import closing
+from datetime import datetime
 from functools import partial
 from inspect import getsource
 from io import BytesIO
-from os import fsdecode, PathLike
+from os import environ, PathLike
 from pathlib import Path
-from posixpath import dirname, splitext, split as splitpath
-from sqlite3 import connect, Connection, OperationalError
+from posixpath import splitext, split as splitpath
+from sqlite3 import connect, register_adapter, register_converter, PARSE_COLNAMES, PARSE_DECLTYPES, Connection
+from string import hexdigits
 from threading import Lock
-from typing import Literal
 from urllib.parse import quote
 
 from a2wsgi import WSGIMiddleware
-from blacksheep import redirect, Application, Request
-from blacksheep.client import ClientSession
+from blacksheep import redirect, text, Application, Router
+from blacksheep.contents import Content, StreamedContent
+from blacksheep.messages import Request, Response
 from blacksheep.server import asgi
 from blacksheep.server.compression import use_gzip_compression
 from blacksheep.server.remotes.forwarding import ForwardedHeadersMiddleware
-from blacksheep_client_request import request as blacksheep_request
-from encode_uri import encode_uri_component_loose
-from p115client import P115Client
+from blacksheep.server.rendering.jinja2 import JinjaRenderer
+from blacksheep.server.responses import view_async
+from blacksheep.settings.html import html_settings
+from blacksheep.settings.json import json_settings
+from encode_uri import encode_uri, encode_uri_component_loose
+from httpagentparser import detect as detect_ua # type: ignore
+from httpx import Client, AsyncClient
+from orjson import dumps as json_dumps, loads as json_loads
+from p115client import check_response, P115Client, P115URL
+from p115client.exception import AuthenticationError, BusyOSError
+from p115client.tool import P115ID
 from path_predicate import MappingPath
+from posixpatht import escape
 from property import locked_cacheproperty
-from urllib3.poolmanager import PoolManager
+from pysubs2 import SSAFile # type: ignore
 from wsgidav.wsgidav_app import WsgiDAVApp # type: ignore
 from wsgidav.dav_error import DAVError # type: ignore
 from wsgidav.dav_provider import DAVCollection, DAVNonCollection, DAVProvider # type: ignore
-from yaml import load, Loader
 
+from .db import (
+    attr_to_path, get_id_from_db, get_pickcode_from_db, get_sha1_from_db, 
+    get_ancestors_from_db, get_attr_from_db, get_children_from_db, 
+)
 from .lrudict import LRUDict
 
 
+# NOTE: monkey patch
 get_request_url_from_scope = asgi.get_request_url_from_scope
 source = getsource(get_request_url_from_scope)
 repl_code = '        host, port = scope["server"]'
@@ -53,73 +70,504 @@ if repl_code in source:
     get_request_url_from_scope.__code__ = asgi.get_request_url_from_scope.__code__
 
 
+def format_size(
+    n: int, 
+    /, 
+    unit: str = "", 
+    precision: int = 2, 
+) -> str:
+    "scale bytes to its proper byte format"
+    if unit == "B" or not unit and n < 1024:
+        return f"{n} B"
+    b = 1
+    b2 = 1024
+    for u in ["K", "M", "G", "T", "P", "E", "Z", "Y"]:
+        b, b2 = b2, b2 << 10
+        if u == unit if unit else n < b2:
+            break
+    return f"%.{precision}f {u}B" % (n / b)
+
+
+def format_timestamp(ts: int | float, /) -> str:
+    return str(datetime.fromtimestamp(ts))
+
+
+register_adapter(dict, json_dumps)
+register_adapter(list, json_dumps)
+register_converter("JSON", json_loads)
+
+environ["APP_JINJA_PACKAGE_NAME"] = "p115servedb"
+html_settings.use(JinjaRenderer(enable_async=True))
+json_settings.use(loads=json_loads)
+jinja_env = getattr(html_settings.renderer, "env")
+jinja2_filters = jinja_env.filters
+jinja2_filters["format_size"] = format_size
+jinja2_filters["encode_uri"] = encode_uri
+jinja2_filters["encode_uri_component"] = encode_uri_component_loose
+jinja2_filters["json_dumps"] = lambda data: json_dumps(data).decode("utf-8").replace("'", "&apos;")
+jinja2_filters["format_timestamp"] = format_timestamp
+jinja2_filters["escape_name"] = lambda name, default="/": escape(name) or default
+
+
+def get_status_code(e: BaseException, /) -> None | int:
+    status = (
+        getattr(e, "status", None) or 
+        getattr(e, "code", None) or 
+        getattr(e, "status_code", None)
+    )
+    if status is None and hasattr(e, "response"):
+        response = e.response
+        status = (
+            getattr(response, "status", None) or 
+            getattr(response, "code", None) or 
+            getattr(response, "status_code", None)
+        )
+    return status
+
+
+def get_origin(request: Request) -> str:
+    return f"{request.scheme}://{request.host}"
+
+
+def check_pickcode(pickcode: str, /, raise_for_false: bool = True):
+    result = 17 <= len(pickcode) <= 18 and pickcode.isalnum()
+    if raise_for_false and not result:
+        raise ValueError(f"bad pickcode: {pickcode!r}")
+    return result
+
+
+def check_sha1(sha1: str, /, raise_for_false: bool = True):
+    result = len(sha1) == 40 and not sha1.strip(hexdigits)
+    if raise_for_false and not result:
+        raise ValueError(f"bad sha1: {sha1!r}")
+    return result
+
+
 def make_application(
     dbfile: bytes | str | PathLike, 
-    config_path: str | Path = "", 
     cookies_path: str | Path = "", 
-    strm_origin: bytes | str = "", 
+    strm_origin: str = "", 
     predicate: None | Callable[[MappingPath], bool] = None, 
     strm_predicate: None | Callable[[MappingPath], bool] = None, 
+    load_libass: bool = False, 
+    debug: bool = False, 
+    wsgidav_config: dict = {}, 
 ) -> Application:
-    if isinstance(strm_origin, str):
-        strm_origin_bytes = strm_origin.encode("utf-8")
-    else:
-        strm_origin_bytes = strm_origin
-        strm_origin = strm_origin_bytes.decode("utf-8")
-    if config_path:
-        config = load(open(config_path, encoding="utf-8"), Loader=Loader)
-    else:
-        config = {"simple_dc": {"user_mapping": {"*": True}}}
     if cookies_path:
         cookies_path = Path(cookies_path)
     else:
         cookies_path = Path("115-cookies.txt")
         if not cookies_path.exists():
             cookies_path = ""
-    client = P115Client(cookies_path, app="alipaymini", check_for_relogin=True) if cookies_path else None
-    urlopen = partial(PoolManager(num_pools=128).request, "GET", preload_content=False)
 
-    CON: Connection
-    CON_FILE: Connection
-    FIELDS = ("id", "name", "path", "ctime", "mtime", "sha1", "size", "pickcode", "is_dir")
-    ROOT = {"id": 0, "name": "", "path": "/", "ctime": 0, "mtime": 0, "size": 0, "pickcode": "", "is_dir": 1}
-    if strm_predicate:
-        STRM_CACHE: LRUDict = LRUDict(65536)
-    WRITE_LOCK = Lock()
+    app = Application(router=Router(), show_error_details=debug)
+    use_gzip_compression(app)
+    app.serve_files(
+        Path(__file__).parent.with_name("static"), 
+        root_path="/%3Cstatic", 
+        fallback_document="index.html", 
+    )
+    client = P115Client(cookies_path, app="alipaymini", check_for_relogin=True) if cookies_path else None
+    session: Client
+    async_session: AsyncClient
+    con: Connection
+    con_file: Connection
+
+    # NOTE: webdav 的文件对象缓存
+    DAV_FILE_CACHE: MutableMapping[str, DAVNonCollection] = LRUDict(65536)
+
+    @app.on_middlewares_configuration
+    def configure_forwarded_headers(app: Application):
+        app.middlewares.insert(0, ForwardedHeadersMiddleware(accept_only_proxied_requests=False))
+
+    @app.lifespan
+    async def register_client(app: Application):
+        nonlocal session
+        with Client() as session:
+            app.services.register(Client, instance=session)
+            yield
+
+    @app.lifespan
+    async def register_async_client(app: Application):
+        nonlocal async_session
+        async with AsyncClient() as async_session:
+            app.services.register(AsyncClient, instance=async_session)
+            yield
+
+    @app.lifespan
+    async def register_connection(app: Application):
+        nonlocal con
+        with closing(connect(
+            dbfile, 
+            check_same_thread=False, 
+            detect_types=PARSE_DECLTYPES | PARSE_COLNAMES, 
+            uri=isinstance(dbfile, str) and dbfile.startswith("file:"), 
+        )) as con:
+            app.services.register(Connection, instance=con)
+            yield
+
+    def make_response_for_exception(
+        exc: BaseException, 
+        status_code: int = 500, 
+    ) -> Response:
+        if (len(exc.args) == 1 and isinstance(exc.args[0], (dict, list, tuple)) or 
+            isinstance(exc, OSError) and len(exc.args) == 2 and isinstance(exc.args[1], (dict, list, tuple))
+        ):
+            return Response(
+                status_code, 
+                None, 
+                Content(b"application/json", json_dumps(exc.args[-1])), 
+            )
+        return text(str(exc), status_code)
+
+    if debug:
+        getattr(app, "logger").level = 10
+    else:
+        @app.exception_handler(Exception)
+        async def redirect_exception_response(
+            self, 
+            request: Request, 
+            exc: BaseException, 
+        ) -> Response:
+            code = get_status_code(exc)
+            if code is not None:
+                return make_response_for_exception(exc, code)
+            elif isinstance(exc, ValueError):
+                return make_response_for_exception(exc, 400) # Bad Request
+            elif isinstance(exc, AuthenticationError):
+                return make_response_for_exception(exc, 401) # Unauthorized
+            elif isinstance(exc, PermissionError):
+                return make_response_for_exception(exc, 403) # Forbidden
+            elif isinstance(exc, FileNotFoundError):
+                return make_response_for_exception(exc, 404) # Not Found
+            elif isinstance(exc, (IsADirectoryError, NotADirectoryError)):
+                return make_response_for_exception(exc, 406) # Not Acceptable
+            elif isinstance(exc, BusyOSError):
+                return make_response_for_exception(exc, 503) # Service Unavailable
+            elif isinstance(exc, OSError):
+                return make_response_for_exception(exc, 500) # Internal Server Error
+            else:
+                return make_response_for_exception(exc, 503) # Service Unavailable
+
+    @app.router.get("/%3Cid")
+    @app.router.get("/%3Cid/*")
+    async def get_id(
+        id: int = -1, 
+        pickcode: str = "", 
+        sha1: str = "", 
+        path: str = "", 
+    ) -> int:
+        if pickcode:
+            check_pickcode(pickcode)
+            return await to_thread(get_id_from_db, con, pickcode=pickcode.lower())
+        elif id >= 0:
+            return id
+        elif sha1:
+            check_sha1(sha1)
+            return await to_thread(get_id_from_db, con, sha1=sha1.upper())
+        else:
+            return await to_thread(get_id_from_db, con, path=path)
+
+    @app.router.get("/%3Cpickcode")
+    @app.router.get("/%3Cpickcode/*")
+    async def get_pickcode(
+        id: int = -1, 
+        pickcode: str = "", 
+        sha1: str = "", 
+        path: str = "", 
+    ) -> str:
+        if pickcode:
+            check_pickcode(pickcode)
+            return pickcode.lower()
+        elif id >= 0:
+            return await to_thread(get_pickcode_from_db, con, id=id)
+        elif sha1:
+            check_sha1(sha1)
+            return await to_thread(get_pickcode_from_db, con, sha1=sha1.upper())
+        else:
+            return await to_thread(get_pickcode_from_db, con, path=path)
+
+    @app.router.get("/%3Csha1")
+    @app.router.get("/%3Csha1/*")
+    async def get_sha1(
+        id: int = -1, 
+        pickcode: str = "", 
+        sha1: str = "", 
+        path: str = "", 
+    ) -> str:
+        if pickcode:
+            check_pickcode(pickcode)
+            return await to_thread(get_sha1_from_db, con, pickcode=pickcode.lower())
+        elif id >= 0:
+            return await to_thread(get_sha1_from_db, con, id=id)
+        elif sha1:
+            check_sha1(sha1)
+            return sha1.upper()
+        else:
+            return await to_thread(get_sha1_from_db, con, path=path)
+
+    @app.router.get("/%3Cattr")
+    @app.router.get("/%3Cattr/*")
+    async def get_attr(
+        id: int = -1, 
+        pickcode: str = "", 
+        sha1: str = "", 
+        path: str = "", 
+    ) -> dict:
+        id = await get_id(id=id, pickcode=pickcode, sha1=sha1, path=path)
+        if isinstance(id, P115ID) and (attr := id.get("attr")):
+            return attr
+        return await to_thread(get_attr_from_db, con, id)
+
+    @app.router.get("/%3Clist")
+    @app.router.get("/%3Clist/*")
+    async def get_list(
+        id: int = -1, 
+        pickcode: str = "", 
+        sha1: str = "", 
+        path: str = "", 
+    ) -> dict:
+        id = await get_id(id=id, pickcode=pickcode, sha1=sha1, path=path)
+        a = await to_thread(get_ancestors_from_db, con, id)
+        b = await to_thread(get_children_from_db, con, id)
+        return {
+            "ancestors": await to_thread(get_ancestors_from_db, con, id), 
+            "children": await to_thread(get_children_from_db, con, id), 
+        }
+
+    if client is not None:
+        @app.router.get("/%3Cm3u8")
+        @app.router.get("/%3Cm3u8/*")
+        async def get_m3u8(pickcode: str = ""):
+            """获取 m3u8 文件链接
+            """
+            resp = await client.fs_video_app(pickcode, async_=True)
+            check_response(resp)
+            return resp["data"]["video_url"]
+
+        @app.router.get("/%3Csubtitles")
+        @app.router.get("/%3Csubtitles/*")
+        async def get_subtitles(pickcode: str):
+            """获取字幕（随便提供此文件夹内的任何一个文件的提取码即可）
+            """
+            resp = await client.fs_video_subtitle(pickcode, base_url=True, async_=True)
+            return check_response(resp).get("data")
+
+    @app.router.get("/%3Curl")
+    @app.router.get("/%3Curl/*")
+    async def get_url(
+        request: Request, 
+        pickcode: str, 
+        web: bool = False, 
+    ) -> dict:
+        """获取下载链接
+
+        :param pickcode: 文件的 pickcode
+        :param web: 是否使用 web 接口
+        """
+        if client is None:
+            return {"type": "file", "url": f"{strm_origin}?pickcode={pickcode}"}
+        else:
+            url = await client.download_url(
+                pickcode, 
+                headers={"User-Agent": (request.get_first_header(b"User-agent") or b"").decode("latin-1")}, 
+                use_web_api=web, 
+                async_=True, 
+            )
+            return {"type": "file", "url": url, "headers": url.get("headers")}
+
+    @app.router.route("/", methods=["GET", "HEAD"])
+    @app.router.route("/<path:path2>", methods=["GET", "HEAD"])
+    async def get_page(
+        request: Request, 
+        id: int = -1, 
+        pickcode: str = "", 
+        sha1: str = "", 
+        path: str = "", 
+        path2: str = "", 
+        file: None | bool = None, 
+        web: bool = False, 
+    ) -> Response:
+        """根据实际情况分流到具体接口
+
+        :param id: 文件或目录的 id，优先级高于 `sha1`
+        :param pickcode: 文件或目录的 pickcode，优先级高于 `id`，为最高
+        :param sha1: 文件的 sha1，优先级高于 `path`
+        :param path: 文件或目录的 path，优先级高于 `path2`
+        :param path2: 文件或目录的 path，优先级最低
+        :param file: 是否为文件，如果为 None，则需要进一步确定
+        :param web: 是否使用 web 接口
+        """
+        if file is None:
+            attr = await get_attr(
+                id=id, 
+                pickcode=pickcode, 
+                sha1=sha1, 
+                path=path or path2, 
+            )
+            is_dir = attr["is_dir"]
+            if is_dir:
+                id = int(attr["id"])
+            else:
+                pickcode = attr["pickcode"]
+        elif file:
+            is_dir = False
+            pickcode = await get_pickcode(
+                id=id, 
+                pickcode=pickcode, 
+                sha1=sha1, 
+                path=path or path2, 
+            )
+        else:
+            is_dir = True
+            id = await get_id(
+                id=id, 
+                pickcode=pickcode, 
+                sha1=sha1, 
+                path=path or path2, 
+            )
+        if not is_dir:
+            resp = await get_url(
+                request, 
+                pickcode=pickcode, 
+                web=web, 
+            )
+            url: P115URL = resp["url"]
+            if web:
+                cookie = resp["headers"]["Cookie"]
+                return Response(
+                    302, 
+                    headers=[
+                        (b"Location", bytes(f"/<download/{encode_uri_component_loose(url['name'])}?url={quote(url)}", "latin-1")), 
+                        (b"Set-Cookie", bytes(cookie[:cookie.find(";")], "latin-1")), 
+                    ], 
+                )
+            else:
+                return redirect(url)
+        file_list = await get_list(id=id)
+        return await view_async(
+            "list", 
+            ancestors=file_list["ancestors"], 
+            children=file_list["children"], 
+            origin=get_origin(request), 
+            load_libass=load_libass, 
+            user_agent=detect_ua((request.get_first_header(b"User-agent") or b"").decode("latin-1")), 
+        )
+
+    @app.router.route("/%3Cdownload", methods=["GET", "HEAD", "POST"])
+    @app.router.route("/%3Cdownload/*", methods=["GET", "HEAD", "POST"])
+    async def do_download(
+        request: Request, 
+        session: AsyncClient, 
+        url: str, 
+        timeout: None | float = None, 
+    ) -> Response:
+        """打开某个下载链接后，对数据流进行转发
+
+        :param url: 下载链接
+        """
+        resp = await session.send(
+            request=session.build_request(
+                method=request.method, 
+                url=url, 
+                data=request.stream(), # type: ignore
+                headers=[
+                    (str(k, "latin-1").title(), str(v, "latin-1"))
+                    for k, v in request.headers
+                    if k.lower() != b"host"
+                ], 
+                timeout=timeout, 
+            ), 
+            stream=True, 
+        )
+        async def stream():
+            stream = resp.aiter_raw()
+            try:
+                async for chunk in stream:
+                    if await request.is_disconnected():
+                        break
+                    yield chunk
+            finally:
+                await resp.aclose()
+        content_type = resp.headers.get("content-type") or "application/octent-stream"
+        headers = [
+            (bytes(k, "latin-1"), bytes(v, "latin-1")) 
+            for k, v in resp.headers.items()
+            if k.lower() not in (b"access-control-allow-methods", b"access-control-allow-origin", b"date", b"content-type", b"transfer-encoding")
+        ]
+        headers.append((b"access-control-allow-methods", b"PUT, GET, HEAD, POST, DELETE, OPTIONS"))
+        headers.append((b"access-control-allow-origin", b"*"))
+        return Response(
+            status=resp.status_code, 
+            headers=headers, 
+            content=StreamedContent(bytes(content_type, "latin-1"), stream), 
+        )
+
+    @app.router.route("/%3Credirect", methods=["GET", "HEAD", "POST"])
+    @app.router.route("/%3Credirect/*", methods=["GET", "HEAD", "POST"])
+    async def do_redirect(url: str) -> Response:
+        """对给定的链接进行 302 重定向，可用于某些通过链接中的路径部分来进行判断，但原来的链接缺乏必要信息的情况
+
+        :param url: 下载链接
+        """
+        return redirect(url)
+
+    @app.router.route("/%3Csub2ass", methods=["GET", "HEAD", "POST"])
+    @app.router.route("/%3Csub2ass/*", methods=["GET", "HEAD", "POST"])
+    async def sub2ass(
+        request: Request, 
+        session: AsyncClient, 
+        url: str, 
+        format: str = "srt", 
+    ) -> str:
+        """把字幕转换为 ASS 格式
+
+        :param url: 下载链接
+        :param format: 源文件的字幕格式，默认为 "srt"
+
+        :return: 转换后的字幕文本
+        """
+        resp = await session.send(
+            request=session.build_request(
+                method=request.method, 
+                url=url, 
+                data=request.stream(), # type: ignore
+                headers=[
+                    (str(k, "latin-1").title(), str(v, "latin-1"))
+                    for k, v in request.headers
+                    if k.lower() != b"host"
+                ], 
+            ), 
+        )
+        data = await resp.aread()
+        return SSAFile.from_string(data.decode("utf-8"), format_=format).to_string("ass")
 
     class DavPathBase:
 
-        def __getattr__(self, attr, /):
+        def __getattr__(self, attr: str, /):
             try:
                 return self.attr[attr]
             except KeyError as e:
                 raise AttributeError(attr) from e
 
         @locked_cacheproperty
-        def creationdate(self, /) -> float:
-            return self.ctime
-
-        @locked_cacheproperty
-        def ctime(self, /) -> float:
-            return self.attr["ctime"]
-
-        @locked_cacheproperty
-        def mtime(self, /) -> float:
+        def mtime(self, /) -> int | float:
             return self.attr["mtime"]
 
         @locked_cacheproperty
         def name(self, /) -> str:
             return self.attr["name"]
 
-        def get_creation_date(self, /) -> float:
-            return self.ctime
+        @locked_cacheproperty
+        def size(self, /) -> int:
+            return self.attr.get("size") or 0
 
         def get_display_name(self, /) -> str:
             return self.name
 
         def get_etag(self, /) -> str:
             return "%s-%s-%s" % (
-                self.attr["pickcode"], 
+                self.attr["id"], 
                 self.mtime, 
                 self.size, 
             )
@@ -143,64 +591,43 @@ def make_application(
             /, 
             path: str, 
             environ: dict, 
-            attr: dict, 
+            attr: Mapping, 
             is_strm: bool = False, 
         ):
             super().__init__(path, environ)
             self.attr = attr
             self.is_strm = is_strm
-            if is_strm:
-                STRM_CACHE[path] = self
-
+            DAV_FILE_CACHE[path] = self
+ 
         if strm_origin:
-            origin = strm_origin_bytes # type: ignore
+            origin = strm_origin
         else:
-            @property
-            def origin(self, /) -> bytes:
-                return f"{self.environ['wsgi.url_scheme']}://{self.environ['HTTP_HOST']}".encode("utf-8")
+            @locked_cacheproperty
+            def origin(self, /) -> str:
+                if origin := self.environ.get("STRM_ORIGIN"):
+                    return origin
+                return f"{self.environ['wsgi.url_scheme']}://{self.environ['HTTP_HOST']}"
 
-        @property
+        @locked_cacheproperty
         def size(self, /) -> int:
             if self.is_strm:
-                return len(self.origin) + len(self.strm_data)
+                return len(self.strm_data)
             return self.attr["size"]
 
         @locked_cacheproperty
         def strm_data(self, /) -> bytes:
             attr = self.attr
             name = encode_uri_component_loose(attr["name"])
-            return bytes(f"/{name}?pickcode={attr['pickcode']}&id={attr['id']}&sha1={attr['sha1']}&size={attr['size']}", "utf-8")
+            return bytes(f"{self.origin}/{name}?file=true&pickcode={attr['pickcode']}&id={attr['id']}&sha1={attr['sha1']}", "utf-8")
 
-        @property
+        @locked_cacheproperty
         def url(self, /) -> str:
-            scheme = self.environ["wsgi.url_scheme"]
-            host = self.environ["HTTP_HOST"]
-            return f"{scheme}://{host}?pickcode={self.attr['pickcode']}"
+            return f"{self.origin}/?file=true&pickcode={self.attr['pickcode']}"
 
         def get_content(self, /):
             if self.is_strm:
-                return BytesIO(self.origin + self.strm_data)
-            fid = self.attr["id"]
-            try:
-                return CON_FILE.blobopen("data", "data", fid, readonly=True)
-            except (OperationalError, SystemError):
-                pass
-            if self.attr["size"] >= 1024 * 64:
-                raise DAVError(302, add_headers=[("Location", self.url)])
-            CON_FILE.execute("""\
-INSERT INTO data(id, data) VALUES(?, zeroblob(?)) 
-ON CONFLICT(id) DO UPDATE SET data=excluded.data;""", (fid, self.attr["size"]))
-            CON_FILE.commit()
-            try:
-                data = urlopen(self.url).read()
-                with WRITE_LOCK:
-                    with CON_FILE.blobopen("data", "data", fid) as fdst:
-                        fdst.write(data)
-                return CON_FILE.blobopen("data", "data", fid, readonly=True)
-            except:
-                CON_FILE.execute("DELETE FROM data WHERE id=?", (fid,))
-                CON_FILE.commit()
-                raise
+                return BytesIO(self.strm_data)
+            raise DAVError(302, add_headers=[("Location", self.url)])
 
         def get_content_length(self, /) -> int:
             return self.size
@@ -218,104 +645,50 @@ ON CONFLICT(id) DO UPDATE SET data=excluded.data;""", (fid, self.attr["size"]))
             /, 
             path: str, 
             environ: dict, 
-            attr: dict, 
+            attr: Mapping, 
         ):
-            if not path.endswith("/"):
-                path += "/"
             super().__init__(path, environ)
             self.attr = attr
 
         @locked_cacheproperty
         def children(self, /) -> dict[str, FileResource | FolderResource]:
-            sql = """\
-SELECT id, name, path, ctime, mtime, sha1, size, pickcode, is_dir
-FROM data
-WHERE parent_id = :id AND name NOT IN ('', '.', '..') AND name NOT LIKE '%/%';
-"""
             children: dict[str, FileResource | FolderResource] = {}
             environ = self.environ
-            for r in CON.execute(sql, self.attr):
-                attr = dict(zip(FIELDS, r))
+            dir_ = self.path
+            if dir_ != "/":
+                dir_ += "/"
+            try:
+                ls = get_children_from_db(con, int(self.attr["id"]))
+            except FileNotFoundError:
+                raise DAVError(404, dir_)
+            for attr in ls:
+                is_dir = attr["is_dir"]
                 is_strm = False
-                name = attr["name"]
-                path = attr["path"]
-                if not attr["is_dir"] and strm_predicate and strm_predicate(MappingPath(attr)):
-                    name = splitext(name)[0] + ".strm"
-                    path = splitext(path)[0] + ".strm"
+                name = attr["name"].replace("/", "|")
+                if not is_dir and strm_predicate and strm_predicate(MappingPath(attr)):
                     is_strm = True
+                    name = splitext(name)[0] + ".strm"
+                    path = dir_ + name 
                 elif predicate and not predicate(MappingPath(attr)):
                     continue
-                if attr["is_dir"]:
+                else:
+                    path = dir_ + name
+                if is_dir:
                     children[name] = FolderResource(path, environ, attr)
                 else:
                     children[name] = FileResource(path, environ, attr, is_strm=is_strm)
             return children
 
-        def get_descendants(
-            self, 
-            /, 
-            collections: bool = True, 
-            resources: bool = True, 
-            depth_first: bool = False, 
-            depth: Literal["0", "1", "infinity"] = "infinity", 
-            add_self: bool = False, 
-        ) -> list[FileResource | FolderResource]:
-            descendants: list[FileResource | FolderResource] = []
-            push = descendants.append
-            if collections and add_self:
-                push(self)
-            if depth == "0":
-                return descendants
-            elif depth == "1":
-                for item in self.children.values():
-                    if item.attr["is_dir"]:
-                        if collections:
-                            push(item)
-                    elif resources:
-                        push(item)
-                return descendants
-            sql = """\
-SELECT id, name, path, ctime, mtime, sha1, size, pickcode, is_dir
-FROM data
-WHERE path LIKE ? || '%' AND name NOT IN ('', '.', '..') AND name NOT LIKE '%/%'"""
-            if collections and resources:
-                pass
-            elif collections:
-                sql += " AND is_dir"
-            elif resources:
-                sql += " AND NOT is_dir"
-            else:
-                return descendants
-            if depth_first:
-                sql += "\nORDER BY path"
-            else:
-                sql += "\nORDER BY dirname(path)"
-            environ = self.environ
-            for r in CON.execute(sql, (self.path,)):
-                attr = dict(zip(FIELDS, r))
-                is_strm = False
-                path = attr["path"]
-                if not attr["is_dir"] and strm_predicate and strm_predicate(MappingPath(attr)):
-                    path = splitext(path)[0] + ".strm"
-                    is_strm = True
-                elif predicate and not predicate(MappingPath(attr)):
-                    continue
-                if attr["is_dir"]:
-                    push(FolderResource(path, environ, attr))
-                else:
-                    push(FileResource(path, environ, attr, is_strm=is_strm))
-            return descendants
-
         def get_member(self, /, name: str) -> FileResource | FolderResource:
-            if res := self.children.get(name):
-                return res
-            raise DAVError(404, self.path + name)
+            if attr := self.children.get(name):
+                return attr
+            raise DAVError(404, self.path + "/" + name)
 
         def get_member_list(self, /) -> list[FileResource | FolderResource]:
             return list(self.children.values())
 
         def get_member_names(self, /) -> list[str]:
-            return list(self.children.keys())
+            return list(self.children)
 
         def get_property_value(self, /, name: str):
             if name == "{DAV:}getcontentlength":
@@ -324,31 +697,7 @@ WHERE path LIKE ? || '%' AND name NOT IN ('', '.', '..') AND name NOT LIKE '%/%'
                 return True
             return super().get_property_value(name)
 
-    class ServeDBProvider(DAVProvider):
-
-        def __init__(self, /, dbfile: bytes | str | PathLike):
-            nonlocal CON, CON_FILE
-            CON = connect("file:%s?mode=ro" % quote(fsdecode(dbfile)), uri=True, check_same_thread=False)
-            CON.create_function("dirname", 1, dirname)
-            dbpath = CON.execute("SELECT file FROM pragma_database_list() WHERE name='main';").fetchone()[0]
-            CON_FILE = connect("%s-file%s" % splitext(dbpath), check_same_thread=False)
-            CON_FILE.execute("PRAGMA journal_mode = WAL;")
-            CON_FILE.execute("""\
-CREATE TABLE IF NOT EXISTS data (
-    id INTEGER NOT NULL PRIMARY KEY,
-    data BLOB,
-    temp_path TEXT
-);""")
-
-        def __del__(self, /):
-            try:
-                CON.close()
-            except:
-                pass
-            try:
-                CON_FILE.close()
-            except:
-                pass
+    class P115FileSystemProvider(DAVProvider):
 
         def get_resource_inst(
             self, 
@@ -358,36 +707,32 @@ CREATE TABLE IF NOT EXISTS data (
         ) -> FolderResource | FileResource:
             is_dir = path.endswith("/")
             path = "/" + path.strip("/")
-            if strm_predicate:
-                if strm := STRM_CACHE.get(path):
-                    return strm
-                if path.endswith(".strm") and not is_dir:
-                    dir_, name = splitpath(path)
-                    inst = self.get_resource_inst(dir_, environ)
-                    if not isinstance(inst, FolderResource):
-                        raise DAVError(404, path)
-                    return inst.get_member(name)
-            if path == "/":
-                return FolderResource("/", environ, ROOT)
-            sql = "SELECT id, name, path, ctime, mtime, sha1, size, pickcode, is_dir FROM data WHERE path = ? LIMIT 1"
-            record = CON.execute(sql, (path,)).fetchone()
-            if not record:
-                if path.endswith(".strm"):
-                    sql = "SELECT id, name, path, ctime, mtime, sha1, size, pickcode, is_dir FROM data WHERE path LIKE ? || '.%' AND NOT is_dir LIMIT 1"
-                    record = CON.execute(sql, (path[:-5],)).fetchone()
-                    if record:
-                        attr = dict(zip(FIELDS, record))
-                        attr["path"] = path
-                        return FileResource(path, environ, attr, is_strm=True)
+            if not strm_origin:
+                origin = environ["STRM_ORIGIN"] = f"{environ['wsgi.url_scheme']}://{environ['HTTP_HOST']}"
+            will_get_from_list = "|" in path
+            dir_, name = splitpath(path)
+            if not is_dir:
+                if inst := DAV_FILE_CACHE.get(path):
+                    if not strm_origin and origin != inst.origin:
+                        inst = FileResource(path, environ, inst.attr, is_strm=inst.is_strm)
+                    return inst
+                will_get_from_list = will_get_from_list or path.endswith(".strm")
+            if will_get_from_list:
+                inst = self.get_resource_inst(dir_ + "/", environ)
+                if not isinstance(inst, FolderResource):
+                    raise DAVError(404, path)
+                return inst.get_member(name)
+            attr = attr_to_path(con, path, False if is_dir else None)
+            if attr is None:
                 raise DAVError(404, path)
-            attr = dict(zip(FIELDS, record))
             is_strm = False
-            if not attr["is_dir"] and strm_predicate and strm_predicate(MappingPath(attr)):
+            is_dir = attr["is_dir"]
+            if not is_dir and strm_predicate and strm_predicate(MappingPath(attr)):
                 is_strm = True
                 path = splitext(path)[0] + ".strm"
             elif predicate and not predicate(MappingPath(attr)):
                 raise DAVError(404, path)
-            if attr["is_dir"]:
+            if is_dir:
                 return FolderResource(path, environ, attr)
             else:
                 return FileResource(path, environ, attr, is_strm=is_strm)
@@ -395,81 +740,24 @@ CREATE TABLE IF NOT EXISTS data (
         def is_readonly(self, /) -> bool:
             return True
 
-    app = Application()
-    use_gzip_compression(app)
-
-    @app.on_middlewares_configuration
-    def configure_forwarded_headers(app: Application):
-        app.middlewares.insert(0, ForwardedHeadersMiddleware(accept_only_proxied_requests=False))
-
-    @app.lifespan
-    async def register_client(app: Application):
-        async with ClientSession(follow_redirects=False) as client:
-            app.services.register(ClientSession, instance=client)
-            yield
-
-    @app.router.route("/", methods=["GET", "HEAD"])
-    async def index(request: Request, session: ClientSession, pickcode: str = ""):
-        if pickcode:
-            user_agent = (request.get_first_header(b"User-agent") or b"").decode("latin-1")
-            if client:
-                resp = await client.download_url_app(
-                    pickcode, 
-                    headers={"User-Agent": user_agent}, 
-                    request=blacksheep_request, 
-                    session=session, 
-                    async_=True, 
-                )
-                if not resp["state"]:
-                    return resp, 500
-                for fid, info in resp["data"].items():
-                    if not info["url"]:
-                        return resp, 404
-                    return redirect(info["url"]["url"])
-            else:
-                return redirect(f"{strm_origin}?pickcode={pickcode}")
-        else:
-            return redirect("/d")
-
-    @app.router.route("/", methods=[
-        "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", 
-        "TRACE", "PATCH", "MKCOL", "COPY", "MOVE", "PROPFIND", 
-        "PROPPATCH", "LOCK", "UNLOCK", "REPORT", "ACL", 
-    ])
-    async def redirect_to_dav():
-        return redirect("/d")
-
-    @app.router.route("/<path:path>", methods=["GET", "HEAD"])
-    async def resolve_path(request: Request, session: ClientSession, pickcode: str = "", path: str = ""):
-        if pickcode:
-            return redirect(f"/?pickcode={pickcode}")
-        else:
-            return redirect(f"/d/{path}")
-
-    @app.router.route("/<path:path>", methods=[
-        "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", 
-        "TRACE", "PATCH", "MKCOL", "COPY", "MOVE", "PROPFIND", 
-        "PROPPATCH", "LOCK", "UNLOCK", "REPORT", "ACL", 
-    ])
-    async def resolve_path_to_dav(path: str):
-        return redirect(f"/d/{path}")
-
-    config.update({
+    # NOTE: https://wsgidav.readthedocs.io/en/latest/user_guide_configure.html
+    wsgidav_config = {
         "host": "0.0.0.0", 
-        "host": 0, 
-        "mount_path": "/d", 
-        "provider_mapping": {"/": ServeDBProvider(dbfile)}, 
-    })
-    wsgidav_app = WsgiDAVApp(config)
-    app.mount("/d", WSGIMiddleware(wsgidav_app, workers=128, send_queue_size=256))
+        "port": 0, 
+        "mount_path": "/<dav", 
+        **wsgidav_config, 
+        "provider_mapping": {"/": P115FileSystemProvider()}, 
+        "simple_dc": {"user_mapping": {"*": True}}, 
+    }
+    mount_path = quote(wsgidav_config["mount_path"])
+    wsgidav_app = WsgiDAVApp(wsgidav_config)
+    app.mount(mount_path, WSGIMiddleware(wsgidav_app, workers=128, send_queue_size=256))
+
     return app
 
-# TODO: wsgidav 速度比较一般，我需要自己实现一个 webdav
 # TODO: 目前 webdav 是只读的，之后需要支持写入和删除，写入小文件不会上传，因此需要一个本地的 id，如果路径上原来有记录，则替换掉此记录（删除记录，生成本地 id 的数据，插入数据）
 # TODO: 如果需要写入文件，会先把数据存入临时文件，等到关闭文件，再自动写入数据库。如果文件未被修改，则忽略，如果修改了，就用我本地的id替代原来的数据
 # TODO: 文件可以被 append 写，这时打开时，会先把数据库的数据写到硬盘，然后打开这个临时文件
 # TODO: 实现自动排除空目录而不展示
-# TODO: 和 p115dav 的思路一致，主要是 webdav 方面，使得支持的基本相同（除了不能写）
-# TODO: 目前 p115dav 的进度更靠前，需要进行追进
-# TODO: logging 对象可能需要初始化，从 log 模块进行
-# TODO: 使用 sha1 和 size 对数据进行缓存
+# TODO: 使用 sha1 和 size 对数据进行缓存（？？？）
+# TODO: 实现 get_properties: https://wsgidav.readthedocs.io/en/latest/_autosummary/wsgidav.dav_provider.DAVNonCollection.get_properties.html#wsgidav.dav_provider.DAVNonCollection.get_properties

@@ -91,7 +91,8 @@ def main(argv: None | list[str] | Namespace = None, /):
     if args.fast_strm:
         strm_predicate = make_predicate("""(
     path.media_type.startswith(("video/", "audio/")) and
-    path.suffix.lower() != ".ass"
+    path.suffix.lower() != ".ass" or
+    path.suffix.lower() in (".divx", ".iso", ".m2ts", ".swf", ".xvid")
 )""", type="expr")
     elif strm_predicate := args.strm_predicate or None:
         strm_predicate = make_predicate(strm_predicate, {"re": re}, type=args.strm_predicate_type)
@@ -167,7 +168,8 @@ parser.add_argument("-fs", "--fast-strm", action="store_true", help="""快速实
     --strm-predicate-type expr \\
     --strm-predicate '(
         path.media_type.startswith(("video/", "audio/")) and
-        path.suffix.lower() != ".ass"
+        path.suffix.lower() != ".ass" or
+        path.suffix.lower() in (".divx", ".iso", ".m2ts", ".swf", ".xvid")
     )' \\
     --predicate-type expr \\
     --predicate '(
@@ -186,7 +188,8 @@ parser.add_argument(
     - https://man7.org/linux/man-pages/man8/mount.fuse3.8.html
     - https://code.google.com/archive/p/macfuse/wikis/OPTIONS.wiki
 """)
-parser.add_argument("-l", "--log-level", default="ERROR", help=f"指定日志级别，可以是数字或名称，不传此参数则不输出日志，默认值: 'ERROR'")
+parser.add_argument("-ll", "--log-level", default="ERROR", help=f"指定日志级别，可以是数字或名称，不传此参数则不输出日志，默认值: 'ERROR'")
+parser.add_argument("-l", "--license", action="store_true", help="输出授权信息")
 parser.add_argument("-v", "--version", action="store_true", help="输出版本号")
 parser.set_defaults(func=main)
 

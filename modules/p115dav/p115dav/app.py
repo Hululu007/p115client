@@ -128,6 +128,7 @@ def _init():
 
     from encode_uri import encode_uri, encode_uri_component_loose
     from orjson import dumps as json_dumps, loads as json_loads
+    from posixpatht import escape
 
     if __name__ == "__main__":
         import sys
@@ -149,6 +150,8 @@ def _init():
     jinja2_filters["encode_uri_component"] = encode_uri_component_loose
     jinja2_filters["json_dumps"] = lambda data: json_dumps(data).decode("utf-8").replace("'", "&apos;")
     jinja2_filters["format_timestamp"] = format_timestamp
+    jinja2_filters["escape_name"] = lambda name, default="/": escape(name) or default
+
     _INITIALIZED = True
 
 
@@ -165,7 +168,7 @@ def make_application(
     strm_predicate = None, 
     load_libass: bool = False, 
     debug: bool = False, 
-    wsgidav_config: None | dict = None, 
+    wsgidav_config: dict = {}, 
 ) -> Application:
     from a2wsgi import WSGIMiddleware
     from asynctools import to_list
@@ -238,9 +241,9 @@ def make_application(
 
     put_task = QUEUE.put_nowait
     get_task = QUEUE.get
-    client: P115Client  = None # type: ignore
-    con: Connection     = None # type: ignore
-    loop: AbstractEventLoop = None # type: ignore
+    client: P115Client
+    con: Connection
+    loop: AbstractEventLoop
 
     def normalize_attr(info: Mapping, /) -> AttrDict:
         def typeof(attr):
@@ -382,10 +385,12 @@ def make_application(
                 cur.execute(sql, (params,))
             record = cur.fetchone()
         if record is None:
+            if isinstance(default, BaseException):
+                raise default
             return default
         return record[0]
 
-    def query_all(sql, params):
+    def query_all(sql, params) -> list:
         with closing(con.cursor()) as cur:
             if params is None:
                 cur.execute(sql)
@@ -513,6 +518,8 @@ SELECT * FROM t;""", id)
         fields = ("id", "parent_id", "pickcode", "sha1", "name", "is_dir")
         patht: Sequence[str]
         if isinstance(path, str):
+            if ensure_file is None and path_is_dir_form(path):
+                ensure_file = False
             patht, _ = splits("/" + path)
         else:
             patht = path
@@ -733,7 +740,7 @@ LIMIT 1;""", (share_code, id))
         page_size: int = 10_000, 
         refresh_thumbs: bool = False, 
     ) -> dict:
-        """获取目录中的文件信息迭代器
+        """获取目录中的文件信息列表
         """
         cid = int(cid)
         children: None | list[AttrDict]
@@ -1161,12 +1168,12 @@ END;
         if pickcode:
             if not 17 <= len(pickcode) <= 18 or not pickcode.isalnum():
                 raise ValueError(f"bad pickcode: {pickcode!r}")
-            return pickcode
+            return pickcode.lower()
         elif id >= 0:
             if pickcode := await get_pickcode_from_db(id=id):
                 return pickcode
         elif sha1:
-            if pickcode := await get_pickcode_from_db(sha1=sha1):
+            if pickcode := await get_pickcode_from_db(sha1=sha1.upper()):
                 return pickcode
             id = await get_id(sha1=sha1)
             if isinstance(id, P115ID):
@@ -1718,23 +1725,18 @@ END;
 
         :param url: 下载链接
         """
-        hostname = urlsplit(url).hostname
-        if hostname and hostname.endswith(".115.com"):
-            headers = {
-                str(k, "latin-1").title(): str(v, "latin-1") 
-                for k, v in request.headers 
-                if k.lower() in (b"user-agent", b"cookie")
-            }
-        else:
-            headers = {str(k, "latin-1"): str(v, "latin-1") for k, v in request.headers}
         resp = await client.request(
             url, 
             method=request.method, 
             data=request.stream(), 
-            headers=headers, 
+            headers=[
+                (str(k, "latin-1").title(), str(v, "latin-1"))
+                for k, v in request.headers
+                if k.lower() != b"host"
+            ], 
             follow_redirects=True, 
             raise_for_status=False, 
-            parse=False, 
+            parse=None, 
             async_=True, 
         )
         async def stream():
@@ -1745,14 +1747,18 @@ END;
                         break
                     yield chunk
             finally:
-                await stream.aclose()
-        headers = resp.headers
-        content_type = headers.get("content-type") or "application/octent-stream"
+                await resp.aclose()
+        content_type = resp.headers.get("content-type") or "application/octent-stream"
+        headers = [
+            (bytes(k, "latin-1"), bytes(v, "latin-1")) 
+            for k, v in resp.headers.items()
+            if k.lower() not in (b"access-control-allow-methods", b"access-control-allow-origin", b"date", b"content-type", b"transfer-encoding")
+        ]
+        headers.append((b"access-control-allow-methods", b"PUT, GET, HEAD, POST, DELETE, OPTIONS"))
+        headers.append((b"access-control-allow-origin", b"*"))
         return Response(
             status=resp.status_code, 
-            headers=[(bytes(k, "latin-1"), bytes(v, "latin-1")) 
-                     for K, v in headers.items() 
-                     if (k := K.lower()) not in ("date", "content-type")], 
+            headers=headers, 
             content=StreamedContent(bytes(content_type, "latin-1"), stream), 
         )
 
@@ -1775,20 +1781,15 @@ END;
 
         :return: 转换后的字幕文本
         """
-        hostname = urlsplit(url).hostname
-        if hostname and hostname.endswith(".115.com"):
-            headers = {
-                str(k, "latin-1").title(): str(v, "latin-1") 
-                for k, v in request.headers 
-                if k.lower() in (b"user-agent", b"cookie")
-            }
-        else:
-            headers = {str(k, "latin-1"): str(v, "latin-1") for k, v in request.headers}
         resp = await client.request(
             url, 
             method=request.method, 
             data=request.stream(), 
-            headers=headers, 
+            headers=[
+                (str(k, "latin-1").title(), str(v, "latin-1"))
+                for k, v in request.headers
+                if k.lower() != b"host"
+            ], 
             follow_redirects=True, 
             parse=False, 
             async_=True, 
@@ -1805,9 +1806,8 @@ END;
                 raise AttributeError(attr) from e
 
         @locked_cacheproperty
-        def mtime(self, /) -> float:
-            attr = self.attr
-            return attr.get("mtime", 0)
+        def mtime(self, /) -> int | float:
+            return self.attr["mtime"]
 
         @locked_cacheproperty
         def name(self, /) -> str:
@@ -1953,9 +1953,9 @@ END;
                 except FileNotFoundError:
                     raise DAVError(404, dir_)
                 for attr in file_list["children"]:
-                    name = attr["name"].replace("/", "|")
-                    is_strm = False
                     is_dir = attr["is_dir"]
+                    is_strm = False
+                    name = attr["name"].replace("/", "|")
                     if not is_dir and strm_predicate and strm_predicate(MappingPath(attr)):
                         is_strm = True
                         name = splitext(name)[0] + ".strm"
@@ -1973,12 +1973,12 @@ END;
             return children
 
         def get_member(self, /, name: str) -> FileResource | FolderResource:
-            if not (attr := self.children.get(name)):
-                raise DAVError(404, self.path + "/" + name)
-            return attr
+            if attr := self.children.get(name):
+                return attr
+            raise DAVError(404, self.path + "/" + name)
 
         def get_member_list(self, /) -> list[FileResource | FolderResource]:
-            return list(map(self.get_member, self.get_member_names()))
+            return list(self.children.values())
 
         def get_member_names(self, /) -> list[str]:
             return list(self.children)
@@ -2047,7 +2047,7 @@ END;
         "host": "0.0.0.0", 
         "port": 0, 
         "mount_path": "/<dav", 
-        **(wsgidav_config or {}), 
+        **wsgidav_config, 
         "provider_mapping": {"/": P115FileSystemProvider()}, 
         "simple_dc": {"user_mapping": {"*": True}}, 
     }

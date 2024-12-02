@@ -1,6 +1,6 @@
   {%- extends "base.jinja" %}
   {%- block content %}
-  {%- for ancestor in ancestors[:-1] %}<strong><a href="/?id={{ ancestor["id"] }}&file=false" style="border: 1px solid black; text-decoration: none">{{ ancestor["name"] or "/" }}</a></strong>{{ ancestor["name"] and "/" }}{% endfor %}<strong><a href="/<list?id={{ ancestors[-1]["id"] }}" style="border: 1px solid black; text-decoration: none">{{ ancestors[-1]["name"] or "/" }}</a></strong>
+  {%- for ancestor in ancestors[:-1] %}<strong><a href="/?id={{ ancestor["id"] }}&file=false" style="border: 1px solid black; text-decoration: none">{{ ancestor["name"] | escape_name }}</a></strong>{{ ancestor["name"] and "/" }}{% endfor %}<strong><a href="/<list?id={{ ancestors[-1]["id"] }}" style="border: 1px solid black; text-decoration: none">{{ ancestors[-1]["name"] | escape_name }}</a></strong>
   <table>
     <thead>
       <tr>

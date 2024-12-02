@@ -8,9 +8,9 @@
     {%- else -%}
       <strong><a href="/<share?file=false&share_code={{ share_code }}&id=0" style="border: 1px solid black; text-decoration: none">{{ share_code }}</a></strong>
       {%- for ancestor in ancestors[1:-1] -%}
-        /<strong><a href="/<share?file=false&share_code={{ share_code }}&id={{ ancestor["id"] }}" style="border: 1px solid black; text-decoration: none">{{ ancestor["name"] }}</a></strong>
+        /<strong><a href="/<share?file=false&share_code={{ share_code }}&id={{ ancestor["id"] }}" style="border: 1px solid black; text-decoration: none">{{ ancestor["name"] | escape_name }}</a></strong>
       {%- endfor -%}
-      /<strong><a href="/<share/<list?share_code={{ share_code }}&id={{ ancestors[-1]["id"] }}" style="border: 1px solid black; text-decoration: none">{{ ancestors[-1]["name"] }}</a></strong>
+      /<strong><a href="/<share/<list?share_code={{ share_code }}&id={{ ancestors[-1]["id"] }}" style="border: 1px solid black; text-decoration: none">{{ ancestors[-1]["name"] | escape_name }}</a></strong>
     {%- endif -%}
   {%- else -%}
     <strong><a href="/<share/<list?share_code=" style="border: 1px solid black; text-decoration: none">&lt;share</a></strong>

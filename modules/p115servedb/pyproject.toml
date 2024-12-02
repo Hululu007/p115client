@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "p115servedb"
-version = "0.0.2"
+version = "0.0.3"
 description = "115 网盘基于 updatedb.py 的列表服务."
 authors = ["ChenyangGao <wosiwujm@gmail.com>"]
 license = "MIT"

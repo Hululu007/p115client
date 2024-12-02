@@ -215,21 +215,20 @@ def main(argv: None | list[str] | Namespace = None, /):
     from path_predicate import make_predicate
     from yaml import load as yaml_load, Loader
 
-    debug = args.debug
     if args.fast_strm:
         predicate = make_predicate("""(
-        path.is_dir() or
-        path.media_type.startswith("image/") or
-        path.suffix.lower() in (".nfo", ".ass", ".ssa", ".srt", ".idx", ".sub", ".txt", ".vtt", ".smi")
-    )""", type="expr")
+    path.is_dir() or
+    path.media_type.startswith("image/") or
+    path.suffix.lower() in (".nfo", ".ass", ".ssa", ".srt", ".idx", ".sub", ".txt", ".vtt", ".smi")
+)""", type="expr")
     elif predicate := args.predicate or None:
         predicate = make_predicate(predicate, {"re": __import__("re")}, type=args.predicate_type)
     if args.fast_strm:
         strm_predicate = make_predicate("""(
-        path.media_type.startswith(("video/", "audio/")) and
-        path.suffix.lower() != ".ass" or
-        path.suffix.lower() in (".divx", ".iso", ".m2ts", ".swf", ".xvid")
-    )""", type="expr")
+    path.media_type.startswith(("video/", "audio/")) and
+    path.suffix.lower() != ".ass" or
+    path.suffix.lower() in (".divx", ".iso", ".m2ts", ".swf", ".xvid")
+)""", type="expr")
     elif strm_predicate := args.strm_predicate or None:
         strm_predicate = make_predicate(strm_predicate, {"re": __import__("re")}, type=args.strm_predicate_type)
 
@@ -291,10 +290,9 @@ def main(argv: None | list[str] | Namespace = None, /):
         predicate=predicate, 
         strm_predicate=strm_predicate, 
         load_libass=args.load_libass, 
-        debug=debug, 
+        debug=args.debug, 
         wsgidav_config=wsgidav_config, 
     )
-
     uvicorn.run(app, **run_config)
 
 

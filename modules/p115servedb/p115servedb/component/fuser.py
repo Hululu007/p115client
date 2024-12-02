@@ -21,15 +21,14 @@ from unicodedata import normalize
 
 from fuse import FUSE, Operations # type: ignore
 from httpfile import Urllib3FileReader
+from orjson import dumps as json_dumps
 from p115client import P115Client
 from path_predicate import MappingPath
+from posixpatht import escape
 
+from .db import FIELDS, ROOT, get_id_from_db, get_children_from_db
 from .log import logger
 from .lrudict import LRUDict
-
-
-FIELDS: Final = ("id", "name", "path", "ctime", "mtime", "sha1", "size", "pickcode", "is_dir")
-
 
 # Learning: 
 #   - https://www.stavros.io/posts/python-fuse-filesystem/
@@ -80,7 +79,13 @@ class ServedbFuseOperations(Operations):
             except:
                 pass
 
-    def getattr(self, /, path: str, fh: int = 0, _rootattr={"st_mode": S_IFDIR | 0o555}) -> dict:
+    def getattr(
+        self, 
+        /, 
+        path: str, 
+        fh: int = 0, 
+        _rootattr={"st_mode": S_IFDIR | 0o555, "_attr": ROOT}
+    ) -> dict:
         self._log(logging.DEBUG, "getattr(path=\x1b[4;34m%r\x1b[0m, fh=%r)", path, fh)
         if path == "/":
             return _rootattr
@@ -107,6 +112,33 @@ class ServedbFuseOperations(Operations):
                 path, type(e).__qualname__, e, 
             )
             raise FileNotFoundError(errno.ENOENT, path) from e
+
+    def getxattr(self, /, path: str, name: str, position: int = 0):
+        """获取扩展属性的值，返回值会被序列化为 JSON，所以需要进行反序列化解析
+
+        - Linux 系统使用 `os.getxattr(path, attr)` 获取
+        - 其它系统使用 `xattr.getxattr(path, attr)` 获取（https://pypi.org/project/xattr/）
+        """
+        fuse_attr = self.getattr(path)
+        attr      = fuse_attr["_attr"]
+        if name == "attr":
+            return json_dumps(attr)
+        elif name == "url":
+            if attr["is_dir"]:
+                raise IsADirectoryError(errno.EISDIR, path)
+            return json_dumps(f"{self.strm_origin}?pickcode={attr['pickcode']}")
+        elif name in attr:
+            return json_dumps(attr[name])
+        else:
+            raise OSError(93, name)
+
+    def listxattr(self, /, path: str):
+        """罗列扩展属性
+
+        - Linux 系统使用 `os.listxattr(path)` 获取
+        - 其它系统使用 `xattr.listxattr(path)` 获取（https://pypi.org/project/xattr/）
+        """
+        return ("attr", "url", *FIELDS)
 
     def open(self, /, path: str, flags: int = 0) -> int:
         self._log(logging.INFO, "open(path=\x1b[4;34m%r\x1b[0m, flags=%r)", path, flags)
@@ -167,44 +199,40 @@ class ServedbFuseOperations(Operations):
         self.cache[path] = children
         realpath = self.normpath_map.get(path, path)
         try:
-            if realpath == "/":
-                sql = "SELECT id, name, path, ctime, mtime, sha1, size, pickcode, is_dir FROM data WHERE parent_id = 0;"
-                cur = self.con.execute(sql)
-            else:
-                sql = """\
-SELECT id, name, path, ctime, mtime, sha1, size, pickcode, is_dir
-FROM data
-WHERE parent_id = (SELECT id FROM data WHERE path = ? LIMIT 1) AND name NOT IN ('', '.', '..') AND name NOT LIKE '%/%';
-"""
-                cur = self.con.execute(sql, (realpath,))
-            for r in cur:
-                attr = dict(zip(FIELDS, r))
+            dir_ = path
+            if not dir_.endswith("/"):
+                dir_ += "/"
+            realdir = realpath
+            if not realdir.endswith("/"):
+                realdir += "/"
+            id = get_id_from_db(self.con, path=realpath+"/")
+            for attr in get_children_from_db(self.con, id):
                 data = None
                 size = attr.get("size") or 0
                 name = attr["name"]
-                path = attr["path"]
+                normname = normalize("NFC", name.replace("/", "|"))
                 isdir = attr["is_dir"]
                 if not isdir and strm_predicate and strm_predicate(MappingPath(attr)):
                     data = f"{strm_origin}?pickcode={attr['pickcode']}".encode("utf-8")
                     size = len(data)
-                    name = splitext(name)[0] + ".strm"
-                    path = splitext(path)[0] + ".strm"
+                    normname = splitext(normname)[0] + ".strm"
                 elif predicate and not predicate(MappingPath(attr)):
                     continue
-                normname = normalize("NFC", name)
                 children[normname] = dict(
                     st_mode=(S_IFDIR if isdir else S_IFREG) | 0o555, 
                     st_size=size, 
-                    st_ctime=attr["ctime"], 
                     st_mtime=attr["mtime"], 
                     _attr=attr, 
                     _data=data, 
                 )
-                normpath = normalize("NFC", path)
-                if path != normpath:
-                    self.normpath_map[normpath] = path
+                if isdir:
+                    normpath = dir_ + normname
+                    realpath = realdir + escape(name)
+                    if normpath != realpath:
+                        self.normpath_map[normpath] = realpath
             return [".", "..", *children]
         except BaseException as e:
+            raise
             self._log(
                 logging.ERROR, 
                 "can't readdir: \x1b[4;34m%s\x1b[0m\n  |_ \x1b[1;4;31m%s\x1b[0m: %s", 
@@ -234,4 +262,4 @@ WHERE parent_id = (SELECT id FROM data WHERE path = ? LIMIT 1) AND name NOT IN (
         return FUSE(self, *args, **kwds)
 
 # TODO: 支持小文件缓存
-# TODO: 支持 xattr
+# TODO: 支持读写
