@@ -16,6 +16,12 @@ pip install -U p115updatedb
 from p115updatedb import updatedb, updatedb_one, updatedb_tree
 ```
 
+另外也提供了一些工具函数，封装了一些数据库查询
+
+```python
+import p115updatedb.query
+```
+
 ### 命令行
 
 ```console

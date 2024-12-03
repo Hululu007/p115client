@@ -248,7 +248,7 @@ def get_children_from_db(
         raise NotADirectoryError(id)
     return [normattr(zip(FIELDS, record)) for record in query_all(con, """\
 SELECT CAST(id AS TEXT), CAST(parent_id AS TEXT), pickcode, sha1, name, mtime, size, type, is_dir, is_collect
-FROM data WHERE parent_id=?""", id)]
+FROM data WHERE parent_id=? AND is_alive""", id)]
 
 
 def iter_descendants_from_db(
@@ -270,3 +270,4 @@ def iter_descendants_from_db(
                 if attr["is_dir"]:
                     dq.append(int(attr["id"]))
 
+# TODO: 这个模块移动到 p115updatedb 中

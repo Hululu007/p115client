@@ -4,7 +4,7 @@
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __all__ = ["main"]
 __doc__ = """\
-    🛸 115 数据库 WebDAV 服务，请先用 updatedb.py 采集数据 ✈️
+    🛸 115 数据库 WebDAV 服务，请先用 p115updatedb 采集数据 ✈️
 """
 
 from argparse import ArgumentParser, Namespace, RawTextHelpFormatter

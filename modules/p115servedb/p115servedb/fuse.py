@@ -4,7 +4,7 @@
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __all__ = ["main"]
 __doc__ = """\
-    🌍 115 数据库 FUSE 服务，请先用 updatedb.py 采集数据 🪩
+    🌍 115 数据库 FUSE 服务，请先用 p115updatedb 采集数据 🪩
 
 ⏰ 由于网盘对多线程访问的限制，请停用挂载目录的显示图标预览
 

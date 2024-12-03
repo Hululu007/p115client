@@ -2,7 +2,7 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 0, 1)
+__version__ = (0, 0, 2)
 __all__ = ["updatedb", "updatedb_one", "updatedb_tree"]
 __license__ = "GPLv3 <https://www.gnu.org/licenses/gpl-3.0.txt>"
 
@@ -82,12 +82,101 @@ CREATE TABLE IF NOT EXISTS dir (
     mtime INTEGER NOT NULL DEFAULT 0   -- 更新时间戳，如果名字、备注被设置（即使值没变），或者进出回收站，或者增删直接子节点，或者设置封面，会更新此值，但移动并不更新
 );
 
--- 触发器，记录 data 表数据的更新时间
+-- 创建 event 表，用于记录 data 表上发生的变更事件
+CREATE TABLE IF NOT EXISTS event (
+    _id INTEGER PRIMARY KEY AUTOINCREMENT, -- 主键
+    id INTEGER NOT NULL,   -- 文件或目录的 id
+    old JSON DEFAULT NULL, -- 更新前的值
+    diff JSON NOT NULL,    -- 将更新的值
+    fs JSON NOT NULL,      -- 发生的文件系统事件列表：add:新增，remove:移除，revert:还原，move:移动，rename:重名
+    created_at DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+08:00', 'now', '+8 hours')) -- 创建时间
+);
+
+-- 触发器，记录 data 表 'insert'
+CREATE TRIGGER IF NOT EXISTS trg_data_insert
+AFTER INSERT ON data
+FOR EACH ROW
+BEGIN
+    INSERT INTO event(id, diff, fs) VALUES (
+        new.id, 
+        json_object(
+            'id', new.id, 
+            'parent_id', new.parent_id, 
+            'pickcode', new.pickcode, 
+            'sha1', new.sha1, 
+            'name', new.name, 
+            'size', new.size, 
+            'is_dir', new.is_dir, 
+            'type', new.type, 
+            'ctime', new.ctime, 
+            'mtime', new.mtime, 
+            'is_collect', new.is_collect, 
+            'is_alive', new.is_alive
+        ), 
+        JSON_ARRAY('add')
+    );
+END;
+
+-- 触发器，记录 data 表 'update'
 CREATE TRIGGER IF NOT EXISTS trg_data_update
 AFTER UPDATE ON data 
 FOR EACH ROW
 BEGIN
     UPDATE data SET updated_at = strftime('%Y-%m-%dT%H:%M:%f+08:00', 'now', '+8 hours') WHERE id = NEW.id;
+    INSERT INTO event(id, old, diff, fs)
+    SELECT *, (
+        WITH t(event) AS (
+            VALUES 
+                (CASE WHEN diff->>'is_alive' THEN 'revert' END), 
+                (CASE WHEN diff->>'is_alive' = 0 THEN 'remove' END), 
+                (CASE WHEN diff->>'name' IS NOT NULL THEN 'rename' END), 
+                (CASE WHEN diff->>'parent_id' IS NOT NULL THEN 'move' END)
+        )
+        SELECT JSON_GROUP_ARRAY(event) FROM t WHERE event IS NOT NULL
+    )
+    FROM (
+        WITH data(id, old, new) AS (
+            SELECT
+                NEW.id, 
+                JSON_OBJECT(
+                    'id', OLD.id, 
+                    'parent_id', OLD.parent_id, 
+                    'pickcode', OLD.pickcode, 
+                    'sha1', OLD.sha1, 
+                    'name', OLD.name, 
+                    'size', OLD.size, 
+                    'is_dir', OLD.is_dir, 
+                    'type', OLD.type, 
+                    'ctime', OLD.ctime, 
+                    'mtime', OLD.mtime, 
+                    'is_collect', OLD.is_collect, 
+                    'is_alive', OLD.is_alive
+                ) AS old, 
+                JSON_OBJECT(
+                    'id', NEW.id, 
+                    'parent_id', NEW.parent_id, 
+                    'pickcode', NEW.pickcode, 
+                    'sha1', NEW.sha1, 
+                    'name', NEW.name, 
+                    'size', NEW.size, 
+                    'is_dir', NEW.is_dir, 
+                    'type', NEW.type, 
+                    'ctime', NEW.ctime, 
+                    'mtime', NEW.mtime, 
+                    'is_collect', NEW.is_collect, 
+                    'is_alive', NEW.is_alive
+                ) AS new
+        ), old(key, value) AS (
+            SELECT tbl.key, tbl.value FROM data, JSON_EACH(data.old) AS tbl
+        ), new(key, value) AS (
+            SELECT tbl.key, tbl.value FROM data, JSON_EACH(data.new) AS tbl
+        ), diff(diff) AS (
+            SELECT JSON_GROUP_OBJECT(key, new.value)
+            FROM old JOIN new USING (key)
+            WHERE old.value != new.value
+        )
+        SELECT data.id, data.old, diff.diff FROM data, diff WHERE data.old != data.new
+    );
 END;
 
 -- 索引
@@ -97,6 +186,7 @@ CREATE INDEX IF NOT EXISTS idx_data_sha1 ON data(sha1);
 CREATE INDEX IF NOT EXISTS idx_data_name ON data(name);
 CREATE INDEX IF NOT EXISTS idx_data_utime ON data(updated_at);
 CREATE INDEX IF NOT EXISTS idx_dir_mtime ON dir(mtime);
+CREATE INDEX IF NOT EXISTS idx_event_create ON event(created_at);
 """)
 
 
@@ -179,6 +269,15 @@ def select_subdir_ids(
     """
     sql = "SELECT id FROM data WHERE parent_id=? AND is_dir AND is_alive"
     return [row[0] for row in query(con, sql, parent_id)]
+
+
+def select_parent_ids(
+    con: Connection | Cursor, 
+    ids: Iterable[int], 
+    /, 
+) -> dict[int, int]:
+    sql = "SELECT id, parent_id FROM data WHERE id IN (%s)" % (",".join(map(str, ids)) or "NULL")
+    return dict(query(con, sql))
 
 
 def load_dir_ids(
@@ -365,11 +464,11 @@ def diff_dir(
         count, ancestors, seen, data_it = iterdir(client, id, first_page_size=16 if remains else 0)
     dirs: list[dict] = []
     upsert_list: list[dict] = []
-    delete_list: list[int] = []
+    remove_list: list[int] = []
     dirs_add = dirs.append
     upsert_add = upsert_list.append
-    delete_extend = delete_list.extend
-    result = upsert_list, delete_list
+    remove_extend = remove_list.extend
+    result = upsert_list, remove_list
     try:
         if remains:
             his_it = iter(sorted(groups.items(), reverse=True))
@@ -382,7 +481,7 @@ def diff_dir(
                 cur_mtime = attr["mtime"]
                 try:
                     while his_mtime > cur_mtime:
-                        delete_extend(his_ids - seen)
+                        remove_extend(his_ids - seen)
                         remains -= len(his_ids)
                         his_mtime, his_ids = next(his_it)
                 except StopIteration:
@@ -395,9 +494,9 @@ def diff_dir(
                     continue
             upsert_add(attr)
         if remains:
-            delete_extend(his_ids - seen)
+            remove_extend(his_ids - seen)
             for _, his_ids in his_it:
-                delete_extend(his_ids - seen)
+                remove_extend(his_ids - seen)
         return result
     finally:
         with transact(con):
@@ -495,13 +594,13 @@ def updatedb_one(
     """更新一个目录
     """
     client, con = _init_client(client, dbfile)
-    to_upsert, to_delete = diff_dir(con, client, id)
+    to_upsert, to_remove = diff_dir(con, client, id)
     with transact(con):
         if to_upsert:
             upsert_items(con, to_upsert)
-        if to_delete:
-            kill_items(con, to_delete)
-    return to_upsert, to_delete
+        if to_remove:
+            kill_items(con, to_remove)
+    return to_upsert, to_remove
 
 
 def updatedb_tree(
@@ -514,19 +613,38 @@ def updatedb_tree(
     """更新一个目录树
     """
     client, con = _init_client(client, dbfile)
-    to_upsert, to_delete = diff_dir(con, client, id, tree=True)
+    to_upsert, to_remove = diff_dir(con, client, id, tree=True)
     custom_no_dir_moved = no_dir_moved
-    if to_delete:
+    if id and to_remove:
         all_pids: set[int] = set()
-        pids: Collection[int] = to_delete
-        while pids := {pid for pid in (CID_TO_PID.get(pid, 0) for pid in pids) if pid and pid not in all_pids}:
+        pairs = select_parent_ids(con, to_remove)
+        pids = set(pairs.values())
+        while pids:
             all_pids.update(pids)
-        if all_pids:
             if not custom_no_dir_moved:
-                update_desc(client, all_pids)
-                no_dir_moved = False
-            to_delete.extend(filter_na_ids(client, all_pids))
-    if to_upsert:
+                update_desc(client, pids)
+                update_stared_dirs(con, client)
+                no_dir_moved = True
+            pids = {pid for pid in (CID_TO_PID.get(pid, 0) for pid in pids) if pid and pid != id and pid not in all_pids}
+        if all_pids:
+            na_ids = set(filter_na_ids(client, all_pids))
+            for fid, pid in pairs.items():
+                if pid in na_ids:
+                    na_ids.add(fid)
+                    continue
+                ids = [fid, pid]
+                while pid := CID_TO_PID.get(pid, 0):
+                    if pid in na_ids:
+                        na_ids.update(ids)
+                        break
+                    elif pid == id:
+                        na_ids.add(fid)
+                        break
+                    ids.append(pid)
+            to_remove = list(na_ids)
+        else:
+            to_remove = []
+    if id and to_upsert:
         all_pids = set()
         pids = {ppid for attr in to_upsert if (ppid := attr["parent_id"])}
         while pids:
@@ -542,15 +660,15 @@ def updatedb_tree(
             elif not custom_no_dir_moved:
                 update_desc(client, pids)
                 no_dir_moved = False
-            pids = {pid for pid in (CID_TO_PID.get(pid, 0) for pid in pids) if pid and pid not in all_pids}
+            pids = {pid for pid in (CID_TO_PID.get(pid, 0) for pid in pids) if pid and pid != id and pid not in all_pids}
     if not no_dir_moved:
         update_stared_dirs(con, client)
     with transact(con):
-        if to_delete:
-            kill_items(con, to_delete)
+        if to_remove:
+            kill_items(con, to_remove)
         if to_upsert:
             upsert_items(con, to_upsert)
-    return to_upsert, to_delete
+    return to_upsert, to_remove
 
 
 def updatedb(
@@ -653,12 +771,12 @@ def updatedb(
             try:
                 start = perf_counter()
                 if need_to_split_tasks or not recursive:
-                    to_upsert, to_delete = updatedb_one(client, con, id)
+                    to_upsert, to_remove = updatedb_one(client, con, id)
                 else:
                     if not no_dir_moved:
                         update_stared_dirs(con, client)
                         no_dir_moved = True
-                    to_upsert, to_delete = updatedb_tree(client, con, id)
+                    to_upsert, to_remove = updatedb_tree(client, con, id)
             except FileNotFoundError:
                 kill_items(con, id, commit=True)
                 logger.warning("[\x1b[1;33mSKIP\x1b[0m] not found: %s", id)
@@ -672,10 +790,10 @@ def updatedb(
                 raise
             else:
                 logger.info(
-                    "[\x1b[1;32mGOOD\x1b[0m] \x1b[1m%s\x1b[0m, upsert: %d, delete: %d, cost: %.6f s", 
+                    "[\x1b[1;32mGOOD\x1b[0m] \x1b[1m%s\x1b[0m, upsert: %d, remove: %d, cost: %.6f s", 
                     id, 
                     len(to_upsert), 
-                    len(to_delete), 
+                    len(to_remove), 
                     perf_counter() - start, 
                 )
                 seen_add(id)
