@@ -737,7 +737,7 @@ def make_strm(
             from sys import executable
             from subprocess import run
             run([executable, "-m", "pip", "install", "-U", "aiofile"], check=True)
-            from aiofile import async_open
+            from aiofile import async_open # type: ignore
         if max_workers is None or max_workers <= 0:
             sema = None
         else:

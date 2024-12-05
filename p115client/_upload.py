@@ -11,7 +11,7 @@ __all__ = [
 from base64 import b64encode
 from collections.abc import (
     AsyncGenerator, AsyncIterable, AsyncIterator, Callable, Coroutine, Generator, ItemsView, Iterable, 
-    Iterator, Mapping, Sequence
+    Iterator, Mapping, Sequence, Sized, 
 )
 from datetime import datetime
 from email.utils import formatdate
@@ -41,6 +41,13 @@ from .exception import MultipartUploadAbort
 
 
 T = TypeVar("T")
+
+
+def buffer_length(b: Buffer, /) -> int:
+    if isinstance(b, Sized):
+        return len(b)
+    else:
+        return len(memoryview(b))
 
 
 def to_base64(s: bytes | str, /) -> str:
@@ -109,9 +116,9 @@ def make_dataiter(
             raise TypeError(f"async iterable {file!r} in non-async mode")
         if read_size >= 0:
             count_in_bytes = 0
-            def acc(chunk):
+            def acc(chunk: Buffer, /):
                 nonlocal count_in_bytes
-                count_in_bytes += len(chunk)
+                count_in_bytes += buffer_length(chunk)
                 if count_in_bytes >= read_size:
                     raise StopIteration
             if async_:
@@ -528,7 +535,7 @@ def oss_multipart_upload_part(
     count_in_bytes = 0
     def acc(chunk: Buffer, /):
         nonlocal count_in_bytes
-        count_in_bytes += len(chunk)
+        count_in_bytes += buffer_length(chunk)
     def parse_upload_part(resp, /) -> dict:
         headers = resp.headers
         return {
@@ -541,15 +548,15 @@ def oss_multipart_upload_part(
     request_kwargs.setdefault("parse", parse_upload_part)
     request_kwargs["params"] = {"partNumber": part_number, "uploadId": upload_id}
     request_kwargs["headers"] = {"x-oss-security-token": token["SecurityToken"]}
-    dataiter = make_dataiter(file, partsize, async_=async_, callback=acc)
+    dataiter: Iterator[Buffer] | AsyncIterator[Buffer] = make_dataiter(file, partsize, callback=acc, async_=async_) # type: ignore
     if reporthook is not None:
         if async_:
             reporthook = ensure_async(reporthook)
-            async def reporthook_wrap(b):
-                await reporthook(len(b))
+            async def reporthook_wrap(b: Buffer, /):
+                await reporthook(buffer_length(b))
             dataiter = wrap_aiter(dataiter, callnext=reporthook_wrap)
         else:
-            dataiter = wrap_iter(cast(Iterable, dataiter), callnext=lambda b: reporthook(len(b)))
+            dataiter = wrap_iter(cast(Iterable, dataiter), callnext=lambda b: reporthook(buffer_length(b)))
     request_kwargs["data"] = dataiter
     return oss_upload_request(
         request, 
@@ -648,7 +655,7 @@ def oss_multipart_upload_part_iter(
                     chunk = bio_chunk_iter(file, partsize)
             part = yield Yield(oss_multipart_upload_part(
                 request, 
-                file=chunk, 
+                file=chunk, # type: ignore
                 url=url, 
                 bucket=bucket, 
                 object=object, 
@@ -657,7 +664,7 @@ def oss_multipart_upload_part_iter(
                 part_number=part_number, 
                 partsize=partsize, 
                 reporthook=reporthook, 
-                async_=async_, 
+                async_=async_, # type: ignore
                 **request_kwargs, 
             ))
             if part["Size"] < partsize:
@@ -721,7 +728,7 @@ def oss_upload(
         "x-oss-callback": to_base64(callback["callback"]), 
         "x-oss-callback-var": to_base64(callback["callback_var"]), 
     }
-    dataiter = make_dataiter(file, async_=async_)
+    dataiter: Iterator[Buffer] | AsyncIterator[Buffer] = make_dataiter(file, async_=async_) # type: ignore
     if callable(make_reporthook):
         if async_:
             dataiter = progress_bytes_async_iter(

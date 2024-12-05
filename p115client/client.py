@@ -61,7 +61,7 @@ from .exception import (
     P115OSError, OperationalError, P115Warning, 
 )
 from .type import RequestKeywords, MultipartResumeData, P115Cookies, P115URL
-from ._upload import make_dataiter, oss_upload, oss_multipart_upload
+from ._upload import buffer_length, make_dataiter, oss_upload, oss_multipart_upload
 
 
 T = TypeVar("T")
@@ -125,7 +125,7 @@ def complete_webapi(
     path: str, 
     /, 
     base_url: bool | str = False, 
-    get_prefix: None | Callable[[], str] = None, #make_prefix_generator(4), 
+    get_prefix: None | Callable[[], str] = make_prefix_generator(4), 
 ) -> str:
     if get_prefix is not None:
         if path and not path.startswith("/"):
@@ -138,18 +138,14 @@ def complete_lixian_api(
     path: str | Mapping | Sequence[tuple], 
     /, 
     base_url: None | bool | str = None, 
-    get_prefix: None | Callable[[], str] = make_prefix_generator(4, ("/web", "/lixian")), 
 ) -> str:
-    if not isinstance(path, str):
-        query = urlencode(path)
-        if query:
-            path = "/lixian/?" + query
-        else:
-            path = "/lixian/"
-    if get_prefix is not None:
-        if path and not path.startswith("/"):
-            path = "/" + path
-        path = get_prefix() + path
+    if isinstance(path, str):
+        path = path.lstrip("/")
+    else:
+        if path := urlencode(path):
+            path = "?" + path
+    if not path.startswith(("lixian", "web/lixian")):
+        path = "/lixian/" + path
     if base_url is None:
         base = "lixian"
         base_url = False
@@ -190,7 +186,10 @@ def get_default_request():
 
 
 def parse_upload_init_response(resp, content: bytes, /) -> dict:
-    return json_loads(ecdh_aes_decode(content, decompress=True))
+    data = ecdh_aes_decode(content, decompress=True)
+    if not isinstance(data, (bytes, bytearray, memoryview)):
+        data = memoryview(data)
+    return json_loads(data)
 
 
 def items(m: Mapping, /) -> ItemsView:
@@ -558,10 +557,10 @@ def normalize_attr(
 class P115Client:
     """115 的客户端对象
 
-    :param cookies: 115 的 cookies，要包含 `UID`、`CID` 和 `SEID`，可选择性包含 `uid` （相当于获取新的 cookies 的 refresh token）
+    :param cookies: 115 的 cookies，要包含 `UID`、`CID`、`KID` 和 `SEID` 等，可选择性包含 `uid` （相当于获取新的 cookies 的 refresh token）
 
         - 如果为 None，则会要求人工扫二维码登录
-        - 如果是 str，则要求是格式正确的 cookies 字符串，例如 "UID=...; CID=...; SEID=..."，如果包含 "uid=..."（一个 sha1 哈希值的 16 进制表示），则会用来更新 `self.login_uid` 属性
+        - 如果是 str，则要求是格式正确的 cookies 字符串，例如 "UID=...; CID=...; KID=...; SEID=..."，如果包含 "uid=..."（一个 sha1 哈希值的 16 进制表示），则会用来更新 `self.login_uid` 属性
         - 如果是 bytes 或 os.PathLike，则视为路径，当更新 cookies 时，也会往此路径写入文件，格式要求同上面的 `str`
         - 如果是 collections.abc.Mapping，则是一堆 cookie 的名称到值的映射
         - 如果是 collections.abc.Iterable，则其中每一条都视为单个 cookie
@@ -6434,7 +6433,7 @@ class P115Client:
 
             - offset: int = 0  💡 索引偏移，索引从 0 开始计算
             - pick_code: str = <default> 💡 提取码
-            - search_value: str 💡 搜索文本，可以是 sha1
+            - search_value: str = "." 💡 搜索文本，可以是 sha1
             - show_dir: 0 | 1 = 1     💡 是否显示目录
             - source: str = <default> 💡 来源
             - star: 0 | 1 = <default> 💡 是否打星标
@@ -6460,7 +6459,7 @@ class P115Client:
         else:
             payload = {
                 "aid": 1, "cid": 0, "format": "json", "limit": 32, "offset": 0, 
-                "show_dir": 1, **payload, 
+                "show_dir": 1, "search_value": ".", **payload, 
             }
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
@@ -6523,7 +6522,7 @@ class P115Client:
 
             - offset: int = 0  💡 索引偏移，索引从 0 开始计算
             - pick_code: str = <default>
-            - search_value: str = <default>
+            - search_value: str = "." 💡 搜索文本，可以是 sha1
             - show_dir: 0 | 1 = 1
             - source: str = <default>
             - star: 0 | 1 = <default>
@@ -6549,7 +6548,7 @@ class P115Client:
         else:
             payload = {
                 "aid": 1, "cid": 0, "format": "json", "limit": 32, "offset": 0, 
-                "show_dir": 1, **payload, 
+                "show_dir": 1, "search_value": ".", **payload, 
             }
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
@@ -8375,6 +8374,8 @@ class P115Client:
         self, 
         payload: int | dict, 
         /, 
+        base_url: None | bool | str = None, 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -8384,6 +8385,8 @@ class P115Client:
         self, 
         payload: int | dict, 
         /, 
+        base_url: None | bool | str = None, 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -8392,6 +8395,8 @@ class P115Client:
         self, 
         payload: int | dict = {"flag": 0}, 
         /, 
+        base_url: None | bool | str = None, 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -8409,7 +8414,7 @@ class P115Client:
               - 4: 已完成+删除源文件
               - 5: 全部+删除源文件
         """
-        api = "https://115.com/web/lixian/?ct=lixian&ac=task_clear"
+        api = complete_lixian_api("?ct=lixian&ac=task_clear", base_url=base_url)
         if isinstance(payload, int):
             flag = payload
             if flag < 0:
@@ -8494,6 +8499,8 @@ class P115Client:
         self, 
         payload: int | dict = 1, 
         /, 
+        base_url: None | bool | str = None, 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -8503,6 +8510,8 @@ class P115Client:
         self, 
         payload: int | dict, 
         /, 
+        base_url: None | bool | str = None, 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -8511,6 +8520,8 @@ class P115Client:
         self, 
         payload: int | dict = 1, 
         /, 
+        base_url: None | bool | str = None, 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -8521,7 +8532,7 @@ class P115Client:
         :payload:
             - page: int | str
         """
-        api = "https://lixian.115.com/lixian/?ct=lixian&ac=task_lists"
+        api = complete_lixian_api("?ct=lixian&ac=task_lists", base_url=base_url)
         if isinstance(payload, int):
             payload = {"page": payload}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
@@ -8530,6 +8541,8 @@ class P115Client:
     def offline_quota_info(
         self, 
         /, 
+        base_url: None | bool | str = None, 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -8538,6 +8551,8 @@ class P115Client:
     def offline_quota_info(
         self, 
         /, 
+        base_url: None | bool | str = None, 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -8545,6 +8560,8 @@ class P115Client:
     def offline_quota_info(
         self, 
         /, 
+        base_url: None | bool | str = None, 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -8552,13 +8569,15 @@ class P115Client:
 
         GET https://lixian.115.com/lixian/?ct=lixian&ac=get_quota_info
         """
-        api = "https://lixian.115.com/lixian/?ct=lixian&ac=get_quota_info"
+        api = complete_lixian_api("?ct=lixian&ac=get_quota_info", base_url=base_url)
         return self.request(url=api, async_=async_, **request_kwargs)
 
     @overload
     def offline_quota_package_info(
         self, 
         /, 
+        base_url: None | bool | str = None, 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -8567,6 +8586,8 @@ class P115Client:
     def offline_quota_package_info(
         self, 
         /, 
+        base_url: None | bool | str = None, 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -8574,6 +8595,8 @@ class P115Client:
     def offline_quota_package_info(
         self, 
         /, 
+        base_url: None | bool | str = None, 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -8581,7 +8604,7 @@ class P115Client:
 
         GET https://lixian.115.com/lixian/?ct=lixian&ac=get_quota_package_info
         """
-        api = "https://lixian.115.com/lixian/?ct=lixian&ac=get_quota_package_info"
+        api = complete_lixian_api("?ct=lixian&ac=get_quota_package_info", base_url=base_url)
         return self.request(url=api, async_=async_, **request_kwargs)
 
     @overload
@@ -8632,6 +8655,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        base_url: None | bool | str = None, 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -8641,6 +8666,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        base_url: None | bool | str = None, 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -8649,6 +8676,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        base_url: None | bool | str = None, 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -8659,7 +8688,7 @@ class P115Client:
         :payload:
             - sha1: str
         """
-        api = "https://lixian.115.com/lixian/?ct=lixian&ac=torrent"
+        api = complete_lixian_api("?ct=lixian&ac=torrent", base_url=base_url)
         if isinstance(payload, str):
             payload = {"sha1": payload}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
@@ -9350,19 +9379,13 @@ class P115Client:
         .. attention::
             最多只能取回前 10,000 条数据，也就是 limit + offset <= 10_000
 
-        :payload:
-            - share_code: str
-            - receive_code: str
+        :param payload:
+            - share_code: str    💡 分享码
+            - receive_code: str  💡 接收码（即密码）
             - cid: int | str = 0 💡 目录 id
             - limit: int = 32    💡 一页大小，意思就是 page_size
-            - o: str = <default> 💡 用某字段排序
-
-              - "file_name": 文件名
-              - "file_size": 文件大小
-              - "user_ptime": 创建时间/修改时间
-
             - offset: int = 0   💡 索引偏移，索引从 0 开始计算
-            - search_value: str 💡 搜索文本，仅支持搜索文件名
+            - search_value: str = "." 💡 搜索文本，仅支持搜索文件名
             - suffix: str = <default> 💡 文件后缀（扩展名），优先级高于 `type`
             - type: int = <default>   💡 文件类型
 
@@ -9377,7 +9400,7 @@ class P115Client:
               - 99: 仅文件
         """
         api = complete_webapi("/share/search", base_url=base_url)
-        payload = {"cid": 0, "limit": 32, "offset": 0, **payload}
+        payload = {"cid": 0, "limit": 32, "offset": 0, "search_value": ".", **payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -9429,10 +9452,7 @@ class P115Client:
 
               - "file_name": 文件名
               - "file_size": 文件大小
-              - "file_type": 文件种类
-              - "user_utime": 修改时间
-              - "user_ptime": 创建时间
-              - "user_otime": 上一次打开时间
+              - "user_ptime": 创建时间/修改时间
         """
         api = complete_webapi("/share/snap", base_url=base_url)
         payload = {"cid": 0, "limit": 32, "offset": 0, **payload}
@@ -10333,7 +10353,7 @@ class P115Client:
         :return: 接口响应
         """
         def gen_step():
-            dataiter = make_dataiter(file, async_=async_)
+            dataiter: Iterator[Buffer] | AsyncIterator[Buffer] = make_dataiter(file, async_=async_) # type: ignore
             if callable(make_reporthook):
                 if async_:
                     dataiter = progress_bytes_async_iter(
@@ -10511,7 +10531,7 @@ class P115Client:
                 pass
             read_range_bytes_or_hash: None | Callable = None
             if isinstance(file, Buffer):
-                filesize = len(file)
+                filesize = buffer_length(file)
                 if need_calc_filesha1:
                     filesha1 = sha1(file).hexdigest()
                 if not upload_directly and multipart_resume_data is None and filesize >= 1 << 20:
@@ -10522,18 +10542,17 @@ class P115Client:
             elif isinstance(file, (str, PathLike)):
                 if not filename:
                     filename = ospath.basename(fsdecode(file))
-                open_file: None | Callable = None
+                open_file: None | Callable[..., SupportsRead[Buffer]] = None
                 if isinstance(file, PathLike):
                     open_file = getattr(file, "open", None)
-                    if not callable(open_file):
-                        open_file = None
-                if open_file is None: 
-                    open_file = partial(open, file)
-                if async_:
-                    open_file = ensure_async(open_file, threaded=True)
-                    file = yield partial(open_file, "rb")
+                if callable(open_file):
+                    open_file = partial(open_file, "rb")
                 else:
-                    file = open_file("rb")
+                    open_file = cast(Callable[[], SupportsRead[Buffer]], partial(open, file, "rb"))
+                if async_:
+                    file = yield ensure_async(open_file, threaded=True)
+                else:
+                    file = open_file()
                 return (yield self.upload_file(
                     file=file, 
                     filename=filename, 
@@ -10608,6 +10627,7 @@ class P115Client:
                             else:
                                 filesize = 0
                 if not upload_directly and multipart_resume_data is None and filesize >= 1 << 20:
+                    read: Callable[[int], Buffer] | Callable[[int], Awaitable[Buffer]]
                     if seekable:
                         if async_:
                             read = ensure_async(file.read, threaded=True)
@@ -10618,11 +10638,11 @@ class P115Client:
                                 start, end = map(int, sign_check.split("-"))
                                 try:
                                     await seek(curpos + start)
-                                    return await read(end - start + 1)
+                                    return await read(end - start + 1) # type: ignore
                                 finally:
                                     await seek(curpos)
                         else:
-                            read = file.read
+                            read = cast(Callable[[int], Buffer], file.read)
                             def read_range_bytes_or_hash(sign_check: str, *, close: bool = False):
                                 if close:
                                     with closing(file): # type: ignore
@@ -10646,15 +10666,9 @@ class P115Client:
                 else:
                     file = HTTPFileReader(url)
                 if not filename:
-                    try:
-                        filename = file.name
-                    except Exception:
-                        pass
+                    filename = getattr(file, "name", "")
                 if filesize < 0:
-                    try:
-                        filesize = file.length
-                    except Exception:
-                        pass
+                    filesize = getattr(file, "length", -1)
                 return (yield self.upload_file(
                     file=file, 
                     filename=filename, 
@@ -10700,7 +10714,7 @@ class P115Client:
                     token = self.upload_token
                 return (yield oss_multipart_upload(
                     self.request, 
-                    file, 
+                    file, # type: ignore
                     url=url, 
                     bucket=bucket, 
                     object=object, 
@@ -10719,7 +10733,7 @@ class P115Client:
                 filesize = 0
             if upload_directly:
                 return (yield self.upload_file_sample(
-                    file, 
+                    file, # type: ignore
                     filename=filename, 
                     filesize=filesize, 
                     pid=pid, 
@@ -10749,7 +10763,7 @@ class P115Client:
             if partsize <= 0:
                 resp = yield oss_upload(
                     self.request, 
-                    file, 
+                    file, # type: ignore
                     url=url, 
                     bucket=bucket, 
                     object=object, 
@@ -10763,7 +10777,7 @@ class P115Client:
             else:
                 resp = yield oss_multipart_upload(
                     self.request, 
-                    file, 
+                    file, # type: ignore
                     url=url, 
                     bucket=bucket, 
                     object=object, 
