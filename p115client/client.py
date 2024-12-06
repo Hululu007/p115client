@@ -445,7 +445,7 @@ def normalize_attr_web(
         ("dp", "dir_path"), 
         ("style", "style"), 
         ("ns", "name_show"), 
-        ("cc", "category_cover"), 
+        ("cc", "cover"), 
         ("sta", "status"), 
         ("class", "class"), 
         ("u", "thumb"), 
@@ -522,6 +522,7 @@ def normalize_attr_app(
         ("flabel", "fflabel"), 
         ("multitrack", "multitrack"), 
         ("play_long", "play_long"), 
+        ("muc", "cover"), 
         ("d_img", "d_img"), 
         ("v_img", "v_img"), 
         ("audio_play_long", "audio_play_long"), 
@@ -556,6 +557,8 @@ def normalize_attr_app2(
             attr["desc"] = info["file_description"]
         if "file_tag" in info:
             attr["ftype"] = int(info["file_tag"])
+        if "music_cover" in info:
+            attr["cover"] = info["music_cover"]
         if "user_pptime" in info:
             attr["ctime"] = attr["user_ptime"] = int(info["user_pptime"])
         if "user_ptime" in info:
@@ -571,6 +574,8 @@ def normalize_attr_app2(
         attr["size"] = 0
         if "category_desc" in info:
             attr["desc"] = info["category_desc"]
+        if "category_cover" in info:
+            attr["cover"] = info["category_cover"]
         if "pptime" in info:
             attr["ctime"] = attr["user_ptime"] = int(info["pptime"])
         if "ptime" in info:
@@ -595,15 +600,19 @@ def normalize_attr_app2(
     ):
         if key in info:
             attr[name] = int(info[key] or 0) == 1
-    for name in ("pick_time", "pick_expire", "file_status", "file_sort", "definition", 
-                 "definition2", "play_long", "type", "current_time", "played_end", 
-                 "last_time", "cate_mark", "category_file_count", "category_order"):
+    for name in (
+        "pick_time", "pick_expire", "file_status", "file_sort", "definition", 
+        "definition2", "play_long", "type", "current_time", "played_end", 
+        "last_time", "cate_mark", "category_file_count", "category_order", 
+    ):
         if name in info:
             attr[name] = int(info[name])
-    for name in ("file_eda", "file_question", "file_answer", "video_img_url", 
-                 "password", "category_cover", "d_img", "play_url"):
-        if key in info:
-            attr[name] = info[key]
+    for name in (
+        "file_eda", "file_question", "file_answer", "password", "video_img_url", 
+        "play_url", "d_img", "v_img", 
+    ):
+        if name in info:
+            attr[name] = info[name]
     if keep_raw:
         attr["raw"] = info
     return attr
