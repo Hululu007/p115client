@@ -10,8 +10,8 @@ __all__ = [
 
 from base64 import b64encode
 from collections.abc import (
-    AsyncGenerator, AsyncIterable, AsyncIterator, Callable, Coroutine, Generator, ItemsView, Iterable, 
-    Iterator, Mapping, Sequence, Sized, 
+    AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Callable, Coroutine, Generator, ItemsView, 
+    Iterable, Iterator, Mapping, Sequence, Sized, 
 )
 from datetime import datetime
 from email.utils import formatdate
@@ -591,7 +591,7 @@ def oss_multipart_upload_part_iter(
 def oss_multipart_upload_part_iter(
     request: Callable, 
     /, 
-    file: Buffer | SupportsRead[Buffer] | Iterable[Buffer] | AsyncIterable[Buffer], 
+    file: Buffer | SupportsRead[Buffer] | SupportsRead[Awaitable[Buffer]] | Iterable[Buffer] | AsyncIterable[Buffer], 
     url: str, 
     bucket: str, 
     object: str, 
@@ -608,7 +608,7 @@ def oss_multipart_upload_part_iter(
 def oss_multipart_upload_part_iter(
     request: Callable, 
     /, 
-    file: Buffer | SupportsRead[Buffer] | Iterable[Buffer] | AsyncIterable[Buffer], 
+    file: Buffer | SupportsRead[Buffer] | SupportsRead[Awaitable[Buffer]] | Iterable[Buffer] | AsyncIterable[Buffer], 
     url: str, 
     bucket: str, 
     object: str, 
@@ -641,7 +641,11 @@ def oss_multipart_upload_part_iter(
             if isinstance(file, memoryview):
                 reporthook and reporthook(skipsize)
             elif async_:
-                through(bio_skip_iter(file, skipsize, callback=reporthook))
+                through(bio_skip_iter(
+                    file, # type: ignore
+                    skipsize, 
+                    callback=reporthook, 
+                ))
             else:
                 yield async_through(bio_skip_async_iter(file, skipsize, callback=reporthook))
         chunk: Buffer | Iterator[Buffer] | AsyncIterator[Buffer]
@@ -652,7 +656,10 @@ def oss_multipart_upload_part_iter(
                 if async_:
                     chunk = bio_chunk_async_iter(file, partsize)
                 else:
-                    chunk = bio_chunk_iter(file, partsize)
+                    chunk = bio_chunk_iter(
+                        file, # type: ignore
+                        partsize, 
+                    )
             part = yield Yield(oss_multipart_upload_part(
                 request, 
                 file=chunk, # type: ignore

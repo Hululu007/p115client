@@ -127,7 +127,7 @@ def type_of_attr(attr: Mapping, /) -> int:
         return type
     if type := SUFFIX_TO_TYPE.get(splitext(attr["name"])[1].lower()):
         return type
-    if "video_type" in attr:
+    if attr.get("is_video") or "defination" in attr:
         return 4
     return 99
 

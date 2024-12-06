@@ -2,7 +2,7 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__all__ = ["check_response", "normalize_attr", "normalize_attr_web", "normalize_attr_app", "P115Client"]
+__all__ = ["check_response", "normalize_attr", "normalize_attr_web", "normalize_attr_app", "normalize_attr_app2", "P115Client"]
 
 import errno
 
@@ -110,11 +110,13 @@ def complete_api(path: str, /, base: str = "", base_url: bool | str = False) -> 
     if path and not path.startswith("/"):
         path = "/" + path
     if base_url:
-        if not base:
-            base = "site"
         if base_url is True:
             base_url = "https://v.anxia.com"
-        return f"{base_url}/{base}{path}"
+            if not base:
+                base = "site"
+        if base and not base.startswith("/"):
+            base = "/" + base
+        return f"{base_url}{base}{path}"
     else:
         if base:
             base = f"{base}."
@@ -398,8 +400,8 @@ def normalize_attr_web(
     #attr["area_id"] = int(attr["aid"])
     if "pc" in info:
         attr["pickcode"] = attr["pick_code"] = info["pc"]
-    #attr["pick_time"] = int(info["pt"])
-    #attr["pick_expire"] = info["e"]
+    attr["pick_time"] = int(info["pt"])
+    attr["pick_expire"] = int(info["e"] or 0)
     attr["name"] = info["n"]
     attr["size"] = int(info.get("s") or 0)
     attr["sha1"] = info.get("sha")
@@ -447,7 +449,7 @@ def normalize_attr_web(
         ("sta", "status"), 
         ("class", "class"), 
         ("u", "thumb"), 
-        ("vdi", "video_type"), 
+        ("vdi", "defination"), 
         ("play_long", "play_long"), 
         ("audio_play_long", "audio_play_long"), 
         ("current_time", "current_time"), 
@@ -513,8 +515,8 @@ def normalize_attr_app(
         if key in info:
             attr[name] = int(info[key] or 0) == 1
     for key, name in (
-        ("def", "def"), 
-        ("def2", "def2"), 
+        ("def", "defination"), 
+        ("def2", "defination2"), 
         ("fco", "cover"), 
         ("fdesc", "desc"), 
         ("flabel", "fflabel"), 
@@ -527,6 +529,79 @@ def normalize_attr_app(
         ("last_time", "last_time"), 
         ("played_end", "played_end"), 
     ):
+        if key in info:
+            attr[name] = info[key]
+    if keep_raw:
+        attr["raw"] = info
+    return attr
+
+
+def normalize_attr_app2(
+    info: Mapping, 
+    /, 
+    keep_raw: bool = False, 
+    dict_cls: type[AttrDict] = AttrDict, 
+) -> AttrDict[str, Any]:
+    attr: AttrDict[str, Any] = dict_cls()
+    if "file_id" in info:
+        attr["is_dir"] = attr["is_directory"] = False
+        attr["id"] = int(info["file_id"])
+        attr["parent_id"] = int(info["category_id"])
+        attr["name"] = info["file_name"]
+        attr["sha1"] = info["sha1"]
+        attr["size"] = int(info["file_size"])
+        if "thumb_url" in info:
+            attr["thumb"] = info["thumb_url"]
+        if "file_description" in info:
+            attr["desc"] = info["file_description"]
+        if "file_tag" in info:
+            attr["ftype"] = int(info["file_tag"])
+        if "user_pptime" in info:
+            attr["ctime"] = attr["user_ptime"] = int(info["user_pptime"])
+        if "user_ptime" in info:
+            attr["mtime"] = attr["user_utime"] = int(info["user_ptime"])
+        if "user_utime" in info:
+            attr["utime"] = int(info["user_utime"])
+    else:
+        attr["is_dir"] = attr["is_directory"] = True
+        attr["id"] = int(info["category_id"])
+        attr["parent_id"] = int(info["parent_id"])
+        attr["name"] = info["category_name"]
+        attr["sha1"] = ""
+        attr["size"] = 0
+        if "category_desc" in info:
+            attr["desc"] = info["category_desc"]
+        if "pptime" in info:
+            attr["ctime"] = attr["user_ptime"] = int(info["pptime"])
+        if "ptime" in info:
+            attr["mtime"] = attr["user_utime"] = int(info["ptime"])
+        if "utime" in info:
+            attr["utime"] = int(info["utime"])
+    attr["pickcode"] = attr["pick_code"] = info["pick_code"]
+    attr["ico"] = info.get("ico", "folder" if attr["is_dir"] else "")
+    attr["labels"] = info["fl"]
+    for key, name in (
+        ("has_desc", "has_desc"), 
+        ("has_pass", "has_pass"), 
+        ("is_mark", "star"), 
+        ("is_top", "is_top"), 
+        ("is_private", "hidden"), 
+        ("show_play_long", "show_play_long"), 
+        ("is_share", "is_share"), 
+        ("is_video", "is_video"), 
+        ("is_collect", "violated"), 
+        ("can_delete", "can_delete"), 
+        ("file_category", "file_category"), 
+    ):
+        if key in info:
+            attr[name] = int(info[key] or 0) == 1
+    for name in ("pick_time", "pick_expire", "file_status", "file_sort", "definition", 
+                 "definition2", "play_long", "type", "current_time", "played_end", 
+                 "last_time", "cate_mark", "category_file_count", "category_order"):
+        if name in info:
+            attr[name] = int(info[name])
+    for name in ("file_eda", "file_question", "file_answer", "video_img_url", 
+                 "password", "category_cover", "d_img", "play_url"):
         if key in info:
             attr[name] = info[key]
     if keep_raw:
@@ -550,6 +625,8 @@ def normalize_attr(
     """
     if "fn" in info:
         return normalize_attr_app(info, keep_raw=keep_raw, dict_cls=dict_cls)
+    elif "file_id" in info or "category_id" in info:
+        return normalize_attr_app2(info, keep_raw=keep_raw, dict_cls=dict_cls)
     else:
         return normalize_attr_web(info, keep_raw=keep_raw, dict_cls=dict_cls)
 
@@ -4325,7 +4402,6 @@ class P115Client:
             - fc_mix: 0 | 1 = <default> 💡 是否目录和文件混合，如果为 0 则目录在前（目录置顶）
             - fields: str = <default>
             - format: str = "json" 💡 返回格式，默认即可
-            - hide_data: str = <default>
             - is_q: 0 | 1 = <default>
             - is_share: 0 | 1 = <default>
             - min_size: int = 0 💡 最小的文件大小
@@ -4394,6 +4470,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
+        mixin: str = "", 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -4405,6 +4482,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
+        mixin: str = "", 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -4415,6 +4493,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
+        mixin: str = "", 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -4427,7 +4506,7 @@ class P115Client:
             如果要遍历获取所有文件，需要指定 show_dir=0 且 cur=0（或不指定 cur），这个接口并没有 type=99 时获取所有文件的意义
 
         .. note::
-            如果 `app` 为 "wechatmini" 或 "alipaymini"，则返回结果和手机客户端并不相同
+            如果 `app` 为 "wechatmini" 或 "alipaymini"，则相当于 `P115Client.fs_files_app2`
 
         .. caution::
             这个接口有些问题，当 custom_order=1 时，则 fc_mix 无论怎么设置，都和 fc_mix=0 的效果相同（即目录总是置顶）
@@ -4492,7 +4571,9 @@ class P115Client:
               - 15: 图片和视频，相当于 2 和 4
               - >= 16: 相当于 8
         """
-        api = f"https://proapi.115.com/{app}/2.0/ufile/files"
+        if mixin and not mixin.startswith("/"):
+            mixin = "/" + mixin
+        api = f"https://proapi.115.com/{app}/2.0{mixin}/ufile/files"
         if isinstance(payload, (int, str)):
             payload = {
                 "aid": 1, "count_folders": 1, "limit": 32, "offset": 0, 
@@ -4513,6 +4594,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
+        mixin: str = "", 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -4524,6 +4606,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
+        mixin: str = "", 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -4534,6 +4617,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
+        mixin: str = "", 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -4605,7 +4689,9 @@ class P115Client:
               - 15: 图片和视频，相当于 2 和 4
               - >= 16: 相当于 8
         """
-        api = f"https://proapi.115.com/{app}/files"
+        if mixin and not mixin.startswith("/"):
+            mixin = "/" + mixin
+        api = f"https://proapi.115.com/{app}{mixin}/files"
         if isinstance(payload, (int, str)):
             payload = {
                 "aid": 1, "count_folders": 1, "limit": 32, "offset": 0, 
@@ -6113,9 +6199,9 @@ class P115Client:
         """
         api = complete_webapi("/files/order", base_url=base_url)
         if isinstance(payload, str):
-            payload = {"file_id": 0, "user_order": payload}
+            payload = {"file_id": 0, "user_asc": 1, "user_order": payload}
         else:
-            payload = {"file_id": 0, **payload}
+            payload = {"file_id": 0, "user_asc": 1, "user_order": "user_ptime", **payload}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -6153,6 +6239,9 @@ class P115Client:
 
         POST https://proapi.115.com/{app}/2.0/ufile/order
 
+        .. error::
+            这个接口暂时并不能正常工作，应该是参数构造有问题，暂时请用 `P115Client.fs_order_set`
+
         :payload:
             - user_order: str 💡 用某字段排序
 
@@ -6170,9 +6259,9 @@ class P115Client:
         """
         api = f"https://proapi.115.com/{app}/2.0/ufile/order"
         if isinstance(payload, str):
-            payload = {"file_id": 0, "user_order": payload}
+            payload = {"file_id": 0, "user_asc": 1, "user_order": payload}
         else:
-            payload = {"file_id": 0, **payload}
+            payload = {"file_id": 0, "user_asc": 1, "user_order": "user_ptime", **payload}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -6968,13 +7057,7 @@ class P115Client:
 
         :return: 接口返回值
         """
-        if base_url:
-            if base_url is True:
-                api = f"https://v.anxia.com/site/api/video/m3u8/{pickcode}.m3u8?definition={definition}"
-            else:
-                api = f"{base_url}/api/video/m3u8/{pickcode}.m3u8?definition={definition}"
-        else:
-            api = f"http://115.com/api/video/m3u8/{pickcode}.m3u8?definition={definition}"
+        api = complete_api(f"/api/video/m3u8/{pickcode}.m3u8?definition={definition}", base_url=base_url)
         request_kwargs.setdefault("parse", False)
         return self.request(url=api, async_=async_, **request_kwargs)
 

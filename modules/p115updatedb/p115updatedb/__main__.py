@@ -24,6 +24,7 @@ parser.add_argument("-st", "--auto-splitting-threshold", type=int, default=100_0
 parser.add_argument("-sst", "--auto-splitting-statistics-timeout", type=float, default=3, help="自动拆分前的执行文件数统计的超时时间（秒），大于此值时，视为文件数无穷大，如果 <= 0，视为永不超时，默认值 3")
 parser.add_argument("-nm", "--no-dir-moved", action="store_true", help="声明没有目录被移动或改名（但可以有目录被新增或删除），这可以加快批量拉取时的速度")
 parser.add_argument("-nr", "--not-recursive", action="store_true", help="不遍历目录树：只拉取顶层目录，不递归子目录")
+parser.add_argument("-de", "--disable-event", action="store_true", help="关闭 event 表的数据收集")
 parser.add_argument("-v", "--version", action="store_true", help="输出版本号")
 parser.add_argument("-l", "--license", action="store_true", help="输出开源协议")
 
@@ -63,6 +64,7 @@ def main(argv: None | list[str] | Namespace = None, /):
         auto_splitting_statistics_timeout=args.auto_splitting_statistics_timeout, 
         no_dir_moved=args.no_dir_moved, 
         recursive=not args.not_recursive, 
+        disable_event=args.disable_event, 
     )
 
 

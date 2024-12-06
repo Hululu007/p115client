@@ -13,7 +13,7 @@ import errno
 from collections.abc import Callable, Iterator, Sequence
 from copy import copy
 from datetime import datetime
-from itertools import islice
+from itertools import batched
 from os.path import expanduser
 from pathlib import Path
 from sqlite3 import register_adapter, register_converter, Connection, Cursor, OperationalError
@@ -30,6 +30,7 @@ FIELDS: Final = (
     "id", "parent_id", "pickcode", "sha1", "name", "size", "is_dir", "type", 
     "ctime", "mtime", "is_collect", "is_alive", "updated_at", 
 )
+EXTENDED_FIELDS: Final = (*FIELDS, "path", "posixpath")
 ROOT: Final = {
     "id": 0, "parent_id": 0, "pickcode": "", "sha1": "", "name": "", "size": 0, 
     "is_dir": 1, "type": 0, "ctime": 0, "mtime": 0, "is_collect": 0, 
@@ -262,7 +263,7 @@ def get_ancestors(
     if not id:
         return ancestors
     ls = list(query(con, """\
-WITH RECURSIVE t AS (
+WITH t AS (
     SELECT id, parent_id, name FROM data WHERE id = ?
     UNION ALL
     SELECT data.id, data.parent_id, data.name FROM t JOIN data ON (t.parent_id = data.id)
@@ -424,9 +425,11 @@ def iter_descendants_fast(
     con: Connection | Cursor, 
     parent_id: int = 0, 
     *, 
-    fields: Literal[False] = False, 
+    fields: Literal[False], 
     max_depth: int = -1, 
     ensure_file: None | bool = None, 
+    where: str = "", 
+    orderby: str = "", 
 ) -> Iterator[int]:
     ...
 @overload
@@ -434,10 +437,12 @@ def iter_descendants_fast(
     con: Connection | Cursor, 
     parent_id: int = 0, 
     *, 
-    fields: Literal[True] | tuple[str, ...], 
+    fields: Literal[True] | tuple[str, ...] = True, 
     max_depth: int = -1, 
     ensure_file: None | bool = None, 
     to_dict: Literal[True] = True, 
+    where: str = "", 
+    orderby: str = "", 
 ) -> Iterator[dict[str, Any]]:
     ...
 @overload
@@ -445,21 +450,25 @@ def iter_descendants_fast(
     con: Connection | Cursor, 
     parent_id: int = 0, 
     *, 
-    fields: Literal[True] | tuple[str, ...], 
+    fields: Literal[True] | tuple[str, ...] = True, 
     max_depth: int = -1, 
     ensure_file: None | bool = None, 
     to_dict: Literal[False], 
+    where: str = "", 
+    orderby: str = "", 
 ) -> Iterator:
     ...
 def iter_descendants_fast(
     con: Connection | Cursor, 
     parent_id: int = 0, 
     *, 
-    fields: bool | tuple[str, ...] = False, 
+    fields: bool | tuple[str, ...] = True, 
     max_depth: int = -1, 
     ensure_file: None | bool = None, 
     to_dict: bool = True, 
-) -> Iterator[int] | Iterator[dict[str, Any]]:
+    where: str = "", 
+    orderby: str = "", 
+) -> Iterator:
     """获取某个目录之下的所有目录节点的 id 或者信息字典
 
     :param con: 数据库连接或游标
@@ -474,8 +483,8 @@ def iter_descendants_fast(
             )
 
         - 如果为 False，则只拉取 id
-        - 如果为 True，则拉取上面提到的所有字段，但会把 "path" 和 "posixpath" 放在最后
-        - 如果为 tuple，则是指定了所要拉取的一组字段，无论是否提供，必会包含 "id"，且在最前面
+        - 如果为 True，则拉取上面提到的所有字段
+        - 如果为 tuple，则是指定了所要拉取的一组字段，无论是否提供，必会包含 "id"，且在最前面，且会把 "path" 和 "posixpath" 放在最后（如果有的话）
 
     :param max_depth: 最大深度。如果小于 0，则无限深度
     :param ensure_file: 是否仅输出文件
@@ -485,6 +494,8 @@ def iter_descendants_fast(
         - 如果为 None，全部输出
 
     :param to_dict: 是否产生字典，如果为 False，则直接迭代返回游标的数据
+    :param where: 一些 WHERE 查询条件，直接拼接到查询语句最后
+    :param orderby: 一些 ORDER BY 排序条件，直接拼接到查询语句最后
 
     :return: 迭代器，产生一组 id
     """
@@ -507,23 +518,24 @@ def iter_descendants_fast(
                     args[2], 
                 )
             sql = """\
-WITH RECURSIVE t AS (
+WITH t AS (
     SELECT id%s FROM data WHERE parent_id=:parent_id AND is_alive
     UNION ALL
     SELECT data.id%s FROM t JOIN data ON(t.id = data.parent_id) WHERE data.is_alive%s
 )
-SELECT id FROM t WHERE TRUE""" % args
+SELECT id FROM t AS data WHERE TRUE""" % args
         if ensure_file:
             sql += " AND NOT is_dir"
         elif ensure_file is not None:
             sql += " AND is_dir"
+        if where:
+            sql += f" AND ({where})"
+        if orderby:
+            sql += f" ORDER BY {orderby}"
         return (id for id, in query(con, sql, locals()))
     else:
         if fields is True:
-            fields = (
-                "id", "parent_id", "pickcode", "sha1", "name", "size", "is_dir", "type", 
-                "ctime", "mtime", "is_collect", "is_alive", "updated_at", "path", "posixpath", 
-            )
+            fields = EXTENDED_FIELDS
         fields = cast(tuple[str, ...], fields)
         with_path = "path" in fields
         with_posixpath = "posixpath" in fields
@@ -572,16 +584,20 @@ SELECT id FROM t WHERE TRUE""" % args
                     args[2], 
                 )
             sql = f"""\
-WITH RECURSIVE t AS (
+WITH t AS (
     SELECT {select_fields_1}%s FROM data WHERE parent_id=:parent_id AND is_alive
     UNION ALL
     SELECT {select_fields_2}%s FROM t JOIN data ON(t.id = data.parent_id) WHERE data.is_alive%s
 )
-SELECT {",".join(fields)} FROM t WHERE TRUE""" % args
+SELECT {",".join(fields)} FROM t AS data WHERE TRUE""" % args
         if ensure_file:
             sql += " AND NOT is_dir"
         elif ensure_file is not None:
             sql += " AND is_dir"
+        if where:
+            sql += f" AND ({where})"
+        if orderby:
+            sql += f" ORDER BY {orderby}"
         cur = query(con, sql, locals())
         if to_dict:
             return (dict(zip(fields, record)) for record in cur)
@@ -608,7 +624,7 @@ def dump_to_alist(
     if isinstance(parent_id, str):
         parent_id = get_id(con, path=parent_id)
     sql = """\
-WITH RECURSIVE t AS (
+WITH t AS (
     SELECT 
         :dirname AS parent, 
         name, 
@@ -634,8 +650,10 @@ SELECT * FROM t"""
             cur.execute("DELETE FROM x_search_nodes WHERE parent=? OR parent LIKE ? || '/%';", (dirname, dirname))
         count = 0
         it = (t[:4] for t in query(con, sql, locals()))
-        while items := list(islice(it, 10_000)):
-            cur.executemany("INSERT INTO x_search_nodes(parent, name, is_dir, size) VALUES (?, ?, ?, ?)", items)
+        executemany = cur.executemany
+        for items in batched(it, 10_000):
+            executemany("INSERT INTO x_search_nodes(parent, name, is_dir, size) VALUES (?, ?, ?, ?)", items)
             count += len(items)
         return count
 
+# TODO: 增加函数，用来导出到 efu (everything)、mlocatedb 等软件的索引数据库

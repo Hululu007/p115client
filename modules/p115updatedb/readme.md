@@ -19,14 +19,16 @@ from p115updatedb import updatedb, updatedb_one, updatedb_tree
 另外也提供了一些工具函数，封装了一些数据库查询
 
 ```python
-import p115updatedb.query
+from p115updatedb.query import *
 ```
 
 ### 命令行
 
 ```console
 $ p115updatedb -h
-usage: p115updatedb [-h] [-cp COOKIES_PATH] [-f DBFILE] [-st AUTO_SPLITTING_THRESHOLD] [-sst AUTO_SPLITTING_STATISTICS_TIMEOUT] [-nm] [-nr] [-v] [-l] [dir ...]
+usage: p115updatedb [-h] [-cp COOKIES_PATH] [-f DBFILE] [-st AUTO_SPLITTING_THRESHOLD] [-sst AUTO_SPLITTING_STATISTICS_TIMEOUT] [-nm] [-nr]
+                    [-de] [-v] [-l]
+                    [dir ...]
 
 遍历 115 网盘的目录信息导出到数据库
 
@@ -49,6 +51,7 @@ options:
                         自动拆分前的执行文件数统计的超时时间（秒），大于此值时，视为文件数无穷大，如果 <= 0，视为永不超时，默认值 3
   -nm, --no-dir-moved   声明没有目录被移动或改名（但可以有目录被新增或删除），这可以加快批量拉取时的速度
   -nr, --not-recursive  不遍历目录树：只拉取顶层目录，不递归子目录
+  -de, --disable-event  关闭 event 表的数据收集
   -v, --version         输出版本号
   -l, --license         输出开源协议
 ```

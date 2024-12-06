@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "p115updatedb"
-version = "0.0.3"
+version = "0.0.4"
 description = "把 115 网盘的文件列表导出到数据库"
 authors = ["ChenyangGao <wosiwujm@gmail.com>"]
 license = "MIT"
@@ -29,6 +29,7 @@ include = [
 python = "^3.12"
 p115client = ">=0.0.3.8.2"
 posixpatht = ">=0.0.4"
+python-concurrenttools = ">=0.0.4"
 sqlitetools = ">=0.0.1.4"
 
 [tool.poetry.scripts]
