@@ -400,8 +400,10 @@ def normalize_attr_web(
     #attr["area_id"] = int(attr["aid"])
     if "pc" in info:
         attr["pickcode"] = attr["pick_code"] = info["pc"]
-    attr["pick_time"] = int(info["pt"])
-    attr["pick_expire"] = int(info["e"] or 0)
+    if "pt" in info:
+        attr["pick_time"] = int(info["pt"] or 0)
+    if "e" in info:
+        attr["pick_expire"] = int(info["e"] or 0)
     attr["name"] = info["n"]
     attr["size"] = int(info.get("s") or 0)
     attr["sha1"] = info.get("sha")
@@ -606,7 +608,7 @@ def normalize_attr_app2(
         "last_time", "cate_mark", "category_file_count", "category_order", 
     ):
         if name in info:
-            attr[name] = int(info[name])
+            attr[name] = int(info[name] or 0)
     for name in (
         "file_eda", "file_question", "file_answer", "password", "video_img_url", 
         "play_url", "d_img", "v_img", 

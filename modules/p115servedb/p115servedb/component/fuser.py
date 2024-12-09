@@ -9,15 +9,19 @@ from . import __fuse_monkey_patch
 import errno
 import logging
 
-from collections.abc import Callable
+from collections.abc import Callable, MutableMapping
+from contextlib import suppress
 from functools import partial
 from itertools import count
 from pathlib import Path
+from os import PathLike
 from posixpath import split as splitpath, splitext
 from sqlite3 import connect
 from stat import S_IFDIR, S_IFREG
+from threading import Lock
 from typing import Final, BinaryIO
 from unicodedata import normalize
+from weakref import WeakValueDictionary
 
 from fuse import FUSE, Operations # type: ignore
 from httpfile import Urllib3FileReader
@@ -25,10 +29,16 @@ from orjson import dumps as json_dumps
 from p115client import P115Client
 from path_predicate import MappingPath
 from posixpatht import escape
+from sqlitetools import execute, find
+from urllib3 import PoolManager
 
-from .db import FIELDS, ROOT, get_id_from_db, get_children_from_db
+from .db import FIELDS, get_attr_from_db, get_id_from_db, get_children_from_db
 from .log import logger
 from .lrudict import LRUDict
+
+
+urlopen = partial(PoolManager(num_pools=128).request, "GET", preload_content=False, timeout=5)
+
 
 # Learning: 
 #   - https://www.stavros.io/posts/python-fuse-filesystem/
@@ -38,13 +48,31 @@ class ServedbFuseOperations(Operations):
     def __init__(
         self, 
         /, 
-        dbfile, 
+        dbfile: bytes | str | PathLike, 
         cookies_path: str | Path = "", 
         predicate: None | Callable[[MappingPath], bool] = None, 
         strm_predicate: None | Callable[[MappingPath], bool] = None, 
         strm_origin: str = "http://localhost:8000", 
     ):
-        self.con = connect(dbfile, check_same_thread=False)
+        self.con = connect(
+            dbfile, 
+            check_same_thread=False, 
+            uri=isinstance(dbfile, str) and dbfile.startswith("file:"), 
+        )
+        path = find(self.con, "SELECT file FROM pragma_database_list() WHERE name='main';")
+        if path:
+            dbpath = "%s-file%s" % splitext(path)
+            uri = False
+        else:
+            dbpath = "file:file?mode=memory&cache=shared"
+            uri = True
+        self.con_file = connect(
+            dbpath, 
+            autocommit=True, 
+            check_same_thread=False, 
+            uri=uri, 
+        )
+        self.file_lock_cache: MutableMapping[tuple[str, int], Lock] = WeakValueDictionary()
         if cookies_path:
             cookies_path = Path(cookies_path)
         else:
@@ -56,6 +84,7 @@ class ServedbFuseOperations(Operations):
         self.predicate = predicate
         self.strm_predicate = strm_predicate
         self.strm_origin = strm_origin
+        self._root = {"st_mode": S_IFDIR | 0o555, "_attr": get_attr_from_db(self.con, 0)}
         self._next_fh: Callable[[], int] = count(1).__next__
         self._fh_to_file: dict[int, tuple[BinaryIO, bytes]] = {}
         self.cache: LRUDict = LRUDict(1024)
@@ -65,30 +94,31 @@ class ServedbFuseOperations(Operations):
         self.close()
 
     def close(self, /):
-        self.con.close()
-        if self.client:
-            self.client.close()
-        popitem = self._fh_to_file.popitem
-        while True:
-            try:
-                _, (file, _) = popitem()
-                if file is not None:
-                    file.close()
-            except KeyError:
-                break
-            except:
-                pass
+        with suppress(AttributeError):
+            self.con.close()
+            self.con_file.close()
+            if self.client:
+                self.client.close()
+            popitem = self._fh_to_file.popitem
+            while True:
+                try:
+                    _, (file, _) = popitem()
+                    if file is not None:
+                        file.close()
+                except KeyError:
+                    break
+                except:
+                    pass
 
     def getattr(
         self, 
         /, 
         path: str, 
         fh: int = 0, 
-        _rootattr={"st_mode": S_IFDIR | 0o555, "_attr": ROOT}
     ) -> dict:
         self._log(logging.DEBUG, "getattr(path=\x1b[4;34m%r\x1b[0m, fh=%r)", path, fh)
         if path == "/":
-            return _rootattr
+            return self._root
         dir_, name = splitpath(normalize("NFC", path))
         try:
             dird = self.cache[dir_]
@@ -146,17 +176,36 @@ class ServedbFuseOperations(Operations):
 
     def _open(self, path: str, /, start: int = 0):
         attr = self.getattr(path)
-        if attr.get("_data") is not None:
-            return None, attr["_data"]
-        pickcode = attr["_attr"]["pickcode"]
-        if client := self.client:
+        if (data := attr.get("_data")) is not None:
+            return None, data
+        client = self.client
+        attr_ = attr["_attr"]
+        pickcode = attr_["pickcode"]
+        size = attr_["size"]
+        if size <= 1024 * 64:
+            sha1 = attr_["sha1"]
+            with self.file_lock_cache.setdefault((sha1, size), Lock()):
+                data = find(
+                    self.con_file, 
+                    "SELECT data FROM data WHERE sha1=:sha1 AND size=:size", 
+                    locals(), 
+                )
+                if data is None:
+                    if client:
+                        data = client.read_bytes(client.download_url(pickcode))
+                    else:
+                        data = urlopen(f"{self.strm_origin}?pickcode={pickcode}").read()
+                    execute(self.con_file, """\
+INSERT INTO data(sha1, size, data) VALUES(:sha1, :size, :data) 
+ON CONFLICT DO UPDATE SET data = excluded.data;""", locals())
+                attr["_data"] = data
+                return None, data
+        if client:
             file = client.open(client.download_url(pickcode), http_file_reader_cls=Urllib3FileReader)
         else:
-            file = Urllib3FileReader(f"{self.strm_origin}?pickcode={pickcode}")
-        if attr["st_size"] <= 2048:
-            return None, file.read()
+            file = Urllib3FileReader(f"{self.strm_origin}?pickcode={pickcode}", urlopen=urlopen)
         if start == 0:
-            preread = file.read(2048)
+            preread = file.read(1024 * 64)
         else:
             preread = b""
         return file, preread
@@ -221,6 +270,7 @@ class ServedbFuseOperations(Operations):
                 children[normname] = dict(
                     st_mode=(S_IFDIR if isdir else S_IFREG) | 0o555, 
                     st_size=size, 
+                    st_ctime=attr["ctime"], 
                     st_mtime=attr["mtime"], 
                     _attr=attr, 
                     _data=data, 

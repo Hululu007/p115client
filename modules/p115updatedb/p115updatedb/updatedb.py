@@ -26,7 +26,7 @@ from p115client.tool.edit import update_desc, update_star
 from p115client.tool.iterdir import filter_na_ids, get_id_to_path, iter_stared_dirs
 from sqlitetools import execute, find, query, transact, upsert_items, AutoCloseConnection
 
-from .query import iter_descendants_fast
+from .query import iter_descendants_fast, select_mtime_groups
 from .util import ZERO_DICT, bfs_gen
 
 
@@ -207,34 +207,6 @@ END;"""
     return con.executescript(sql)
 
 
-def select_mtime_groups(
-    con: Connection | Cursor, 
-    parent_id: int = 0, 
-    /, 
-    tree: bool = False, 
-) -> tuple[int, list[tuple[int, set[int]]]]:
-    """获取某个目录之下的节点（不含此节点本身），按 mtime 进行分组，相同 mtime 的 id 归入同一组
-
-    :param con: 数据库连接或游标
-    :param parent_id: 父目录的 id
-    :param tree: 是否拉取目录树，如果为 True，则拉取全部后代的文件节点（不含目录节点），如果为 False，则只拉取子节点（含目录节点）
-
-    :return: 字典，表示相同 mtime 的 id 的集合，所以 key 是 mtime，value 是一组 id 的集合
-    """
-    if tree:
-        it = iter_descendants_fast(con, parent_id, fields=("id", "mtime"), ensure_file=True, to_dict=False)
-    else:
-        it = iter_descendants_fast(con, parent_id, fields=("id", "mtime"), max_depth=1, to_dict=False)
-    d: dict[int, set[int]] = {}
-    n = 0
-    for n, (id, mtime) in enumerate(it, 1):
-        try:
-            d[mtime].add(id)
-        except KeyError:
-            d[mtime] = {id}
-    return n, sorted(d.items(), reverse=True)
-
-
 def load_dir_ids(
     con: Connection | Cursor, 
     /, 
@@ -386,12 +358,11 @@ def iterdir(
         nonlocal resp
         offset = int(payload["offset"])
         payload["limit"] = page_size
+        dirs: deque[dict] = deque()
+        push, pop = dirs.append, dirs.popleft
         while True:
-            # TODO: 当然，首先检查的是头尾两个元素，头部是文件，则不用管，否则尾部是目录，则全部采集，尾部是文件，则用二分查找，快速找出最后一个目录
-            # TODO: 首先就是把所有的目录先缓存起来，以后再插入到合适的位置
-            # TODO: 其它地方，如 p115 和 p115dav 也要同步用上此策略
-            # TODO: 为了便于更新，策略也要进行一定的优化，并不是要把所有目录全都拉完，才能拉文件，这个其实可以从某个 offset 开始
-            for attr in map(normalize_attr, resp["data"]):
+            data = resp["data"]
+            for attr in map(normalize_attr, data):
                 fid = cast(int, attr["id"])
                 if fid in seen:
                     raise BusyOSError(
@@ -399,9 +370,17 @@ def iterdir(
                         f"duplicate id found, means that some unpulled items have been updated: cid={cid}", 
                     )
                 seen_add(fid)
-                yield attr
-            offset += len(resp["data"])
+                if attr["is_dir"]:
+                    push(attr)
+                else:
+                    if dirs:
+                        mtime = attr["mtime"]
+                        while dirs and dirs[0]["mtime"] >= mtime:
+                            yield pop()
+                    yield attr
+            offset += len(data)
             if offset >= count:
+                yield from dirs
                 break
             payload["offset"] = offset
             resp = get_files(payload)

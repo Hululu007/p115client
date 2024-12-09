@@ -8,18 +8,17 @@ __all__ = ["make_application"]
 
 from asyncio import to_thread
 from collections.abc import Callable, Mapping, MutableMapping
-from contextlib import closing
 from datetime import datetime
-from functools import partial
 from inspect import getsource
 from io import BytesIO
 from os import environ, PathLike
 from pathlib import Path
 from posixpath import splitext, split as splitpath
-from sqlite3 import connect, register_adapter, register_converter, PARSE_COLNAMES, PARSE_DECLTYPES, Connection
+from sqlite3 import connect, register_adapter, register_converter, Connection
 from string import hexdigits
 from threading import Lock
 from urllib.parse import quote
+from weakref import WeakValueDictionary
 
 from a2wsgi import WSGIMiddleware
 from blacksheep import redirect, text, Application, Router
@@ -43,6 +42,7 @@ from path_predicate import MappingPath
 from posixpatht import escape
 from property import locked_cacheproperty
 from pysubs2 import SSAFile # type: ignore
+from sqlitetools import execute, find
 from wsgidav.wsgidav_app import WsgiDAVApp # type: ignore
 from wsgidav.dav_error import DAVError # type: ignore
 from wsgidav.dav_provider import DAVCollection, DAVNonCollection, DAVProvider # type: ignore
@@ -175,6 +175,10 @@ def make_application(
 
     # NOTE: webdav 的文件对象缓存
     DAV_FILE_CACHE: MutableMapping[str, DAVNonCollection] = LRUDict(65536)
+    # NOTE: 文件缓存的读写锁
+    FILE_LOCK_CACHE: MutableMapping[tuple[str, int], Lock] = WeakValueDictionary()
+    # NOTE: 缓存文件数据
+    FILE_DATA_CACHE: MutableMapping[tuple[str, int], bytes] = LRUDict(128)
 
     @app.on_middlewares_configuration
     def configure_forwarded_headers(app: Application):
@@ -197,13 +201,39 @@ def make_application(
     @app.lifespan
     async def register_connection(app: Application):
         nonlocal con
-        with closing(connect(
+        with connect(
             dbfile, 
             check_same_thread=False, 
-            detect_types=PARSE_DECLTYPES | PARSE_COLNAMES, 
             uri=isinstance(dbfile, str) and dbfile.startswith("file:"), 
-        )) as con:
+        ) as con:
             app.services.register(Connection, instance=con)
+            yield
+
+    @app.lifespan
+    async def register_file_connection(app: Application):
+        nonlocal con_file
+        con = app.services.resolve(Connection)
+        path = find(con, "SELECT file FROM pragma_database_list() WHERE name='main';")
+        if path:
+            dbpath = "%s-file%s" % splitext(path)
+            uri = False
+        else:
+            dbpath = "file:file?mode=memory&cache=shared"
+            uri = True
+        with connect(
+            dbpath, 
+            autocommit=True, 
+            check_same_thread=False, 
+            uri=uri, 
+        ) as con_file:
+            con_file.executescript("""\
+PRAGMA journal_mode = WAL;
+CREATE TABLE IF NOT EXISTS data (
+    sha1 TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    data BLOB
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sha1_size ON data(sha1, size);""")
             yield
 
     def make_response_for_exception(
@@ -315,8 +345,6 @@ def make_application(
         path: str = "", 
     ) -> dict:
         id = await get_id(id=id, pickcode=pickcode, sha1=sha1, path=path)
-        if isinstance(id, P115ID) and (attr := id.get("attr")):
-            return attr
         return await to_thread(get_attr_from_db, con, id)
 
     @app.router.get("/%3Clist")
@@ -328,8 +356,6 @@ def make_application(
         path: str = "", 
     ) -> dict:
         id = await get_id(id=id, pickcode=pickcode, sha1=sha1, path=path)
-        a = await to_thread(get_ancestors_from_db, con, id)
-        b = await to_thread(get_children_from_db, con, id)
         return {
             "ancestors": await to_thread(get_ancestors_from_db, con, id), 
             "children": await to_thread(get_children_from_db, con, id), 
@@ -408,11 +434,9 @@ def make_application(
             is_dir = attr["is_dir"]
             if is_dir:
                 id = int(attr["id"])
-            else:
-                pickcode = attr["pickcode"]
         elif file:
             is_dir = False
-            pickcode = await get_pickcode(
+            attr = await get_attr(
                 id=id, 
                 pickcode=pickcode, 
                 sha1=sha1, 
@@ -427,12 +451,75 @@ def make_application(
                 path=path or path2, 
             )
         if not is_dir:
+            def get_ranged_data(data, /):
+                bytes_range = request.get_first_header(b"Range") or b""
+                if bytes_range:
+                    b = bytearray()
+                    m = memoryview(data)
+                    for rng in bytes_range.decode("latin-1").removeprefix("bytes=").split(", "):
+                        if rng.startswith("-"):
+                            b += data[int(rng):]
+                        elif rng.endswith("-"):
+                            b += data[int(rng[:-1]):]
+                        else:
+                            start, end = map(int, rng.split("-", 1))
+                            b += data[start:end+1]
+                    return Response(
+                        206, 
+                        headers=[(b"Content-Length", b"%d" % len(b)), (b"Accept-Ranges", b"bytes"), (b"Range", bytes_range)], 
+                        content=Content(b"application/octent-stream", data=b), 
+                    )
+                else:
+                    return Response(
+                        200, 
+                        headers=[(b"Content-Length", b"%d" % size)], 
+                        content=Content(b"application/octent-stream", data=data), 
+                    )
+            sha1, size, pickcode = attr["sha1"], attr["size"], attr["pickcode"]
+            key = (sha1, size)
+            if size <= 1024 * 64:
+                if data := FILE_DATA_CACHE.get(key):
+                    return get_ranged_data(data)
+                else:
+                    data = await to_thread(
+                        find, 
+                        con_file, 
+                        "SELECT data FROM data WHERE sha1=:sha1 AND size=:size", 
+                        locals(), 
+                    )
+                if data is not None:
+                    FILE_DATA_CACHE[key] = data
+                    return get_ranged_data(data)
             resp = await get_url(
                 request, 
                 pickcode=pickcode, 
                 web=web, 
             )
             url: P115URL = resp["url"]
+            if size <= 1024 * 64:
+                with FILE_LOCK_CACHE.setdefault(key, Lock()):
+                    if data := FILE_DATA_CACHE.get(key):
+                        return get_ranged_data(data)
+                    else:
+                        data = await to_thread(
+                            find, 
+                            con_file, 
+                            "SELECT data FROM data WHERE sha1=:sha1 AND size=:size", 
+                            locals(), 
+                        )
+                        if data is not None:
+                            FILE_DATA_CACHE[key] = data
+                            return get_ranged_data(data)
+                    if client is None:
+                        resp = await async_session.request("GET", url, headers=url.get("headers"))
+                        data = await resp.aread()
+                    else:
+                        data = await client.read_bytes(url, async_=True)
+                    FILE_DATA_CACHE[key] = data
+                    await to_thread(execute, con_file, """\
+INSERT INTO data(sha1, size, data) VALUES(:sha1, :size, :data) 
+ON CONFLICT DO UPDATE SET data = excluded.data;""", locals())
+                    return get_ranged_data(data)
             if web:
                 cookie = resp["headers"]["Cookie"]
                 return Response(
@@ -551,6 +638,10 @@ def make_application(
                 raise AttributeError(attr) from e
 
         @locked_cacheproperty
+        def creationdate(self, /) -> float:
+            return self.attr["ctime"]
+
+        @locked_cacheproperty
         def mtime(self, /) -> int | float:
             return self.attr["mtime"]
 
@@ -561,6 +652,9 @@ def make_application(
         @locked_cacheproperty
         def size(self, /) -> int:
             return self.attr.get("size") or 0
+
+        def get_creation_date(self, /) -> float:
+            return self.creationdate
 
         def get_display_name(self, /) -> str:
             return self.name
@@ -609,6 +703,31 @@ def make_application(
                 return f"{self.environ['wsgi.url_scheme']}://{self.environ['HTTP_HOST']}"
 
         @locked_cacheproperty
+        def file_data(self, /) -> bytes:
+            attr = self.attr
+            size = attr["size"]
+            if size > 1024 * 64:
+                raise DAVError(302, add_headers=[("Location", self.url)])
+            sha1 = attr["sha1"]
+            key = (sha1, size)
+            if data := FILE_DATA_CACHE.get(key):
+                return data
+            with FILE_LOCK_CACHE.setdefault(key, Lock()):
+                data = find(
+                    con_file, 
+                    "SELECT data FROM data WHERE sha1=:sha1 AND size=:size", 
+                    locals(), 
+                )
+                if data is not None:
+                    FILE_DATA_CACHE[key] = data
+                    return data
+                data = FILE_DATA_CACHE[key] = session.request("GET", self.url).read()
+                execute(con_file, """\
+INSERT INTO data(sha1, size, data) VALUES(:sha1, :size, :data) 
+ON CONFLICT DO UPDATE SET data = excluded.data;""", locals())
+                return data
+
+        @locked_cacheproperty
         def size(self, /) -> int:
             if self.is_strm:
                 return len(self.strm_data)
@@ -627,7 +746,7 @@ def make_application(
         def get_content(self, /):
             if self.is_strm:
                 return BytesIO(self.strm_data)
-            raise DAVError(302, add_headers=[("Location", self.url)])
+            return BytesIO(self.file_data)
 
         def get_content_length(self, /) -> int:
             return self.size
@@ -722,8 +841,9 @@ def make_application(
                 if not isinstance(inst, FolderResource):
                     raise DAVError(404, path)
                 return inst.get_member(name)
-            attr = attr_to_path(con, path, False if is_dir else None)
-            if attr is None:
+            try:
+                attr = attr_to_path(con, path, ensure_file=False if is_dir else None)
+            except FileNotFoundError:
                 raise DAVError(404, path)
             is_strm = False
             is_dir = attr["is_dir"]
@@ -758,6 +878,4 @@ def make_application(
 # TODO: 目前 webdav 是只读的，之后需要支持写入和删除，写入小文件不会上传，因此需要一个本地的 id，如果路径上原来有记录，则替换掉此记录（删除记录，生成本地 id 的数据，插入数据）
 # TODO: 如果需要写入文件，会先把数据存入临时文件，等到关闭文件，再自动写入数据库。如果文件未被修改，则忽略，如果修改了，就用我本地的id替代原来的数据
 # TODO: 文件可以被 append 写，这时打开时，会先把数据库的数据写到硬盘，然后打开这个临时文件
-# TODO: 实现自动排除空目录而不展示
-# TODO: 使用 sha1 和 size 对数据进行缓存（？？？）
 # TODO: 实现 get_properties: https://wsgidav.readthedocs.io/en/latest/_autosummary/wsgidav.dav_provider.DAVNonCollection.get_properties.html#wsgidav.dav_provider.DAVNonCollection.get_properties

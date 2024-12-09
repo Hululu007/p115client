@@ -3,22 +3,22 @@
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __all__ = [
-    "iter_attr_to_path", "attr_to_path", "get_id", "get_pickcode", "get_sha1", 
+    "iter_id_to_path", "id_to_path", "get_id", "get_pickcode", "get_sha1", 
     "get_path", "get_ancestors", "get_attr", "iter_children", "iter_descendants", 
-    "iter_descendants_fast", "dump_to_alist", 
+    "iter_descendants_fast", "iter_files_with_path_url", "select_na_ids", 
+    "select_mtime_groups", "dump_to_alist", 
 ]
 
-import errno
-
 from collections.abc import Callable, Iterator, Sequence
-from copy import copy
 from datetime import datetime
+from errno import ENOENT, ENOTDIR
 from itertools import batched
 from os.path import expanduser
 from pathlib import Path
 from sqlite3 import register_adapter, register_converter, Connection, Cursor, OperationalError
 from posixpath import join
 from typing import cast, overload, Any, Final, Literal
+from urllib.parse import quote
 
 from posixpatht import escape, path_is_dir_form, splits
 from sqlitetools import find, query, transact
@@ -31,22 +31,17 @@ FIELDS: Final = (
     "ctime", "mtime", "is_collect", "is_alive", "updated_at", 
 )
 EXTENDED_FIELDS: Final = (*FIELDS, "path", "posixpath")
-ROOT: Final = {
-    "id": 0, "parent_id": 0, "pickcode": "", "sha1": "", "name": "", "size": 0, 
-    "is_dir": 1, "type": 0, "ctime": 0, "mtime": 0, "is_collect": 0, 
-    "is_alive": 1, "updated_at": datetime.fromtimestamp(0), 
-}
 
 register_converter("DATETIME", lambda dt: datetime.fromisoformat(str(dt, "utf-8")))
 
 
-def iter_attr_to_path(
+def iter_id_to_path(
     con: Connection | Cursor, 
+    /, 
     path: str | Sequence[str] = "", 
     ensure_file: None | bool = None, 
-    /, 
     parent_id: int = 0, 
-) -> Iterator[dict]:
+) -> Iterator[int]:
     """查询匹配某个路径的文件或目录的信息字典
 
     .. note::
@@ -62,7 +57,7 @@ def iter_attr_to_path(
 
     :param parent_id: 顶层目录的 id
 
-    :return: 迭代器，产生一组匹配指定路径的（文件或目录）节点的信息字典
+    :return: 迭代器，产生一组匹配指定路径的（文件或目录）节点的 id
     """
     patht: Sequence[str]
     if isinstance(path, str):
@@ -72,7 +67,7 @@ def iter_attr_to_path(
     else:
         patht = ("", *filter(None, path))
     if not parent_id and len(patht) == 1:
-        yield copy(ROOT)
+        yield 0
         return
     if len(patht) > 2:
         sql = "SELECT id FROM data WHERE parent_id=? AND name=? AND is_alive AND is_dir LIMIT 1"
@@ -80,24 +75,24 @@ def iter_attr_to_path(
             parent_id = find(con, sql, (parent_id, name), default=-1)
             if parent_id < 0:
                 return
-    sql = "SELECT * FROM data WHERE parent_id=? AND name=? AND is_alive"
+    sql = "SELECT id FROM data WHERE parent_id=? AND name=? AND is_alive"
     if ensure_file is None:
         sql += " ORDER BY is_dir DESC"
     elif ensure_file:
         sql += " AND NOT is_dir"
     else:
         sql += " AND is_dir LIMIT 1"
-    for record in query(con, sql, (parent_id, patht[-1])):
-        yield dict(zip(FIELDS, record))
+    for id, in query(con, sql, (parent_id, patht[-1])):
+        yield id
 
 
-def attr_to_path(
+def id_to_path(
     con: Connection | Cursor, 
+    /, 
     path: str | Sequence[str] = "", 
     ensure_file: None | bool = None, 
-    /, 
     parent_id: int = 0, 
-) -> None | dict:
+) -> int:
     """查询匹配某个路径的文件或目录的信息字典，只返回找到的第 1 个
 
     :param con: 数据库连接或游标
@@ -110,13 +105,17 @@ def attr_to_path(
 
     :param parent_id: 顶层目录的 id
 
-    :return: 信息字典，如果为 None，说明没找到
+    :return: 找到的第 1 个匹配的节点 id
     """
-    return next(iter_attr_to_path(con, path, ensure_file, parent_id), None)
+    try:
+        return next(iter_id_to_path(con, path, ensure_file, parent_id))
+    except StopIteration:
+        raise FileNotFoundError(ENOENT, path)
 
 
 def get_id(
     con: Connection | Cursor, 
+    /, 
     pickcode: str = "", 
     sha1: str = "", 
     path: str = "", 
@@ -145,16 +144,14 @@ def get_id(
             default=FileNotFoundError(sha1), 
         )
     elif path:
-        attr = attr_to_path(con, path)
-        if attr is None:
-            raise FileNotFoundError(errno.ENOENT, path)
-        return attr["id"]
+        return id_to_path(con, path)
     return 0
 
 
 def get_pickcode(
     con: Connection | Cursor, 
-    id: int = 0, 
+    /, 
+    id: int = -1, 
     sha1: str = "", 
     path: str = "", 
 ) -> str:
@@ -167,32 +164,32 @@ def get_pickcode(
 
     :return: 当前节点的提取码
     """
-    if id:
+    if id >= 0:
+        if not id:
+            return ""
         return find(
             con, 
-            "SELECT pickcode FROM data WHERE id=? AND LENGTH(pickcode) LIMIT 1;", 
+            "SELECT pickcode FROM data WHERE id=? LIMIT 1;", 
             id, 
             default=FileNotFoundError(id), 
         )
     elif sha1:
         return find(
             con, 
-            "SELECT pickcode FROM data WHERE sha1=? AND LENGTH(pickcode) LIMIT 1;", 
+            "SELECT pickcode FROM data WHERE sha1=? LIMIT 1;", 
             sha1, 
             default=FileNotFoundError(sha1), 
         )
     else:
         if path in ("", "/"):
-            raise IsADirectoryError(errno.EISDIR, "root directory has no pickcode")
-        attr = attr_to_path(con, path)
-        if attr is None:
-            raise FileNotFoundError(errno.ENOENT, path)
-        return attr["pickcode"]
+            return ""
+        return get_pickcode(con, id_to_path(con, path))
 
 
 def get_sha1(
     con: Connection | Cursor, 
-    id: int = 0, 
+    /, 
+    id: int = -1, 
     pickcode: str = "", 
     path: str = "", 
 ) -> str:
@@ -205,35 +202,32 @@ def get_sha1(
 
     :return: 当前节点的 sha1 校验散列值
     """
-    if id:
+    if id >= 0:
+        if not id:
+            return ""
         return find(
             con, 
-            "SELECT sha1 FROM data WHERE id=? AND LENGTH(sha1) LIMIT 1;", 
+            "SELECT sha1 FROM data WHERE id=? LIMIT 1;", 
             id, 
             default=FileNotFoundError(id), 
         )
     elif pickcode:
         return find(
             con, 
-            "SELECT sha1 FROM data WHERE pickcode=? AND LENGTH(sha1) LIMIT 1;", 
+            "SELECT sha1 FROM data WHERE pickcode=? LIMIT 1;", 
             pickcode, 
             default=FileNotFoundError(pickcode), 
         )
-    elif path:
+    else:
         if path in ("", "/"):
-            raise IsADirectoryError(errno.EISDIR, "root directory has no sha1")
-        attr = attr_to_path(con, path)
-        if attr is None:
-            raise FileNotFoundError(errno.ENOENT, path)
-        elif attr["is_dir"]:
-            raise IsADirectoryError(errno.EISDIR, path)
-        return attr["sha1"]
-    raise IsADirectoryError(errno.EISDIR, path)
+            return ""
+        return get_sha1(con, id_to_path(con, path))
 
 
 def get_path(
     con: Connection | Cursor, 
     id: int = 0, 
+    /, 
 ) -> str:
     """获取某个文件或目录的路径
 
@@ -251,6 +245,7 @@ def get_path(
 def get_ancestors(
     con: Connection | Cursor, 
     id: int = 0, 
+    /, 
 ) -> list[dict]:
     """获取某个文件或目录的祖先节点信息，包括 id、parent_id 和 name
 
@@ -270,7 +265,7 @@ WITH t AS (
 )
 SELECT id, parent_id, name FROM t;""", id))
     if not ls:
-        raise FileNotFoundError(errno.ENOENT, id)
+        raise FileNotFoundError(ENOENT, id)
     if ls[-1][1]:
         raise ValueError(f"dangling id: {id}")
     ancestors.extend(dict(zip(("id", "parent_id", "name"), record)) for record in reversed(ls))
@@ -280,6 +275,7 @@ SELECT id, parent_id, name FROM t;""", id))
 def get_attr(
     con: Connection | Cursor, 
     id: int = 0, 
+    /, 
 ) -> dict:
     """获取某个文件或目录的信息
 
@@ -289,22 +285,37 @@ def get_attr(
     :return: 当前节点的信息字典
     """
     if not id:
-        return copy(ROOT)
+        return {
+            "id": 0, "parent_id": 0, "pickcode": "", "sha1": "", "name": "", "size": 0, 
+            "is_dir": 1, "type": 0, "ctime": 0, "mtime": 0, "is_collect": 0, 
+            "is_alive": 1, "updated_at": datetime.fromtimestamp(0), 
+        }
     record = next(query(con, "SELECT * FROM data WHERE id=? LIMIT 1", id), None)
     if record is None:
-        raise FileNotFoundError(errno.ENOENT, id)
+        raise FileNotFoundError(ENOENT, id)
     return dict(zip(FIELDS, record))
 
 
 def iter_children(
     con: Connection | Cursor, 
     parent_id: int | dict = 0, 
+    /, 
+    fields: tuple[str, ...] = FIELDS, 
     ensure_file: None | bool = None, 
 ) -> Iterator[dict]:
     """获取某个目录之下的文件或目录的信息
 
     :param con: 数据库连接或游标
     :param parent_id: 父目录的 id
+    :param fields: 需要获取的字段，接受如下这些
+
+        .. code:: python
+
+            (
+                "id", "parent_id", "pickcode", "sha1", "name", "size", "is_dir", "type", 
+                "ctime", "mtime", "is_collect", "is_alive", "updated_at", 
+            )
+
     :param ensure_file: 是否仅输出文件
 
         - 如果为 True，仅输出文件
@@ -317,21 +328,25 @@ def iter_children(
         attr = get_attr(con, parent_id)
     else:
         attr = parent_id
+    if not fields:
+        fields = FIELDS
     if not attr["is_dir"]:
-        raise NotADirectoryError(errno.ENOTDIR, attr)
-    sql = "SELECT * FROM data WHERE parent_id=? AND is_alive"
+        raise NotADirectoryError(ENOTDIR, attr)
+    sql = "SELECT %s FROM data WHERE parent_id=? AND is_alive" % ",".join(fields)
     if ensure_file:
         sql += " AND NOT is_dir"
     elif ensure_file is not None:
         sql += " AND is_dir"
-    return (dict(zip(FIELDS, record)) for record in query(con, sql, attr["id"]))
+    return (dict(zip(fields, record)) for record in query(con, sql, attr["id"]))
 
 
 def iter_descendants(
     con: Connection | Cursor, 
     parent_id: int | dict = 0, 
+    /, 
     topdown: None | bool = True, 
     max_depth: int = -1, 
+    fields: tuple[str, ...] = FIELDS, 
     ensure_file: None | bool = None, 
 ) -> Iterator[dict]:
     """遍历获取某个目录之下的所有文件或目录的信息
@@ -345,6 +360,15 @@ def iter_descendants(
         - 如果为 None，则自顶向下宽度优先遍历
 
     :param max_depth: 最大深度。如果小于 0，则无限深度
+    :param fields: 需要获取的字段，接受如下这些
+
+        .. code:: python
+
+            (
+                "id", "parent_id", "pickcode", "sha1", "name", "size", "is_dir", "type", 
+                "ctime", "mtime", "is_collect", "is_alive", "updated_at", 
+            )
+
     :param ensure_file: 是否仅输出文件
 
         - 如果为 True，仅输出文件
@@ -367,7 +391,7 @@ def iter_descendants(
         send = gen.send
         for parent_id, depth, ancestors, dir_, posixdir in gen:
             depth -= depth > 0
-            for attr in iter_children(con, parent_id):
+            for attr in iter_children(con, parent_id, fields=fields):
                 ancestors = attr["ancestors"] = [
                     *ancestors, 
                     {k: attr[k] for k in ("id", "parent_id", "name")}, 
@@ -386,7 +410,7 @@ def iter_descendants(
                     yield attr
     else:
         max_depth -= max_depth > 0
-        for attr in iter_children(con, parent_id):
+        for attr in iter_children(con, parent_id, fields=fields):
             is_dir = attr["is_dir"]
             attr["ancestors"] = [
                 *ancestors, 
@@ -424,6 +448,7 @@ def iter_descendants(
 def iter_descendants_fast(
     con: Connection | Cursor, 
     parent_id: int = 0, 
+    /, 
     *, 
     fields: Literal[False], 
     max_depth: int = -1, 
@@ -436,6 +461,7 @@ def iter_descendants_fast(
 def iter_descendants_fast(
     con: Connection | Cursor, 
     parent_id: int = 0, 
+    /, 
     *, 
     fields: Literal[True] | tuple[str, ...] = True, 
     max_depth: int = -1, 
@@ -449,6 +475,7 @@ def iter_descendants_fast(
 def iter_descendants_fast(
     con: Connection | Cursor, 
     parent_id: int = 0, 
+    /, 
     *, 
     fields: Literal[True] | tuple[str, ...] = True, 
     max_depth: int = -1, 
@@ -461,6 +488,7 @@ def iter_descendants_fast(
 def iter_descendants_fast(
     con: Connection | Cursor, 
     parent_id: int = 0, 
+    /, 
     *, 
     fields: bool | tuple[str, ...] = True, 
     max_depth: int = -1, 
@@ -604,8 +632,104 @@ SELECT {",".join(fields)} FROM t AS data WHERE TRUE""" % args
         return cur
 
 
+def iter_files_with_path_url(
+    con: Connection | Cursor, 
+    parent_id: int | str = 0, 
+    /, 
+    base_url: str = "http://localhost:8000", 
+) -> Iterator[tuple[str, str]]:
+    """迭代获取所有文件的路径和下载链接
+
+    :param con: 数据库连接或游标
+    :param parent_id: 根目录 id 或者路径
+    :param base_url: 115 的 302 服务后端地址
+
+    :return: 迭代器，返回每个文件的 路径 和 下载链接 的 2 元组
+    """
+    if isinstance(parent_id, str):
+        parent_id = get_id(con, path=parent_id)
+    code = compile('f"%s/{quote(name, '"''"')}?{id=}&{pickcode=!s}&{sha1=!s}&{size=}&file=true"' % base_url.translate({ord(c): c*2 for c in "{}"}), "-", "eval")
+    for attr in iter_descendants_fast(
+        con, 
+        parent_id, 
+        fields=("id", "sha1", "pickcode", "size", "name", "posixpath"), 
+        ensure_file=True, 
+    ):
+        yield attr["posixpath"], eval(code, None, attr)
+
+
+def select_na_ids(
+    con: Connection | Cursor, 
+    /, 
+) -> set[int]:
+    """找出所有的失效节点和悬空节点的 id
+
+    .. note::
+        悬空节点，就是此节点有一个祖先节点的 id，不为 0 且不在 `data` 表中
+
+    :param con: 数据库连接或游标
+
+    :return: 一组悬空节点的 id 的集合
+    """
+    ok_ids: set[int] = set(query(con, "SELECT id FROM data WHERE NOT is_alive"))
+    na_ids: set[int] = set()
+    d = dict(query(con, "SELECT id, parent_id FROM data WHERE is_alive"))
+    temp: list[int] = []
+    push = temp.append
+    clear = temp.clear
+    update_ok = ok_ids.update
+    update_na = na_ids.update
+    for k, v in d.items():
+        try:
+            push(k)
+            while k := d[k]:
+                if k in ok_ids:
+                    update_ok(temp)
+                    break
+                elif k in na_ids:
+                    update_na(temp)
+                    break
+                push(k)
+            else:
+                update_ok(temp)
+        except KeyError:
+            update_na(temp)
+        finally:
+            clear()
+    return na_ids
+
+
+def select_mtime_groups(
+    con: Connection | Cursor, 
+    parent_id: int = 0, 
+    /, 
+    tree: bool = False, 
+) -> tuple[int, list[tuple[int, set[int]]]]:
+    """获取某个目录之下的节点（不含此节点本身），按 mtime 进行分组，相同 mtime 的 id 归入同一组
+
+    :param con: 数据库连接或游标
+    :param parent_id: 父目录的 id
+    :param tree: 是否拉取目录树，如果为 True，则拉取全部后代的文件节点（不含目录节点），如果为 False，则只拉取子节点（含目录节点）
+
+    :return: 字典，表示相同 mtime 的 id 的集合，所以 key 是 mtime，value 是一组 id 的集合
+    """
+    if tree:
+        it = iter_descendants_fast(con, parent_id, fields=("id", "mtime"), ensure_file=True, to_dict=False)
+    else:
+        it = iter_descendants_fast(con, parent_id, fields=("id", "mtime"), max_depth=1, to_dict=False)
+    d: dict[int, set[int]] = {}
+    n = 0
+    for n, (id, mtime) in enumerate(it, 1):
+        try:
+            d[mtime].add(id)
+        except KeyError:
+            d[mtime] = {id}
+    return n, sorted(d.items(), reverse=True)
+
+
 def dump_to_alist(
     con: Connection | Cursor, 
+    /, 
     alist_db: str | Path | Connection | Cursor = expanduser("~/alist.d/data/data.db"), 
     parent_id: int | str = 0, 
     dirname: str = "/115", 

@@ -402,12 +402,12 @@ def make_application(
                 cur.execute(sql, (params,))
             return cur.fetchall()
 
-    async def get_id_from_db(pickcode: str = "", sha1: str = "") -> int:
+    async def get_id_from_db(pickcode: str = "", sha1: str = "") -> None | int:
         if pickcode:
-            return await to_thread(query, "SELECT id FROM data WHERE pickcode=? LIMIT 1;", pickcode, default=0)
+            return await to_thread(query, "SELECT id FROM data WHERE pickcode=? LIMIT 1;", pickcode)
         elif sha1:
-            return await to_thread(query, "SELECT id FROM data WHERE sha1=? LIMIT 1;", sha1, default=0)
-        return 0
+            return await to_thread(query, "SELECT id FROM data WHERE sha1=? LIMIT 1;", sha1)
+        return None
 
     async def get_pickcode_from_db(id: int = 0, sha1: str = "") -> str:
         if id:
@@ -438,7 +438,7 @@ def make_application(
                 raise FileNotFoundError({"share_code": share_code, "id": id, "sha1": sha1, "path": path})
         return pid
 
-    async def get_share_id_from_db(share_code, sha1: str = "", path: str = ""):
+    async def get_share_id_from_db(share_code: str, sha1: str = "", path: str = "") -> None | int:
         fid: None | int = None
         if sha1:
             fid = await to_thread(query, "SELECT id FROM share_data WHERE share_code=? AND sha1=? LIMIT 1;", (share_code, sha1))
@@ -647,12 +647,24 @@ LIMIT 1;""", (share_code, id))
             nonlocal resp
             offset = 0
             payload["limit"] = page_size
+            dirs: deque[AttrDict] = deque()
+            push, pop = dirs.append, dirs.popleft
             while True:
                 update_cache(ancestors[1:])
-                for attr in resp["data"]:
-                    yield normalize_attr(attr)
-                offset += len(resp["data"])
+                data = resp["data"]
+                for attr in map(normalize_attr, data):
+                    if attr["is_dir"]:
+                        push(attr)
+                    else:
+                        if dirs:
+                            mtime = attr["mtime"]
+                            while dirs and dirs[0]["mtime"] >= mtime:
+                                yield pop()
+                        yield attr
+                offset += len(data)
                 if offset >= resp["count"]:
+                    for attr in dirs:
+                        yield dirs
                     break
                 payload["offset"] = offset
                 resp = await client.fs_files_app(payload, app="android", async_=True)

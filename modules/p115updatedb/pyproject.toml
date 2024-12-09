@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "p115updatedb"
-version = "0.0.4"
+version = "0.0.8.1"
 description = "把 115 网盘的文件列表导出到数据库"
 authors = ["ChenyangGao <wosiwujm@gmail.com>"]
 license = "MIT"
