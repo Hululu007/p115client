@@ -664,7 +664,7 @@ LIMIT 1;""", (share_code, id))
                 offset += len(data)
                 if offset >= resp["count"]:
                     for attr in dirs:
-                        yield dirs
+                        yield attr
                     break
                 payload["offset"] = offset
                 resp = await client.fs_files_app(payload, app="android", async_=True)
@@ -787,8 +787,8 @@ LIMIT 1;""", (share_code, id))
             offset = 0
             count = 0
             payload = {
-                "asc": 1, "cid": cid, "cur": 1, "custom_order": 1, "fc_mix": 0, "limit": 1150, 
-                "o": "file_name", "offset": offset, "show_dir": 1, 
+                "asc": 1, "cid": cid, "cur": 1, "custom_order": 1, "fc_mix": 0, 
+                "limit": 1150, "o": "file_name", "offset": offset, "show_dir": 1, 
             }
             get_list = next(_get_list_gen)
             resp = await get_list(client, payload)
@@ -802,7 +802,10 @@ LIMIT 1;""", (share_code, id))
                 elif count != resp["count"]:
                     raise BusyOSError(f"count changes during iteration: {cid}")
                 ancestors = [{"id": "0", "parent_id": "0", "name": ""}]
-                ancestors.extend({"id": a["cid"], "parent_id": a["pid"], "name": a["name"]} for a in resp["path"][1:])
+                ancestors.extend(
+                    {"id": a["cid"], "parent_id": a["pid"], "name": a["name"]} 
+                    for a in resp["path"][1:]
+                )
                 children.extend(map(normalize_attr, resp["data"]))
                 offset += len(resp["data"])
                 if offset >= resp["count"]:
@@ -854,7 +857,11 @@ LIMIT 1;""", (share_code, id))
                     ancestors = list(plist["ancestors"])
                 else:
                     ancestors = cast(list[dict], await get_share_ancestors_from_db(share_code, parent_id))
-            ancestors.append({"id": str(cid), "parent_id": attr["parent_id"], "name": attr["name"] if cid else ""})
+            ancestors.append({
+                "id": str(cid), 
+                "parent_id": attr["parent_id"], 
+                "name": attr["name"] if cid else "", 
+            })
             children = await to_list(cast(AsyncIterator[AttrDict], share_iterdir(
                 client, 
                 share_code, 
@@ -1764,7 +1771,13 @@ END;
         headers = [
             (bytes(k, "latin-1"), bytes(v, "latin-1")) 
             for k, v in resp.headers.items()
-            if k.lower() not in (b"access-control-allow-methods", b"access-control-allow-origin", b"date", b"content-type", b"transfer-encoding")
+            if k.lower() not in (
+                b"access-control-allow-methods", 
+                b"access-control-allow-origin", 
+                b"date", 
+                b"content-type", 
+                b"transfer-encoding", 
+            )
         ]
         headers.append((b"access-control-allow-methods", b"PUT, GET, HEAD, POST, DELETE, OPTIONS"))
         headers.append((b"access-control-allow-origin", b"*"))
@@ -1819,7 +1832,7 @@ END;
 
         @locked_cacheproperty
         def mtime(self, /) -> int | float:
-            return self.attr["mtime"]
+            return self.attr.get("mtime", 0)
 
         @locked_cacheproperty
         def name(self, /) -> str:
@@ -1981,7 +1994,8 @@ END;
                     else:
                         children[name] = FileResource(path, environ, attr, is_strm=is_strm)
                 if is_root:
-                    children["<share"] = FolderResource("/<share", environ, {"id": 0, "name": "<share", "size": 0})
+                    children["<share"] = FolderResource(
+                        "/<share", environ, {"id": 0, "name": "<share", "size": 0})
             return children
 
         def get_member(self, /, name: str) -> FileResource | FolderResource:
@@ -2098,4 +2112,4 @@ if __name__ == "__main__":
 # TODO: 直接用 m3u8 实现播放列表和各种附加，这样一切都是流媒体
 # TODO: 可选参数：文件缓存，文件大小小于一定值的时候，把整个文件下载到数据库，使用 sha1 和 size 作为 key
 # TODO: webdav 支持读写
-# TODO: 使用多接口+多cookies进行分流，如果是 harmony，则只分配网页版接口
+# TODO: 使用多接口+多cookies进行分流，如果是 web 或 harmony，则只分配网页版接口

@@ -3,7 +3,8 @@
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __all__ = [
-    "MakeStrmLog", "batch_get_url", "iter_images_with_url", "iter_subtitles_with_url", 
+    "MakeStrmLog", "reduce_image_url_layers", "batch_get_url", "iter_url_batches", 
+    "iter_files_with_url", "iter_images_with_url", "iter_subtitles_with_url", 
     "iter_subtitle_batches", "make_strm", "make_strm_by_export_dir", 
 ]
 __doc__ = "这个模块提供了一些和下载有关的函数"
@@ -16,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from glob import iglob
 from inspect import isawaitable
-from itertools import chain
+from itertools import chain, islice
 from mimetypes import guess_type
 from os import fsdecode, makedirs, remove, PathLike
 from os.path import dirname, join as joinpath, normpath, splitext
@@ -38,12 +39,16 @@ from .export_dir import export_dir_parse_iter
 from .iterdir import get_path_to_cid, iter_files, iter_files_raw, DirNode, ID_TO_DIRNODE_CACHE
 
 
-def reduce_image_url_layers(url: str, /) -> str:
+def reduce_image_url_layers(url: str, /, size: str | int = "") -> str:
+    """从图片的缩略图链接中提取信息，以减少一次 302 访问
+    """
     if not url.startswith(("http://thumb.115.com/", "https://thumb.115.com/")):
         return url
     urlp = urlsplit(url)
-    sha1 = urlp.path.rsplit("/")[-1].split("_")[0]
-    return f"https://imgjump.115.com/?sha1={sha1}&{urlp.query}&size=0"
+    sha1, _, size0 = urlp.path.rsplit("/")[-1].partition("_")
+    if size == "":
+        size = size0 or "0"
+    return f"https://imgjump.115.com/?sha1={sha1}&{urlp.query}&size={size}"
 
 
 class MakeStrmResult(TypedDict):
@@ -147,6 +152,10 @@ def batch_get_url(
     """
     if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
+    if headers := request_kwargs.get("headers"):
+        request_kwargs["headers"] = dict(headers, **{"User-Agent": user_agent})
+    else:
+        request_kwargs["headers"] = {"User-Agent": user_agent}
     def gen_step():
         if isinstance(id_or_pickcode, int):
             resp = yield client.fs_file_skim(
@@ -182,9 +191,10 @@ def batch_get_url(
             if not pickcodes:
                 return {}
             pickcode = ",".join(pickcodes)
-        headers = request_kwargs["headers"] = {"User-Agent": user_agent}
         resp = yield client.download_url_app(pickcode, async_=async_, **request_kwargs)
         if not resp["state"]:
+            if resp.get("errno") != 50003:
+                check_response(resp)
             return {}
         headers = resp["headers"]
         return {
@@ -202,6 +212,230 @@ def batch_get_url(
             if info["url"]
         }
     return run_gen_step(gen_step, async_=async_)
+
+
+@overload
+def iter_url_batches(
+    client: str | P115Client, 
+    pickcodes: Iterator[str], 
+    user_agent: str = "", 
+    batch_size: int = 10, 
+    *, 
+    async_: Literal[False] = False, 
+    **request_kwargs, 
+) -> Iterator[P115URL]:
+    ...
+@overload
+def iter_url_batches(
+    client: str | P115Client, 
+    pickcodes: Iterator[str], 
+    user_agent: str = "", 
+    batch_size: int = 10, 
+    *, 
+    async_: Literal[True], 
+    **request_kwargs, 
+) -> AsyncIterator[P115URL]:
+    ...
+def iter_url_batches(
+    client: str | P115Client, 
+    pickcodes: Iterator[str], 
+    user_agent: str = "", 
+    batch_size: int = 10, 
+    *, 
+    async_: Literal[False, True] = False, 
+    **request_kwargs, 
+) -> Iterator[P115URL] | AsyncIterator[P115URL]:
+    """批量获取下载链接
+
+    .. attention::
+        请确保所有的 pickcode 都是有效的，要么是现在存在的，要么是以前存在过被删除的。
+
+        如果有目录的 pickcode 混在其中，则会自动排除。
+
+    :param client: 115 客户端或 cookies
+    :param pickcodes: 一个迭代器，产生提取码 pickcode
+    :param user_agent: "User-Agent" 请求头的值
+    :param batch_size: 每一个批次处理的个量
+    :param async_: 是否异步
+    :param request_kwargs: 其它请求参数
+
+    :return: 字典，key 是文件 id，value 是下载链接，自动忽略所有无效项目
+    """
+    if isinstance(client, str):
+        client = P115Client(client, check_for_relogin=True)
+    if headers := request_kwargs.get("headers"):
+        request_kwargs["headers"] = dict(headers, **{"User-Agent": user_agent})
+    else:
+        request_kwargs["headers"] = {"User-Agent": user_agent}
+    if batch_size <= 0:
+        batch_size = 1
+    def gen_step():
+        it = iter(pickcodes)
+        while pcs := ",".join(islice(it, batch_size)):
+            resp = yield client.download_url_app(
+                pcs, 
+                async_=async_, 
+                **request_kwargs, 
+            )
+            if not resp["state"]:
+                if resp.get("errno") != 50003:
+                    check_response(resp)
+                continue
+            headers = resp["headers"]
+            for id, info in resp["data"].items():
+                if url_info := info["url"]:
+                    yield Yield(P115URL(
+                        url_info["url"], 
+                        id=int(id), 
+                        pickcode=info["pick_code"], 
+                        name=info["file_name"], 
+                        size=int(info["file_size"]), 
+                        sha1=info["sha1"], 
+                        is_directory=False,
+                        headers=headers, 
+                    ), identity=True)
+    return run_gen_step_iter(gen_step, async_=async_)
+
+
+@overload
+def iter_files_with_url(
+    client: str | P115Client, 
+    cid: int = 0, 
+    suffixes: None | str | Iterable[str] = None, 
+    type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
+    cur: Literal[0, 1] = 0, 
+    with_ancestors: bool = False, 
+    with_path: bool = False, 
+    escape: None | Callable[[str], str] = escape, 
+    normalize_attr: Callable[[dict], dict] = normalize_attr, 
+    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    app: str = "web", 
+    raise_for_changed_count: bool = False, 
+    user_agent: str = "", 
+    *, 
+    async_: Literal[False] = False, 
+    **request_kwargs, 
+) -> Iterator[dict]:
+    ...
+@overload
+def iter_files_with_url(
+    client: str | P115Client, 
+    cid: int = 0, 
+    suffixes: None | str | Iterable[str] = None, 
+    type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
+    cur: Literal[0, 1] = 0, 
+    with_ancestors: bool = False, 
+    with_path: bool = False, 
+    escape: None | Callable[[str], str] = escape, 
+    normalize_attr: Callable[[dict], dict] = normalize_attr, 
+    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    app: str = "web", 
+    raise_for_changed_count: bool = False, 
+    user_agent: str = "", 
+    *, 
+    async_: Literal[True], 
+    **request_kwargs, 
+) -> AsyncIterator[dict]:
+    ...
+def iter_files_with_url(
+    client: str | P115Client, 
+    cid: int = 0, 
+    suffixes: None | str | Iterable[str] = None, 
+    type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
+    cur: Literal[0, 1] = 0, 
+    with_ancestors: bool = False, 
+    with_path: bool = False, 
+    escape: None | Callable[[str], str] = escape, 
+    normalize_attr: Callable[[dict], dict] = normalize_attr, 
+    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    app: str = "web", 
+    raise_for_changed_count: bool = False, 
+    user_agent: str = "", 
+    *, 
+    async_: Literal[False, True] = False, 
+    **request_kwargs, 
+) -> Iterator[dict] | AsyncIterator[dict]:
+    """获取文件信息和下载链接
+
+    :param client: 115 客户端或 cookies
+    :param cid: 目录 id
+    :param suffixes: 扩展名，可以有多个，最前面的 "." 可以省略
+    :param type: 文件类型
+
+        - 1: 文档
+        - 2: 图片
+        - 3: 音频
+        - 4: 视频
+        - 5: 压缩包
+        - 6: 应用
+        - 7: 书籍
+        - 99: 仅文件
+
+    :param cur: 仅当前目录。0: 否（将遍历子目录树上所有叶子节点），1: 是
+    :param with_ancestors: 文件信息中是否要包含 "ancestors"
+    :param with_path: 文件信息中是否要包含 "path"
+    :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
+    :param normalize_attr: 把数据进行转换处理，使之便于阅读
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param app: 使用某个 app （设备）的接口
+    :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
+    :param user_agent: "User-Agent" 请求头的值
+    :param async_: 是否异步
+    :param request_kwargs: 其它请求参数
+
+    :return: 迭代器，产生文件信息，并增加一个 "url" 作为下载链接
+    """
+    if isinstance(client, str):
+        client = P115Client(client, check_for_relogin=True)
+    params = dict(
+        cur=cur, 
+        with_ancestors=with_ancestors, 
+        with_path=with_path, 
+        escape=escape, 
+        normalize_attr=normalize_attr, 
+        id_to_dirnode=id_to_dirnode, 
+        raise_for_changed_count=raise_for_changed_count, 
+        async_=async_, 
+    )
+    def gen_step():
+        if suffixes is None:
+            it = iter_files(client, cid, type=type, app=app, **params, **request_kwargs) # type: ignore
+        elif isinstance(suffixes, str):
+            it = iter_files(client, cid, suffix=suffixes, app=app, **params, **request_kwargs) # type: ignore
+        else:
+            for suffix in suffixes:
+                yield YieldFrom(
+                    iter_files_with_url(client, cid, suffixes=suffix, app=app, **params, **request_kwargs), # type: ignore
+                    identity=True, 
+                )
+            return
+        do_next: Callable = anext if async_ else next
+        while True:
+            try:
+                attr = yield partial(do_next, it)
+            except (StopIteration, StopAsyncIteration):
+                break
+            else:
+                if attr.get("violated", False):
+                    if attr["size"] < 1024 * 1024 * 115:
+                        attr["url"] = yield partial(
+                            client.download_url, 
+                            attr["pickcode"], 
+                            use_web_api=True, 
+                            async_=async_, 
+                            **request_kwargs, 
+                        )
+                    else:
+                        warn(f"unable to get url for {attr!r}", category=P115Warning)
+                else:
+                    attr["url"] = yield partial(
+                        client.download_url, 
+                        attr["pickcode"], 
+                        async_=async_, 
+                        **request_kwargs, 
+                    )
+            yield Yield(attr, identity=True)
+    return run_gen_step_iter(gen_step, async_=async_)
 
 
 @overload
@@ -297,7 +531,7 @@ def iter_images_with_url(
         else:
             for suffix in suffixes:
                 yield YieldFrom(
-                    iter_images_with_url(client, cid, suffixes=suffix, **params, **request_kwargs), # type: ignore
+                    iter_images_with_url(client, cid, suffixes=suffix, app=app, **params, **request_kwargs), # type: ignore
                     identity=True, 
                 )
             return
@@ -321,7 +555,7 @@ def iter_images_with_url(
                     else:
                         warn(f"unable to get url for {attr!r}", category=P115Warning)
                 else:
-                    attr["url"] = partial(
+                    attr["url"] = yield partial(
                         client.download_url, 
                         attr["pickcode"], 
                         async_=async_, 
@@ -497,7 +731,7 @@ def iter_subtitles_with_url(
                         else:
                             warn(f"unable to get url for {attr!r}", category=P115Warning)
                     else:
-                        attr["url"] = partial(
+                        attr["url"] = yield partial(
                             client.download_url, 
                             attr["pickcode"], 
                             async_=async_, 
@@ -511,7 +745,7 @@ def iter_subtitles_with_url(
 def iter_subtitle_batches(
     client: str | P115Client, 
     file_ids: Iterable[int], 
-    batch_size = 1_000, 
+    batch_size: int = 1_000, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -521,7 +755,7 @@ def iter_subtitle_batches(
 def iter_subtitle_batches(
     client: str | P115Client, 
     file_ids: Iterable[int], 
-    batch_size = 1_000, 
+    batch_size: int = 1_000, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -530,7 +764,7 @@ def iter_subtitle_batches(
 def iter_subtitle_batches(
     client: str | P115Client, 
     file_ids: Iterable[int], 
-    batch_size = 1_000, 
+    batch_size: int = 1_000, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -545,7 +779,7 @@ def iter_subtitle_batches(
 
     :param client: 115 客户端或 cookies
     :param file_ids: 一组文件的 id（必须全是 115 所认为的字幕）
-    :param batch_size: 每一个批次最多处理的 id 数
+    :param batch_size: 每一个批次处理的个量
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 

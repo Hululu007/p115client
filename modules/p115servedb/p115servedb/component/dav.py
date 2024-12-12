@@ -879,3 +879,4 @@ ON CONFLICT DO UPDATE SET data = excluded.data;""", locals())
 # TODO: 如果需要写入文件，会先把数据存入临时文件，等到关闭文件，再自动写入数据库。如果文件未被修改，则忽略，如果修改了，就用我本地的id替代原来的数据
 # TODO: 文件可以被 append 写，这时打开时，会先把数据库的数据写到硬盘，然后打开这个临时文件
 # TODO: 实现 get_properties: https://wsgidav.readthedocs.io/en/latest/_autosummary/wsgidav.dav_provider.DAVNonCollection.get_properties.html#wsgidav.dav_provider.DAVNonCollection.get_properties
+# TODO: 应该可以自行指定缓存文件的大小（默认为 64 KB），也可以根据是不是本地网络，来决定走缓存还是走直链

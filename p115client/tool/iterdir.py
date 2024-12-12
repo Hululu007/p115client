@@ -56,6 +56,7 @@ class OverviewAttr(NamedTuple):
     mtime: int
 
 
+# TODO: 要不要缓存到本地临时文件
 #: 用于缓存每个用户（根据用户 id 区别）的每个目录 id 到所对应的 (名称, 父id) 的元组的字典的字典
 ID_TO_DIRNODE_CACHE: Final[defaultdict[int, dict[int, tuple[str, int] | DirNode]]] = defaultdict(dict)
 
@@ -299,6 +300,9 @@ class P115ID(P115DictAttrLike, int):
         return int.__repr__(self)
 
 
+# TODO: 如果以 "/" 结尾，则 ensure_file 为 None 时，视为 False
+# TODO: 再增加一个函数，get_id_to_posixpath，其它与路径有关的函数，也都增加此 posix 版本
+# TODO: 查看一下缓存，如果可以获取路径所对应的 id，然后检验一下它自己（如果为目录）或它的parent的ancestors，如果里面的 id 全都相同，则说明路径没变动
 @overload
 def get_id_to_path(
     client: str | P115Client, 
@@ -634,6 +638,11 @@ def filter_na_ids(
     return run_gen_step_iter(gen_step, async_=async_)
 
 
+# TODO: 修改 only_dirs 为 ensure_file: None | bool = None
+# TODO: ensure_file 为 True => show_dir=0 （可能需要 cur=1）
+# TODO: 如果 ensure_file 为 False，不过知道总共多少文件夹，则需要进行一些优化，以提升速度（当 app 为 web 时）
+# TODO: 如果 ensure_file 为 False，由于并不能只获取文件夹，因此需要进行判读，遇到文件则结束
+# TODO: 根据参数进行判断，如果必然结果为空，则不执行实际的请求
 @overload
 def _iter_fs_files(
     client: str | P115Client, 
@@ -1544,12 +1553,19 @@ def iter_files_raw(
         page_size = 10_000
     elif page_size < 16:
         page_size = 16
+    payload: dict = {
+        "asc": asc, "cid": cid, "count_folders": 0, "cur": cur, "limit": page_size, 
+        "o": order, "offset": 0, "show_dir": 0, 
+    }
+    if suffix:
+        payload["suffix"] = suffix
+    elif type == 99:
+        payload["show_dir"] = 0
+    else:
+        payload["type"] = type
     return _iter_fs_files(
         client, 
-        payload={
-            "asc": asc, "cid": cid, "count_folders": 0, "cur": cur, "limit": page_size, 
-            "o": order, "offset": 0, "show_dir": 0, "suffix": suffix, "type": type, 
-        }, 
+        payload=payload, 
         first_page_size=first_page_size, 
         id_to_dirnode=id_to_dirnode, 
         raise_for_changed_count=raise_for_changed_count, 

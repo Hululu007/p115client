@@ -54,24 +54,32 @@ class ServedbFuseOperations(Operations):
         strm_predicate: None | Callable[[MappingPath], bool] = None, 
         strm_origin: str = "http://localhost:8000", 
     ):
-        self.con = connect(
+        con = self.con = connect(
             dbfile, 
             check_same_thread=False, 
             uri=isinstance(dbfile, str) and dbfile.startswith("file:"), 
         )
-        path = find(self.con, "SELECT file FROM pragma_database_list() WHERE name='main';")
+        path = find(con, "SELECT file FROM pragma_database_list() WHERE name='main';")
         if path:
             dbpath = "%s-file%s" % splitext(path)
             uri = False
         else:
             dbpath = "file:file?mode=memory&cache=shared"
             uri = True
-        self.con_file = connect(
+        con_file = self.con_file = connect(
             dbpath, 
             autocommit=True, 
             check_same_thread=False, 
             uri=uri, 
         )
+        con_file.executescript("""\
+PRAGMA journal_mode = WAL;
+CREATE TABLE IF NOT EXISTS data (
+    sha1 TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    data BLOB
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sha1_size ON data(sha1, size);""")
         self.file_lock_cache: MutableMapping[tuple[str, int], Lock] = WeakValueDictionary()
         if cookies_path:
             cookies_path = Path(cookies_path)

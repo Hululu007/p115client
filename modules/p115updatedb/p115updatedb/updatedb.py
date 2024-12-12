@@ -503,7 +503,7 @@ def normalize_attr(info: Mapping, /) -> dict:
             "is_dir": is_dir, 
             "ctime": int(info["uppt"]), 
             "mtime": int(info["upt"]), 
-            "is_collect": int(info.get("ic") or 0), 
+            "is_collect": int(info.get("ic") or 0) == 1, 
             "is_alive": 1, 
         }
     else:
@@ -518,7 +518,7 @@ def normalize_attr(info: Mapping, /) -> dict:
             "is_dir": is_dir, 
             "ctime": int(info.get("tp") or 0), 
             "mtime": int(info.get("te") or 0), 
-            "is_collect": int(info.get("c") or 0), 
+            "is_collect": int(info.get("c") or 0) == 1, 
             "is_alive": 1, 
         }
     attr["type"] = typeof(attr)
