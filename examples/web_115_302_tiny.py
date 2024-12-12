@@ -17,23 +17,27 @@ __doc__ = """\
 
     1. 查询 pickcode
         http://localhost:8000?ecjq9ichcb40lzlvx
+        http://localhost:8000/ecjq9ichcb40lzlvx
         http://localhost:8000?pickcode=ecjq9ichcb40lzlvx
     2. 带（任意）名字查询 pickcode
         http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?ecjq9ichcb40lzlvx
         http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?pickcode=ecjq9ichcb40lzlvx
     3. 查询 id
         http://localhost:8000?2691590992858971545
+        http://localhost:8000/2691590992858971545
         http://localhost:8000?id=2691590992858971545
     4. 带（任意）名字查询 id
         http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?2691590992858971545
         http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?id=2691590992858971545
     5. 查询 sha1
         http://localhost:8000?E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
+        http://localhost:8000/E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
         http://localhost:8000?sha1=E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
     6. 带（任意）名字查询 sha1
         http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
         http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?sha1=E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
     7. 查询分享文件（如果是你自己的分享，则无须提供密码 receive_code）
+        http://localhost:8000?share_code=sw68md23w8m&receive_code=q353&id=2580033742990999218
         http://localhost:8000?share_code=sw68md23w8m&receive_code=q353&id=2580033742990999218
         http://localhost:8000?share_code=sw68md23w8m&id=2580033742990999218
     8. 带（任意）名字查询分享文件（如果是你自己的分享，则无须提供密码 receive_code）
@@ -361,8 +365,15 @@ def make_application(cookies: str, debug: bool = False) -> Application:
                         pickcode = await get_pickcode_to_id(int(query_string))
                     else:
                         raise ValueError(f"bad query string: {query_string!r}")
-                else:
-                    return text("", 404)
+                elif name:
+                    if len(name) == 17 and name.isalnum():
+                        pickcode = name
+                    elif len(name) == 40 and not name.strip(hexdigits):
+                        pickcode = await get_pickcode_for_sha1(name.upper())
+                    elif not name.strip(digits):
+                        pickcode = await get_pickcode_to_id(int(name))
+            if not pickcode:
+                return text(str(request.url), 404)
             user_agent = (request.get_first_header(b"User-agent") or b"").decode("latin-1")
             url = await get_downurl(pickcode.lower(), user_agent)
 
