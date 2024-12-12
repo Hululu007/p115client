@@ -377,7 +377,7 @@ if __name__ == "__main__":
     except ImportError:
         from sys import executable
         from subprocess import run
-        run([executable, "-m", "pip", "install", "-U", "blacksheep"], check=True)
+        run([executable, "-m", "pip", "install", "-U", "uvicorn"], check=True)
         import uvicorn
 
     print(__doc__)
