@@ -57,7 +57,7 @@ if __name__ == "__main__":
         print(".".join(map(str, __version__)))
         raise SystemExit(0)
     if args.license:
-        print(".".join(map(str, __licence__)))
+        print(__licence__)
         raise SystemExit(0)
     cookies = args.cookies.strip()
     if not cookies:
