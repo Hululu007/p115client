@@ -1987,7 +1987,6 @@ class P115Client:
                 .. code:: python
 
                     from blacksheep_client_request import request
-
         """
         if params:
             url = make_url(url, params)

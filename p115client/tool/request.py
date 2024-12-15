@@ -3,20 +3,28 @@
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __all__ = ["make_request"]
-__doc__ = "自定义请求方法"
+__doc__ = "自定义请求函数"
 
 from collections.abc import Callable
 from functools import partial
 from http.cookiejar import CookieJar
 from subprocess import run
 from sys import executable
+from typing import Literal
 
 
 def make_request(
-    package: str = "", 
+    module: Literal["", "httpx", "httpx_async", "requests", "urllib3", "urlopen", "aiohttp", "blacksheep"] = "", 
     cookiejar: None | CookieJar = None, 
 ) -> None | Callable:
-    match package:
+    """创建可更新 cookies 的请求函数
+
+    :param module: 指定所用的模块
+    :param cookiejar: cookies 罐，用来存储 cookies。如果为 None，则 "urllib3" 和 "urlopen" 并不会保存 cookies，其它 `module` 则有自己的 cookies 保存机制
+
+    :return: 一个请求函数，可供 `P115Client.request` 使用，所以也可传给所有基于前者的 `P115Client` 的方法，作为 `request` 参数
+    """
+    match module:
         case "":
             return None
         case "httpx":
@@ -51,10 +59,13 @@ def make_request(
             return partial(requests_request, session=session)
         case "urllib3":
             try:
+                from urllib3_request import __version__
+                if __version__ < (0, 0, 7):
+                    raise ImportError
                 from urllib3.poolmanager import PoolManager
                 from urllib3_request import request as urllib3_request
             except ImportError:
-                run([executable, "-m", "pip", "install", "-U", "urllib3", "urllib3_request"], check=True)
+                run([executable, "-m", "pip", "install", "-U", "urllib3", "urllib3_request>=0.0.7"], check=True)
                 from urllib3.poolmanager import PoolManager
                 from urllib3_request import request as urllib3_request
             return partial(urllib3_request, pool=PoolManager(128), cookies=cookiejar)
@@ -67,27 +78,29 @@ def make_request(
                 from urlopen import request as urlopen_request
             return partial(urlopen_request, cookies=cookiejar)
         case "aiohttp":
-            # TODO: 需要实现 cookiejar 的包装类，扩展 aiohttp.cookiejar.CookieJar
             try:
+                from aiohttp_client_request import __version__
+                if __version__ < (0, 0, 4):
+                    raise ImportError
                 from aiohttp import ClientSession as AiohttpClientSession
                 from aiohttp_client_request import request as aiohttp_request
             except ImportError:
-                run([executable, "-m", "pip", "install", "-U", "aiohttp", "aiohttp_client_request"], check=True)
+                run([executable, "-m", "pip", "install", "-U", "aiohttp", "aiohttp_client_request>=0.0.4"], check=True)
                 from aiohttp import ClientSession as AiohttpClientSession
                 from aiohttp_client_request import request as aiohttp_request
-            return partial(aiohttp_request, session=AiohttpClientSession())
+            return partial(aiohttp_request, session=AiohttpClientSession(), cookies=cookiejar)
         case "blacksheep":
-            # TODO: 需要实现 cookiejar 的包装类，扩展 blacksheep.client.cookies.CookieJar
             try:
+                from blacksheep_client_request import __version__
+                if __version__ < (0, 0, 3):
+                    raise ImportError
                 from blacksheep.client import ClientSession as BlacksheepClientSession
                 from blacksheep_client_request import request as blacksheep_request
             except ImportError:
-                run([executable, "-m", "pip", "install", "-U", "blacksheep", "blacksheep_client_request"], check=True)
+                run([executable, "-m", "pip", "install", "-U", "blacksheep", "blacksheep_client_request>=0.0.3"], check=True)
                 from blacksheep.client import ClientSession as BlacksheepClientSession
                 from blacksheep_client_request import request as blacksheep_request
-            return partial(blacksheep_request, session=BlacksheepClientSession())
+            return partial(blacksheep_request, session=BlacksheepClientSession(), cookies=cookiejar)
         case _:
-            raise ValueError(f"can't make request for {package!r}")
-
-# TODO: 这个模块还未完成，所以不要使用
+            raise ValueError(f"can't make request for {module!r}")
 

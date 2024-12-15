@@ -25,6 +25,7 @@ reference/tool/download
 reference/tool/edit
 reference/tool/export_dir
 reference/tool/iterdir
+reference/tool/request
 reference/tool/xys
 ```
 
