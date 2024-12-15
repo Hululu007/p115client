@@ -72,11 +72,12 @@ CRE_SET_COOKIE: Final = re_compile(r"[0-9a-f]{32}=[0-9a-f]{32}.*")
 CRE_CLIENT_API_search: Final = re_compile(r"^ +((?:GET|POST) .*)", MULTILINE).search
 CRE_SHARE_LINK_search1: Final = re_compile(r"(?:/s/|share\.115\.com/)(?P<share_code>[a-z0-9]+)\?password=(?P<receive_code>[a-z0-9]{4})").search
 CRE_SHARE_LINK_search2: Final = re_compile(r"(?P<share_code>[a-z0-9]+)-(?P<receive_code>[a-z0-9]{4})").search
-CRE_115_DOMAIN_match: Final = re_compile(r"https?://(?:[^.]+\.)*115.com").match
 CRE_COOKIES_UID_search: Final = re_compile(r"(?<=\bUID=)[^\s;]+").search
+CRE_API_match: Final = re_compile("http://(web|pro)api.115.com").match
 ED2K_NAME_TRANSTAB: Final = dict(zip(b"/|", ("%2F", "%7C")))
 
 _httpx_request = None
+get_origin = cycle(("http://anxia.com", "http://v.anxia.com")).__next__
 
 
 def make_prefix_generator(
@@ -114,7 +115,7 @@ def complete_api(path: str, /, base: str = "", base_url: bool | str = False) -> 
         path = "/" + path
     if base_url:
         if base_url is True:
-            base_url = "https://v.anxia.com"
+            base_url = get_origin()
             if not base:
                 base = "site"
         if base and not base.startswith("/"):
@@ -123,7 +124,7 @@ def complete_api(path: str, /, base: str = "", base_url: bool | str = False) -> 
     else:
         if base:
             base = f"{base}."
-        return f"https://{base}115.com{path}"
+        return f"http://{base}115.com{path}"
 
 
 def complete_webapi(
@@ -1751,7 +1752,7 @@ class P115Client:
                 setattr(inst, "cookies", cookies)
             else:
                 inst = type(self)(cookies, login_uid=self.login_uid, check_for_relogin=check_for_relogin)
-            if self is not inst and ssoent != inst.login_ssoent:
+            if self is not inst and ssoent == inst.login_ssoent:
                 warn(f"login with the same ssoent {ssoent!r}, {self!r} will expire within 60 seconds", category=P115Warning)
             return inst
         return run_gen_step(gen_step, async_=async_)
@@ -1990,32 +1991,27 @@ class P115Client:
         """
         if params:
             url = make_url(url, params)
-        need_cookie_header = CRE_115_DOMAIN_match(url) is None
-        check_for_relogin = self.check_for_relogin
         request_kwargs.setdefault("parse", default_parse)
-        if not need_cookie_header:
-            need_cookie_header = request is not None
+        headers = request_kwargs.get("headers")
+        need_set_cookies = not (request is None and (urlsplit(url).hostname or "").endswith("115.com"))
         if request is None:
             request_kwargs["session"] = self.async_session if async_ else self.session
             request_kwargs["async_"] = async_
+            headers = dict(headers) if headers else {}
             request = get_default_request()
-        if (headers := request_kwargs.get("headers")) is not None:
-            headers = request_kwargs["headers"] = {**self.headers, **headers}
-            if not need_cookie_header:
-                if not any(k.lower() == "cookie" for k in headers):
-                    headers = None
-            elif not any(k.lower() == "cookie" for k in headers):
-                headers["Cookie"] = self.cookies_str
-        elif need_cookie_header:
-            headers = request_kwargs["headers"] = {**self.headers, "Cookie": self.cookies_str}
-        if callable(check_for_relogin):
+        else:
+            headers = {**self.headers, **(headers or {})}
+        request_kwargs["headers"] = headers
+        if m := CRE_API_match(url):
+            headers["Host"] = m.expand(r"\1.api.115.com")
+        if callable(check_for_relogin := self.check_for_relogin):
             if async_:
                 async def wrap():
                     cookies_new: None | str
                     for i in count(0):
                         try:
                             cookies_old = self.cookies_str
-                            if headers is not None:
+                            if need_set_cookies:
                                 headers["Cookie"] = cookies_old
                             return await request(url=url, method=method, **request_kwargs)
                         except BaseException as e:
@@ -2057,7 +2053,7 @@ class P115Client:
                 for i in count(0):
                     try:
                         cookies_old = self.cookies_str
-                        if headers is not None:
+                        if need_set_cookies:
                             headers["Cookie"] = cookies_old
                         return request(url=url, method=method, **request_kwargs)
                     except BaseException as e:
@@ -2092,6 +2088,8 @@ class P115Client:
                                 if not (need_read_cookies and cookies_new):
                                     self.login_another_app(replace=True)
         else:
+            if need_set_cookies:
+                headers["Cookie"] = self.cookies_str
             return request(url=url, method=method, **request_kwargs)
 
     ########## Activity API ##########
@@ -2885,7 +2883,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "chrome", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -2897,7 +2895,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "chrome", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -2908,7 +2906,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "chrome", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -3687,7 +3685,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -3699,7 +3697,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -3710,7 +3708,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -4124,7 +4122,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -4136,7 +4134,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -4147,7 +4145,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -4532,7 +4530,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         mixin: str = "", 
         *, 
         async_: Literal[False] = False, 
@@ -4545,7 +4543,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         mixin: str = "", 
         *, 
         async_: Literal[True], 
@@ -4557,7 +4555,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         mixin: str = "", 
         *, 
         async_: Literal[False, True] = False, 
@@ -4659,7 +4657,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         mixin: str = "", 
         *, 
         async_: Literal[False] = False, 
@@ -4672,7 +4670,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         mixin: str = "", 
         *, 
         async_: Literal[True], 
@@ -4684,7 +4682,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         mixin: str = "", 
         *, 
         async_: Literal[False, True] = False, 
@@ -5334,7 +5332,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -5346,7 +5344,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -5357,7 +5355,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -5729,7 +5727,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -5741,7 +5739,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -5752,7 +5750,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -6284,7 +6282,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -6296,7 +6294,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -6307,7 +6305,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -6394,7 +6392,7 @@ class P115Client:
         payload: tuple[int | str, str] | dict | Iterable[tuple[int | str, str]], 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -6406,7 +6404,7 @@ class P115Client:
         payload: tuple[int | str, str] | dict | Iterable[tuple[int | str, str]], 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -6417,7 +6415,7 @@ class P115Client:
         payload: tuple[int | str, str] | dict | Iterable[tuple[int | str, str]], 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -6638,7 +6636,7 @@ class P115Client:
         payload: str | dict = ".", 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -6650,7 +6648,7 @@ class P115Client:
         payload: str | dict = ".", 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -6661,7 +6659,7 @@ class P115Client:
         payload: str | dict = ".", 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -6772,7 +6770,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -6783,7 +6781,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -6793,7 +6791,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -7030,7 +7028,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -7042,7 +7040,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -7053,7 +7051,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -7199,7 +7197,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -7211,7 +7209,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -7222,7 +7220,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -7247,7 +7245,7 @@ class P115Client:
         payload: str | dict = "", 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -7259,7 +7257,7 @@ class P115Client:
         payload: str | dict = "", 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -7270,7 +7268,7 @@ class P115Client:
         payload: str | dict = "", 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *,
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -10073,7 +10071,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -10084,7 +10082,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -10094,7 +10092,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -11116,7 +11114,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -11127,7 +11125,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -11137,7 +11135,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -11154,7 +11152,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -11165,7 +11163,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -11175,7 +11173,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -11343,7 +11341,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -11354,7 +11352,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -11364,7 +11362,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -11382,7 +11380,7 @@ class P115Client:
         payload: dict, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -11394,7 +11392,7 @@ class P115Client:
         payload: dict, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -11405,7 +11403,7 @@ class P115Client:
         payload: dict, 
         /, 
         app: str = "android", 
-        base_url: str = "https://proapi.115.com", 
+        base_url: str = "http://proapi.115.com", 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 

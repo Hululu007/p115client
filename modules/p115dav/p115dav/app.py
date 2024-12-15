@@ -19,7 +19,6 @@ from contextlib import closing, suppress
 from datetime import datetime
 from functools import partial
 from io import BytesIO
-from itertools import cycle
 from math import isinf, isnan
 from pathlib import Path
 from posixpath import split as splitpath, splitext
@@ -628,12 +627,17 @@ LIMIT 1;""", (share_code, id))
     ) -> None | P115ID:
         return next(share_info_to_path_gen(share_code, path, ensure_file, parent_id), None)
 
-    async def iterdir(cid: int, page_size: int = 10_000) -> tuple[int, list[dict], AsyncIterator[AttrDict]]:
+    async def iterdir(cid: int, first_page_size: int = 0, page_size: int = 1_150) -> tuple[int, list[dict], AsyncIterator[AttrDict]]:
+        if page_size <= 0:
+            page_size = 1_150
+        if first_page_size <= 0:
+            first_page_size = page_size
         payload = {
-            "asc": 0, "cid": cid, "cur": 1, "custom_order": 1, "fc_mix": 1, "limit": 16, 
+            "asc": 0, "cid": cid, "cur": 1, "custom_order": 1, "fc_mix": 1, "limit": first_page_size, 
             "o": "user_utime", "offset": 0, "show_dir": 1, 
         }
-        resp = await client.fs_files_app(payload, app="android", async_=True)
+        get_list = client.fs_files
+        resp = await get_list(payload, async_=True)
         check_response(resp)
         if cid and int(resp["path"][-1]["cid"]) != cid:
             raise FileNotFoundError(cid)
@@ -647,27 +651,16 @@ LIMIT 1;""", (share_code, id))
             nonlocal resp
             offset = 0
             payload["limit"] = page_size
-            dirs: deque[AttrDict] = deque()
-            push, pop = dirs.append, dirs.popleft
             while True:
                 update_cache(ancestors[1:])
                 data = resp["data"]
                 for attr in map(normalize_attr, data):
-                    if attr["is_dir"]:
-                        push(attr)
-                    else:
-                        if dirs:
-                            mtime = attr["mtime"]
-                            while dirs and dirs[0]["mtime"] >= mtime:
-                                yield pop()
-                        yield attr
+                    yield attr
                 offset += len(data)
                 if offset >= resp["count"]:
-                    for attr in dirs:
-                        yield attr
                     break
                 payload["offset"] = offset
-                resp = await client.fs_files_app(payload, app="android", async_=True)
+                resp = await get_list(payload, async_=True)
                 check_response(resp)
                 if cid and int(resp["path"][-1]["cid"]) != cid:
                     raise FileNotFoundError(cid)
@@ -679,11 +672,11 @@ LIMIT 1;""", (share_code, id))
                     raise BusyOSError(f"count changes during iteration: {cid}")
         return count, ancestors, iter()
 
-    async def update_file_list_partial(cid: int, file_list: dict, page_size: int = 10_000):
+    async def update_file_list_partial(cid: int, file_list: dict, page_size: int = 1150):
         """更新文件列表
         """
         try:
-            count, ancestors, it = await iterdir(cid, page_size)
+            count, ancestors, it = await iterdir(cid, 16, page_size)
         except FileNotFoundError:
             put_task(("UPDATE data SET parent_id=NULL WHERE id=?;", cid))
             raise
@@ -737,15 +730,6 @@ LIMIT 1;""", (share_code, id))
         file_list["ancestors"][:] = ancestors
         return file_list
 
-    _get_list_gen: Iterator[Callable] = cycle((
-        partial(P115Client.fs_files_app, async_=True), 
-        partial(P115Client.fs_files_aps, base_url=True, async_=True), 
-        partial(P115Client.fs_files, base_url=True, async_=True), 
-        partial(P115Client.fs_files_app, async_=True), 
-        partial(P115Client.fs_files_aps, base_url=False, async_=True), 
-        partial(P115Client.fs_files, base_url=False, async_=True), 
-    ))
-
     async def get_file_list(
         cid: int, 
         /, 
@@ -779,39 +763,16 @@ LIMIT 1;""", (share_code, id))
                     return file_list
                 elif ttl > 0:
                     updated_at = await to_thread(query, "SELECT updated_at FROM list WHERE id=?", cid)
-                    if time() - updated_at <= ttl:
+                    if not updated_at or time() - updated_at <= ttl:
                         return file_list
                 await update_file_list_partial(cid, file_list, page_size=page_size)
                 return file_list
-            children = []
-            offset = 0
-            count = 0
-            payload = {
-                "asc": 1, "cid": cid, "cur": 1, "custom_order": 1, "fc_mix": 0, 
-                "limit": 1150, "o": "file_name", "offset": offset, "show_dir": 1, 
-            }
-            get_list = next(_get_list_gen)
-            resp = await get_list(client, payload)
-            payload["limit"] = page_size
-            while True:
-                check_response(resp)
-                if cid and int(resp["path"][-1]["cid"]) != cid:
-                    raise FileNotFoundError(cid)
-                if not count:
-                    count = resp["count"]
-                elif count != resp["count"]:
-                    raise BusyOSError(f"count changes during iteration: {cid}")
-                ancestors = [{"id": "0", "parent_id": "0", "name": ""}]
-                ancestors.extend(
-                    {"id": a["cid"], "parent_id": a["pid"], "name": a["name"]} 
-                    for a in resp["path"][1:]
-                )
-                children.extend(map(normalize_attr, resp["data"]))
-                offset += len(resp["data"])
-                if offset >= resp["count"]:
-                    break
-                payload["offset"] = offset
-                resp = await client.fs_files_app(payload, app="android", async_=True)
+            try:
+                count, ancestors, it = await iterdir(cid)
+            except FileNotFoundError:
+                put_task(("UPDATE data SET parent_id=NULL WHERE id=?;", cid))
+                raise
+            children = [a async for a in it]
             children.sort(key=lambda a: (not a["is_dir"], a["name"]))
             update_cache(ancestors[1:])
             update_cache(children)
@@ -916,7 +877,7 @@ LIMIT 1;""", (share_code, id))
 
     async def get_image_url(pickcode: str, /) -> str:
         if not (url := IMAGE_URL_CACHE.get(pickcode, "")):
-            resp = await client.fs_image(pickcode, base_url=True, async_=True)
+            resp = await client.fs_image(pickcode, async_=True)
             resp = check_response(resp)
             data = resp["data"]
             url = IMAGE_URL_CACHE[pickcode] = cast(str, data["origin_url"])
@@ -1108,7 +1069,7 @@ END;
         async def redirect_exception_response(
             self, 
             request: Request, 
-            exc: BaseException, 
+            exc: Exception, 
         ) -> Response:
             code = get_status_code(exc)
             if code is not None:
@@ -1206,7 +1167,7 @@ END;
                 return id.get("pc") or id.get("pickcode", "")
         if id == 0:
             raise ValueError("the root directory does not have pickcode")
-        resp = await client.fs_file_skim(id, base_url=True, async_=True)
+        resp = await client.fs_file_skim(id, async_=True)
         check_response(resp)
         data = resp["data"][0]
         pickcode = data["pick_code"]
@@ -1219,8 +1180,6 @@ END;
             "is_dir": not sha1, 
         })
         return pickcode
-
-    _get_attr_g = cycle([True, False]).__next__
 
     @app.router.get("/%3Cattr")
     @app.router.get("/%3Cattr/*")
@@ -1239,7 +1198,7 @@ END;
         if attr := ID_TO_ATTR.get(id):
             if attr["type"] != 2 or int(CRE_URL_T_search(urlsplit(attr["thumb"]).query)[0]) - time() >= 60: # type: ignore
                 return attr
-        resp = await client.fs_file(id, base_url=_get_attr_g(), async_=True)
+        resp = await client.fs_file(id, async_=True)
         try:
             check_response(resp)
         except FileNotFoundError:
@@ -1284,7 +1243,7 @@ END;
     async def get_subtitles(pickcode: str):
         """获取字幕（随便提供此文件夹内的任何一个文件的提取码即可）
         """
-        resp = await client.fs_video_subtitle(pickcode, base_url=True, async_=True)
+        resp = await client.fs_video_subtitle(pickcode, async_=True)
         data = check_response(resp).get("data")
         if data:
             update_cache([
@@ -1426,7 +1385,7 @@ END;
         offset = 0
         payload = {"offset": offset, "limit": 1150}
         while True:
-            resp = await get_share_list(payload, base_url=True, async_=True)
+            resp = await get_share_list(payload, async_=True)
             check_response(resp)
             for share in resp["list"]:
                 SHARE_CODE_MAP[share["share_code"]] = share
@@ -1446,13 +1405,13 @@ END;
             if receive_code:
                 resp = await client.share_snap(
                     {"share_code": share_code, "receive_code": receive_code, "cid": 0, "limit": 1}, 
-                    base_url=True, 
+                    
                     async_=True, 
                 )
                 if resp["state"]:
                     share_info = resp["data"]["shareinfo"]
             else:
-                resp = await client.share_info(share_code, base_url=True, async_=True)
+                resp = await client.share_info(share_code, async_=True)
                 if resp["state"]:
                     share_info = resp["data"]
             share_info["share_code"] = share_info
@@ -2113,3 +2072,5 @@ if __name__ == "__main__":
 # TODO: 可选参数：文件缓存，文件大小小于一定值的时候，把整个文件下载到数据库，使用 sha1 和 size 作为 key
 # TODO: webdav 支持读写
 # TODO: 使用多接口+多cookies进行分流，如果是 web 或 harmony，则只分配网页版接口
+# TODO: 把数据库操作的模块专门分拆出来，db.py，原始行为就不是异步
+# TODO: 依然要支持 ctime，不再使用 aps 接口
