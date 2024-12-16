@@ -911,7 +911,7 @@ class P115Client:
                 "Accept": "application/json, text/plain, */*", 
                 "Accept-Encoding": "gzip, deflate", 
                 "Connection": "keep-alive", 
-                "User-Agent": "Mozilla/5.0 AppleWebKit/600 Safari/600 Chrome/124.0.0.0 115disk/99.99.99.99 115Browser/99.99.99.99", 
+                "User-Agent": "Mozilla/5.0 AppleWebKit/600 Safari/600 Chrome/124.0.0.0", 
             })
             return headers
 
@@ -8408,6 +8408,10 @@ class P115Client:
         api = f"https://lixian.115.com/lixianssp/?ac={ac}"
         payload["ac"] = ac
         payload["app_ver"] = "99.99.99.99"
+        request_kwargs["headers"] = {
+            **(request_kwargs.get("headers") or {}), 
+            "User-Agent": "115disk/99.99.99.99 115Browser/99.99.99.99", 
+        }
         def parse(resp, content: bytes) -> dict:
             json = json_loads(content)
             if data := json.get("data"):
@@ -10315,10 +10319,11 @@ class P115Client:
             "userkey": self.user_key, 
         }
         request_kwargs.update(make_upload_payload(data))
-        if (headers := request_kwargs.get("headers")):
-            request_kwargs["headers"] = {**headers, "Content-Type": "application/x-www-form-urlencoded"}
-        else:
-            request_kwargs["headers"] = {"Content-Type": "application/x-www-form-urlencoded"}
+        request_kwargs["headers"] = {
+            **(request_kwargs.get("headers") or {}), 
+            "Content-Type": "application/x-www-form-urlencoded", 
+            "User-Agent": "115disk/99.99.99.99 115Browser/99.99.99.99", 
+        }
         request_kwargs.setdefault("parse", parse_upload_init_response)
         def gen_step():
             resp = yield self.upload_init(async_=async_, **request_kwargs)

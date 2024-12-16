@@ -3,13 +3,14 @@
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __all__ = [
+    "has_id", "iter_existing_id", "get_parent_id", "iter_parent_id", 
     "iter_id_to_path", "id_to_path", "get_id", "get_pickcode", "get_sha1", 
     "get_path", "get_ancestors", "get_attr", "iter_children", "iter_descendants", 
     "iter_descendants_fast", "iter_files_with_path_url", "select_na_ids", 
     "select_mtime_groups", "dump_to_alist", 
 ]
 
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from datetime import datetime
 from errno import ENOENT, ENOTDIR
 from itertools import batched
@@ -33,6 +34,52 @@ FIELDS: Final = (
 EXTENDED_FIELDS: Final = (*FIELDS, "path", "posixpath")
 
 register_converter("DATETIME", lambda dt: datetime.fromisoformat(str(dt, "utf-8")))
+
+
+def has_id(
+    con: Connection | Cursor, 
+    id: int, 
+    /, 
+) -> int:
+    if id == 0:
+        return 1
+    elif id < 0:
+        return 0
+    sql = "SELECT 1 FROM data WHERE id=?"
+    return find(con, sql, id, 0)
+
+
+def iter_existing_id(
+    con: Connection | Cursor, 
+    ids: Iterable[int], 
+    /, 
+) -> Iterator[int]:
+    sql = "SELECT id FROM data WHERE id IN (%s)" % (",".join(map("%d".__mod__, ids)) or "NULL")
+    return (id for id, in query(con, sql))
+
+
+def get_parent_id(
+    con: Connection | Cursor, 
+    id: int = 0, 
+    /, 
+    default: None | int = None, 
+) -> int:
+    if id == 0:
+        return 0
+    sql = "SELECT parent_id FROM data WHERE id=?"
+    pid = find(con, sql, id, default)
+    if pid is None:
+        raise FileNotFoundError(ENOENT, id)
+    return pid
+
+
+def iter_parent_id(
+    con: Connection | Cursor, 
+    ids: Iterable[int], 
+    /, 
+) -> Iterator[int]:
+    sql = "SELECT parent_id FROM data WHERE id IN (%s)" % (",".join(map("%d".__mod__, ids)) or "NULL")
+    return (id for id, in query(con, sql))
 
 
 def iter_id_to_path(

@@ -9,7 +9,7 @@ from collections.abc import Callable
 from functools import partial
 from http.cookiejar import CookieJar
 from subprocess import run
-from sys import executable
+from sys import executable, modules
 from typing import Literal
 
 
@@ -60,12 +60,13 @@ def make_request(
         case "urllib3":
             try:
                 from urllib3_request import __version__
-                if __version__ < (0, 0, 7):
+                if __version__ < (0, 0, 8):
+                    modules.pop("urllib3_request", None)
                     raise ImportError
                 from urllib3.poolmanager import PoolManager
                 from urllib3_request import request as urllib3_request
             except ImportError:
-                run([executable, "-m", "pip", "install", "-U", "urllib3", "urllib3_request>=0.0.7"], check=True)
+                run([executable, "-m", "pip", "install", "-U", "urllib3", "urllib3_request>=0.0.8"], check=True)
                 from urllib3.poolmanager import PoolManager
                 from urllib3_request import request as urllib3_request
             return partial(urllib3_request, pool=PoolManager(128), cookies=cookiejar)
@@ -81,6 +82,7 @@ def make_request(
             try:
                 from aiohttp_client_request import __version__
                 if __version__ < (0, 0, 4):
+                    modules.pop("aiohttp_client_request", None)
                     raise ImportError
                 from aiohttp import ClientSession as AiohttpClientSession
                 from aiohttp_client_request import request as aiohttp_request
@@ -92,12 +94,13 @@ def make_request(
         case "blacksheep":
             try:
                 from blacksheep_client_request import __version__
-                if __version__ < (0, 0, 3):
+                if __version__ < (0, 0, 4):
+                    modules.pop("blacksheep_client_request", None)
                     raise ImportError
                 from blacksheep.client import ClientSession as BlacksheepClientSession
                 from blacksheep_client_request import request as blacksheep_request
             except ImportError:
-                run([executable, "-m", "pip", "install", "-U", "blacksheep", "blacksheep_client_request>=0.0.3"], check=True)
+                run([executable, "-m", "pip", "install", "-U", "blacksheep", "blacksheep_client_request>=0.0.4"], check=True)
                 from blacksheep.client import ClientSession as BlacksheepClientSession
                 from blacksheep_client_request import request as blacksheep_request
             return partial(blacksheep_request, session=BlacksheepClientSession(), cookies=cookiejar)

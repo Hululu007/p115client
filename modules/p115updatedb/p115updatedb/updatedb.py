@@ -26,12 +26,13 @@ from p115client.tool.edit import update_desc, update_star
 from p115client.tool.iterdir import filter_na_ids, get_id_to_path, iter_stared_dirs
 from sqlitetools import execute, find, query, transact, upsert_items, AutoCloseConnection
 
-from .query import iter_descendants_fast, select_mtime_groups
+from .query import (
+    get_parent_id, has_id, iter_descendants_fast, iter_existing_id, 
+    iter_parent_id, select_mtime_groups, 
+)
 from .util import ZERO_DICT, bfs_gen
 
 
-# NOTE: 目录的 id 到它的上级目录 id
-CID_TO_PID: Final[dict[int, int]] = {}
 # NOTE: 初始化日志对象
 logger = logging.Logger("115-updatedb", level=logging.INFO)
 handler = logging.StreamHandler()
@@ -207,20 +208,6 @@ END;"""
     return con.executescript(sql)
 
 
-def load_dir_ids(
-    con: Connection | Cursor, 
-    /, 
-    min_mtime: int = 0, 
-):
-    """从 dir 表加载 id 数据到全局变量 `CID_TO_PID` 中
-
-    :param con: 数据库连接或游标
-    :param min_mtime: 忽略 mtime 小于这个值的数据
-    """
-    sql = "SELECT id, parent_id FROM dir WHERE mtime >= ?"
-    CID_TO_PID.update(query(con, sql, min_mtime))
-
-
 def insert_dir_items(con, items, commit: bool = False):
     upsert_items(
         con, 
@@ -259,7 +246,7 @@ def update_stared_dirs(
     client: P115Client, 
     **request_kwargs, 
 ) -> list[dict]:
-    """从网上增量拉取目录数据，并更新到 `dir` 表和全局变量 `CID_TO_PID` 中
+    """从网上增量拉取目录数据，并更新到数据库
 
     :param con: 数据库连接或游标
     :param client: 115 网盘客户端对象
@@ -269,7 +256,7 @@ def update_stared_dirs(
     """
     mtime = find(con, "SELECT COALESCE(MAX(mtime), 0) FROM dir")
     data: list[dict] = list(takewhile(
-        lambda attr: attr["mtime"] > mtime or attr["id"] not in CID_TO_PID, 
+        lambda attr: attr["mtime"] > mtime or has_id(con, attr["id"]), 
         iter_stared_dirs(
             client, 
             order="user_utime", 
@@ -285,7 +272,6 @@ def update_stared_dirs(
         with transact(con):
             insert_dir_items(con, data)
             upsert_items(con, data)
-        CID_TO_PID.update((a["id"], a["parent_id"]) for a in data)
     return data
 
 
@@ -460,11 +446,9 @@ def diff_dir(
             if ancestors:
                 upsert_items(con, ancestors, extras={"is_alive": 1, "is_dir": 1})
                 upsert_items(con, ancestors, table="dir")
-                CID_TO_PID.update((a["id"], a["parent_id"]) for a in ancestors)
             if dirs:
                 upsert_items(con, dirs, extras={"is_alive": 1})
                 insert_dir_items(con, dirs)
-                CID_TO_PID.update((a["id"], a["parent_id"]) for a in dirs)
 
 
 def normalize_attr(info: Mapping, /) -> dict:
@@ -539,7 +523,6 @@ def _init_client(
     else:
         con = connect(dbfile, uri=dbfile.startswith("file:"), check_same_thread=False, factory=AutoCloseConnection)
         initdb(con, disable_event=disable_event)
-        load_dir_ids(con)
     return client, con
 
 
@@ -601,7 +584,7 @@ def updatedb_tree(
                 update_desc(client, pids, **request_kwargs)
                 update_stared_dirs(con, client, **request_kwargs)
                 no_dir_moved = True
-            pids = {pid for pid in (CID_TO_PID.get(pid, 0) for pid in pids) if pid and pid != id and pid not in all_pids}
+            pids = {pid for pid in iter_parent_id(con, pids) if pid and pid != id and pid not in all_pids}
         if all_pids:
             na_ids = set(filter_na_ids(client, all_pids, **request_kwargs))
             for fid, pid in pairs.items():
@@ -609,7 +592,7 @@ def updatedb_tree(
                     na_ids.add(fid)
                     continue
                 ids = [fid, pid]
-                while pid := CID_TO_PID.get(pid, 0):
+                while pid := get_parent_id(con, pid, 0):
                     if pid in na_ids:
                         na_ids.update(ids)
                         break
@@ -625,7 +608,7 @@ def updatedb_tree(
         pids = {ppid for attr in to_upsert if (ppid := attr["parent_id"])}
         while pids:
             all_pids.update(pids)
-            if find_ids := pids - CID_TO_PID.keys():
+            if find_ids := pids - set(iter_existing_id(con, pids)):
                 update_star(client, find_ids)
                 if custom_no_dir_moved:
                     update_desc(client, find_ids, **request_kwargs)
@@ -636,7 +619,7 @@ def updatedb_tree(
             elif not custom_no_dir_moved:
                 update_desc(client, pids, **request_kwargs)
                 no_dir_moved = False
-            pids = {pid for pid in (CID_TO_PID.get(pid, 0) for pid in pids) if pid and pid != id and pid not in all_pids}
+            pids = {pid for pid in iter_parent_id(con, pids) if pid and pid != id and pid not in all_pids}
     if not no_dir_moved:
         update_stared_dirs(con, client, **request_kwargs)
     with transact(con):
