@@ -326,6 +326,12 @@ def check_response(resp: dict | Awaitable[dict], /) -> dict | Coroutine[Any, Any
                 # {"state": false, "errno": 20009, "error": "父目录不存在。", "errtype": "war"}
                 case 20009:
                     raise FileNotFoundError(errno.ENOENT, resp)
+                # {"state": false, "errno": 20020, "error": "后缀名不正确，请重新输入", "request": "<api>", "data": []}
+                case 20020:
+                    raise OperationalError(errno.ENOTSUP, resp)
+                # {"state": false, "errNo": 20021, "error": "后缀名不正确，请重新输入", "errtype": "err"}
+                case 20021:
+                    raise OperationalError(errno.ENOTSUP, resp)
                 # {"state": false, "errno": 50003, "msg": "很抱歉，该文件提取码不存在。", "data": ""}
                 case 50003:
                     raise FileNotFoundError(errno.ENOENT, resp)
@@ -380,6 +386,9 @@ def check_response(resp: dict | Awaitable[dict], /) -> dict | Coroutine[Any, Any
                 case 990001:
                     # NOTE: 可能就是被下线了
                     raise AuthenticationError(errno.EIO, resp)
+                # {"state": false, "errNo": 20021, "error": "后缀名不正确，请重新输入", "request": "<api>"}
+                case 20021:
+                    raise OperationalError(errno.ENOTSUP, resp)
         elif "errcode" in resp:
             match resp["errcode"]:
                 case 911:

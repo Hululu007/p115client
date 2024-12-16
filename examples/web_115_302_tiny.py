@@ -2,40 +2,42 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 0, 5)
+__version__ = (0, 0, 6)
 __all__ = ["make_application"]
 __licence__ = "GPLv3 <https://www.gnu.org/licenses/gpl-3.0.txt>"
 __doc__ = """\
     🛫 115 302 微型版 🛬
 
-> 网盘文件仅支持用 pickcode、id 或 sha1 查询
-> 分享文件仅支持用 id 查询
+> 网盘文件支持用 pickcode、id、sha1 或 name 查询
+> 分享文件支持用 id 或 name 查询
 
 ⏰ 此版本不依赖于 p115client 和 pycryptodome，至少要求 python 3.8
 
 🌰 查询示例：
 
-    1. 查询 pickcode
+    0. 查询 pickcode
         http://localhost:8000?ecjq9ichcb40lzlvx
         http://localhost:8000/ecjq9ichcb40lzlvx
         http://localhost:8000?pickcode=ecjq9ichcb40lzlvx
-    2. 带（任意）名字查询 pickcode
+    1. 带（任意）名字查询 pickcode
         http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?ecjq9ichcb40lzlvx
         http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?pickcode=ecjq9ichcb40lzlvx
-    3. 查询 id
+    2. 查询 id
         http://localhost:8000?2691590992858971545
         http://localhost:8000/2691590992858971545
         http://localhost:8000?id=2691590992858971545
-    4. 带（任意）名字查询 id
+    3. 带（任意）名字查询 id
         http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?2691590992858971545
         http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?id=2691590992858971545
-    5. 查询 sha1
+    4. 查询 sha1
         http://localhost:8000?E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
         http://localhost:8000/E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
         http://localhost:8000?sha1=E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
-    6. 带（任意）名字查询 sha1
+    5. 带（任意）名字查询 sha1
         http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
         http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?sha1=E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
+    6. 查询 name（直接以路径作为 name，且不要有任何查询参数）
+        http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv
     7. 查询分享文件（如果是你自己的分享，则无须提供密码 receive_code）
         http://localhost:8000?share_code=sw68md23w8m&receive_code=q353&id=2580033742990999218
         http://localhost:8000?share_code=sw68md23w8m&receive_code=q353&id=2580033742990999218
@@ -43,6 +45,9 @@ __doc__ = """\
     8. 带（任意）名字查询分享文件（如果是你自己的分享，则无须提供密码 receive_code）
         http://localhost:8000/Cosmos.S01E01.1080p.AMZN.WEB-DL.DD+5.1.H.264-iKA.mkv?share_code=sw68md23w8m&receive_code=q353&id=2580033742990999218
         http://localhost:8000/Cosmos.S01E01.1080p.AMZN.WEB-DL.DD+5.1.H.264-iKA.mkv?share_code=sw68md23w8m&id=2580033742990999218
+    9. 用 name 查询分享文件（直接以路径作为 name，且不要有 id 查询参数。如果是你自己的分享，则无须提供密码 receive_code）
+        http://localhost:8000/Cosmos.S01E01.1080p.AMZN.WEB-DL.DD+5.1.H.264-iKA.mkv?share_code=sw68md23w8m&receive_code=q353
+        http://localhost:8000/Cosmos.S01E01.1080p.AMZN.WEB-DL.DD+5.1.H.264-iKA.mkv?share_code=sw68md23w8m
 """
 
 if __name__ == "__main__":
@@ -87,6 +92,7 @@ from base64 import b64decode, b64encode
 from functools import partial
 from itertools import cycle
 from string import digits, hexdigits
+from urllib.parse import urlencode
 try:
     from orjson import loads
 except ImportError:
@@ -99,7 +105,8 @@ RSA_n = 0x10001
 
 to_bytes = partial(int.to_bytes, byteorder="big", signed=False)
 from_bytes = partial(int.from_bytes, byteorder="big", signed=False)
-get_base_url = cycle(("http://pro.api.115.com", "http://pro.api.115.com", "https://proapi.115.com")).__next__
+get_webapi_url = cycle(("http://anxia.com/webapi", "http://v.anxia.com/webapi", "http://web.api.115.com")).__next__
+get_proapi_url = cycle(("http://pro.api.115.com", "http://pro.api.115.com", "http://pro.api.115.com", "http://pro.api.115.com", "https://proapi.115.com")).__next__
 
 
 def acc_step(start, stop, step=1):
@@ -168,17 +175,24 @@ def decrypt(cipher_data):
     return xor(tmp, b"\x8d\xa5\xa5\x8d")
 
 
+def get_first(m: Mapping, *keys, default=None):
+    for k in keys:
+        if k in m:
+            return m[k]
+    return default
+
+
 class LRUDict(dict):
 
-    def __init__(self, /, maxsize: int = 0):
+    def __init__(self, maxsize: int = 0):
         self.maxsize = maxsize
 
-    def __setitem__(self, key, value, /):
+    def __setitem__(self, key, value):
         self.pop(key, None)
         super().__setitem__(key, value)
         self.clean()
 
-    def clean(self, /):
+    def clean(self):
         if (maxsize := self.maxsize) > 0:
             pop = self.pop
             while len(self) > maxsize:
@@ -187,21 +201,21 @@ class LRUDict(dict):
                 except RuntimeError:
                     pass
 
-    def setdefault(self, key, default=None, /):
+    def setdefault(self, key, default=None):
         value = super().setdefault(key, default)
         self.clean()
         return value
 
-    def update(self, iterable=None, /, **pairs):
+    def update(self, *args, **pairs):
         pop = self.pop
         setitem = self.__setitem__
-        if iterable:
-            if isinstance(iterable, Mapping):
+        for arg in args:
+            if isinstance(arg, Mapping):
                 try:
-                    iterable = iterable.items()
+                    arg = arg.items()
                 except (AttributeError, TypeError):
-                    iterable = ItemsView(iterable)
-            for key, val in iterable:
+                    arg = ItemsView(arg)
+            for key, val in arg:
                 pop(key, None)
                 setitem(key, val)
         if pairs:
@@ -214,6 +228,8 @@ class LRUDict(dict):
 def make_application(cookies: str, debug: bool = False) -> Application:
     ID_TO_PICKCODE   = LRUDict(65536) # type: dict[int, str]
     SHA1_TO_PICKCODE = LRUDict(65536) # type: dict[str, str]
+    NAME_TO_PICKCODE = LRUDict(65536) # type: dict[str, str]
+    SHARE_NAME_TO_ID = LRUDict(65536) # type: dict[tuple[str, str], int]
     RECEIVE_CODE_MAP = {}             # type: dict[str, str]
 
     app = Application(router=Router(), show_error_details=debug)
@@ -253,7 +269,7 @@ def make_application(cookies: str, debug: bool = False) -> Application:
         pickcode = ID_TO_PICKCODE.get(id, "")
         if pickcode:
             return pickcode
-        resp = await client.get(f"https://v.anxia.com/webapi/files/file?file_id={id}")
+        resp = await client.get(f"{get_webapi_url()}/files/file?file_id={id}")
         text = await resp.text()
         json = loads(text)
         if not json["state"]:
@@ -267,7 +283,7 @@ def make_application(cookies: str, debug: bool = False) -> Application:
         pickcode = SHA1_TO_PICKCODE.get(sha1, "")
         if pickcode:
             return pickcode
-        resp = await client.get(f"https://v.anxia.com/webapi/files/shasearch?sha1={sha1}")
+        resp = await client.get(f"{get_webapi_url()}/files/shasearch?sha1={sha1}")
         text = await resp.text()
         json = loads(text)
         if not json["state"]:
@@ -276,11 +292,61 @@ def make_application(cookies: str, debug: bool = False) -> Application:
         pickcode = SHA1_TO_PICKCODE[sha1] = info["pick_code"]
         return pickcode
 
+    async def get_pickcode_for_name(name: str) -> str:
+        pickcode = NAME_TO_PICKCODE.get(name, "")
+        if pickcode:
+            return pickcode
+        api = f"{get_webapi_url()}/files/search"
+        payload = {"search_value": name, "limit": 1, "type": 99}
+        suffix = name.rpartition(".")[-1]
+        if suffix.isalnum():
+            payload["suffix"] = suffix
+        resp = await client.get(f"{api}?{urlencode(payload)}")
+        text = await resp.text()
+        json = loads(text)
+        if get_first(json, "errno", "errNo") == 20021:
+            payload.pop("suffix")
+            resp = await client.get(f"{api}?{urlencode(payload)}")
+            text = await resp.text()
+            json = loads(text)
+        if not json["state"] or not json["count"]:
+            raise FileNotFoundError(text)
+        info = json["data"][0]
+        if info["n"] != name:
+            raise FileNotFoundError(name)
+        pickcode = NAME_TO_PICKCODE[name] = info["pc"]
+        return pickcode
+
+    async def share_get_id_for_name(share_code: str, receive_code: str, name: str) -> int:
+        id = SHARE_NAME_TO_ID.get((share_code, name), 0)
+        if id:
+            return id
+        api = f"{get_webapi_url()}/share/search"
+        payload = {"share_code": share_code, "receive_code": receive_code, "search_value": name, "limit": 1, "type": 99}
+        suffix = name.rpartition(".")[-1]
+        if suffix.isalnum():
+            payload["suffix"] = suffix
+        resp = await client.get(f"{api}?{urlencode(payload)}")
+        text = await resp.text()
+        json = loads(text)
+        if get_first(json, "errno", "errNo") == 20021:
+            payload.pop("suffix")
+            resp = await client.get(f"{api}?{urlencode(payload)}")
+            text = await resp.text()
+            json = loads(text)
+        if not json["state"] or not json["data"]["count"]:
+            raise FileNotFoundError(text)
+        info = json["data"]["list"][0]
+        if info["n"] != name:
+            raise FileNotFoundError(name)
+        id = SHARE_NAME_TO_ID[(share_code, name)] = int(info["fid"])
+        return id
+
     async def get_downurl(pickcode: str, user_agent: bytes | str = b"") -> str:
         """获取文件的下载链接
         """
         resp = await client.post(
-            f"{get_base_url()}/android/2.0/ufile/download", 
+            f"{get_proapi_url()}/android/2.0/ufile/download", 
             content=FormContent([("data", encrypt(b'{"pick_code":"%s"}' % bytes(pickcode, "ascii")).decode("utf-8"))]), 
             headers={b"User-Agent": user_agent}, 
         )
@@ -297,7 +363,7 @@ def make_application(cookies: str, debug: bool = False) -> Application:
         """获取分享文件的下载链接
         """
         resp = await client.post(
-            f"{get_base_url()}/app/share/downurl", 
+            f"{get_proapi_url()}/app/share/downurl", 
             content=FormContent([("data", encrypt(f'{{"share_code":"{share_code}","receive_code":"{receive_code}","file_id":{file_id}}}'.encode("utf-8")).decode("utf-8"))]), 
         )
         text = await resp.text()
@@ -318,7 +384,7 @@ def make_application(cookies: str, debug: bool = False) -> Application:
         receive_code = RECEIVE_CODE_MAP.get(share_code, "")
         if receive_code:
             return receive_code
-        resp = await client.get(f"https://v.anxia.com/webapi/share/shareinfo?share_code={share_code}")
+        resp = await client.get(f"{get_webapi_url()}/share/shareinfo?share_code={share_code}")
         text = await resp.text()
         json = loads(text)
         if not json["state"]:
@@ -342,6 +408,11 @@ def make_application(cookies: str, debug: bool = False) -> Application:
                 receive_code = await get_receive_code(share_code)
             elif len(receive_code) != 4:
                 raise ValueError(f"bad receive_code: {receive_code!r}")
+            if not id:
+                if name:
+                    id = await share_get_id_for_name(share_code, receive_code, name)
+            if not id:
+                raise FileNotFoundError(f"please specify id or name: share_code={share_code!r}")
             url = await get_share_downurl(share_code, receive_code, id)
         else:
             if pickcode:
@@ -372,6 +443,8 @@ def make_application(cookies: str, debug: bool = False) -> Application:
                         pickcode = await get_pickcode_for_sha1(name.upper())
                     elif not name.strip(digits):
                         pickcode = await get_pickcode_to_id(int(name))
+                    else:
+                        pickcode = await get_pickcode_for_name(name)
             if not pickcode:
                 return text(str(request.url), 404)
             user_agent = (request.get_first_header(b"User-agent") or b"").decode("latin-1")
