@@ -190,6 +190,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_sha1_size ON data(sha1, size);""")
         attr_ = attr["_attr"]
         pickcode = attr_["pickcode"]
         size = attr_["size"]
+        use_web_api = attr_["is_collect"] and attr_["size"] < 1024 * 1024 * 115
         if size <= 1024 * 64:
             sha1 = attr_["sha1"]
             with self.file_lock_cache.setdefault((sha1, size), Lock()):
@@ -200,7 +201,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_sha1_size ON data(sha1, size);""")
                 )
                 if data is None:
                     if client:
-                        data = client.read_bytes(client.download_url(pickcode))
+                        data = client.read_bytes(client.download_url(
+                            pickcode, 
+                            app="android", 
+                            use_web_api=use_web_api, 
+                        ))
                     else:
                         data = urlopen(f"{self.strm_origin}?pickcode={pickcode}").read()
                     execute(self.con_file, """\
@@ -209,7 +214,10 @@ ON CONFLICT DO UPDATE SET data = excluded.data;""", locals())
                 attr["_data"] = data
                 return None, data
         if client:
-            file = client.open(client.download_url(pickcode), http_file_reader_cls=Urllib3FileReader)
+            file = client.open(
+                client.download_url(pickcode, app="android", use_web_api=use_web_api), 
+                http_file_reader_cls=Urllib3FileReader, 
+            )
         else:
             file = Urllib3FileReader(f"{self.strm_origin}?pickcode={pickcode}", urlopen=urlopen)
         if start == 0:

@@ -398,6 +398,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_sha1_size ON data(sha1, size);""")
                 pickcode, 
                 headers={"User-Agent": (request.get_first_header(b"User-agent") or b"").decode("latin-1")}, 
                 use_web_api=web, 
+                app="android", 
                 async_=True, 
             )
             return {"type": "file", "url": url, "headers": url.get("headers")}
