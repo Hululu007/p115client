@@ -126,3 +126,13 @@ def make_request(
         case _:
             raise ValueError(f"can't make request for {module!r}")
 
+# TODO: 基于 http.client 实现一个 request，并且支持连接池
+# TODO: 基于 https://asks.readthedocs.io/en/latest/ 实现一个 request
+# TODO: 基于 https://pypi.org/project/pycurl/ 实现一个 request
+# TODO: 基于 https://www.tornadoweb.org/en/stable/httpclient.html 实现一个 request
+# TODO: 基于 https://pypi.org/project/treq/ 实现一个 request
+# TODO: 基于 https://pypi.org/project/httplib2/ 实现一个 request
+# TODO: 基于 https://github.com/geventhttpclient/geventhttpclient 实现一个 request
+# TODO: 基于 https://docs.twisted.org/en/latest/web/howto/client.html 实现一个 request
+# TODO: 基于 https://aiosonic.readthedocs.io/en/latest/ 实现一个 request
+# TODO: 基于 https://github.com/spyoungtech/grequests/ 实现一个 request

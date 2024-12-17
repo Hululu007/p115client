@@ -3,9 +3,9 @@
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __doc__ = """\
-                                \x1b[1;5m🛫\x1b[0m 115 微型 302 \x1b[1;5m🛬\x1b[0m
+            \x1b[1;5m🚄\x1b[0m 115 302 极小版 \x1b[1;5m🚇\x1b[0m
 
-    ╭───────────────────────── \x1b[31mWelcome to \x1b[1m115 tiny 302\x1b[0m ────────────────────────────╮
+    ╭───────────────────────── \x1b[31mWelcome to \x1b[1m115 nano 302\x1b[0m ────────────────────────────╮
     │                                                                              │
     │  \x1b[1;35mmaintained by\x1b[0m \x1b[3;5;31m❤\x1b[0m     \x1b[32mChenyangGao \x1b[4;34mhttps://chenyanggao.github.io\x1b[0m               │
     │                                                                              │
@@ -17,10 +17,7 @@ __doc__ = """\
     │                                                                              │
     ╰──────────────────────────────────────────────────────────────────────────────╯
 
-> 网盘文件支持用 \x1b[3;36mpickcode\x1b[0m、\x1b[3;36mid\x1b[0m、\x1b[3;36msha1\x1b[0m 或 \x1b[3;36mname\x1b[0m 查询
-> 分享文件支持用 \x1b[3;36mid\x1b[0m 或 \x1b[3;36mname\x1b[0m 查询
-
-⏰ 此版本不依赖于 \x1b[31mp115client\x1b[0m 和 \x1b[31mpycryptodome\x1b[0m，至少要求 \x1b[31mpython \x1b[1m3.12\x1b[0m
+⏰ 仅支持用 \x1b[3;36mpickcode\x1b[0m 查询
 
 🌰 查询示例：
 
@@ -31,32 +28,6 @@ __doc__ = """\
     1. 带（任意）名字查询 \x1b[3;36mpickcode\x1b[0m
         \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?ecjq9ichcb40lzlvx\x1b[0m
         \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?pickcode=ecjq9ichcb40lzlvx\x1b[0m
-    2. 查询 \x1b[3;36mid\x1b[0m
-        \x1b[4;34mhttp://localhost:8000?2691590992858971545\x1b[0m
-        \x1b[4;34mhttp://localhost:8000/2691590992858971545\x1b[0m
-        \x1b[4;34mhttp://localhost:8000?id=2691590992858971545\x1b[0m
-    3. 带（任意）名字查询 \x1b[3;36mid\x1b[0m
-        \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?2691590992858971545\x1b[0m
-        \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?id=2691590992858971545\x1b[0m
-    4. 查询 \x1b[3;36msha1\x1b[0m
-        \x1b[4;34mhttp://localhost:8000?E7FAA0BE343AF2DA8915F2B694295C8E4C91E691\x1b[0m
-        \x1b[4;34mhttp://localhost:8000/E7FAA0BE343AF2DA8915F2B694295C8E4C91E691\x1b[0m
-        \x1b[4;34mhttp://localhost:8000?sha1=E7FAA0BE343AF2DA8915F2B694295C8E4C91E691\x1b[0m
-    5. 带（任意）名字查询 \x1b[3;36msha1\x1b[0m
-        \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?E7FAA0BE343AF2DA8915F2B694295C8E4C91E691\x1b[0m
-        \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?sha1=E7FAA0BE343AF2DA8915F2B694295C8E4C91E691\x1b[0m
-    6. 查询 \x1b[3;36mname\x1b[0m（直接以路径作为 \x1b[3;36mname\x1b[0m，且不要有任何查询参数）
-        \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv\x1b[0m
-    7. 查询分享文件（如果是你自己的分享，则无须提供密码 \x1b[3;36mreceive_code\x1b[0m）
-        \x1b[4;34mhttp://localhost:8000?share_code=sw68md23w8m&receive_code=q353&id=2580033742990999218\x1b[0m
-        \x1b[4;34mhttp://localhost:8000?share_code=sw68md23w8m&receive_code=q353&id=2580033742990999218\x1b[0m
-        \x1b[4;34mhttp://localhost:8000?share_code=sw68md23w8m&id=2580033742990999218\x1b[0m
-    8. 带（任意）名字查询分享文件（如果是你自己的分享，则无须提供密码 \x1b[3;36mreceive_code\x1b[0m）
-        \x1b[4;34mhttp://localhost:8000/Cosmos.S01E01.1080p.AMZN.WEB-DL.DD+5.1.H.264-iKA.mkv?share_code=sw68md23w8m&receive_code=q353&id=2580033742990999218\x1b[0m
-        \x1b[4;34mhttp://localhost:8000/Cosmos.S01E01.1080p.AMZN.WEB-DL.DD+5.1.H.264-iKA.mkv?share_code=sw68md23w8m&id=2580033742990999218\x1b[0m
-    9. 用 \x1b[3;36mname\x1b[0m 查询分享文件（直接以路径作为 \x1b[3;36mname\x1b[0m，且不要有 \x1b[3;36mid\x1b[0m 查询参数。如果是你自己的分享，则无须提供密码 \x1b[3;36mreceive_code\x1b[0m）
-        \x1b[4;34mhttp://localhost:8000/Cosmos.S01E01.1080p.AMZN.WEB-DL.DD+5.1.H.264-iKA.mkv?share_code=sw68md23w8m&receive_code=q353\x1b[0m
-        \x1b[4;34mhttp://localhost:8000/Cosmos.S01E01.1080p.AMZN.WEB-DL.DD+5.1.H.264-iKA.mkv?share_code=sw68md23w8m\x1b[0m
 """
 
 from argparse import ArgumentParser, Namespace, RawTextHelpFormatter
@@ -75,11 +46,11 @@ parser.add_argument("-l", "--license", action="store_true", help="输出授权�
 def parse_args(argv: None | list[str] = None, /) -> Namespace:
     args = parser.parse_args(argv)
     if args.version:
-        from p115tiny302 import __version__
+        from p115nano302 import __version__
         print(".".join(map(str, __version__)))
         raise SystemExit(0)
     elif args.license:
-        from p115tiny302 import __license__
+        from p115nano302 import __license__
         print(__license__)
         raise SystemExit(0)
     return args
@@ -91,10 +62,13 @@ def main(argv: None | list[str] | Namespace = None, /):
     else:
         args = parse_args(argv)
 
-    cookies = args.cookies.strip()
-    if not cookies:
-        cookies_path = args.cookies_path.strip() or "115-cookies.txt"
-        cookies = open(cookies_path, encoding="latin-1").read().strip()
+    from p115client import P115Client
+
+    if cookies := args.cookies.strip():
+        client = P115Client(cookies, check_for_relogin=True)
+    else:
+        from pathlib import Path
+        client = P115Client(Path(args.cookies_path or "115-cookies.txt"), check_for_relogin=True)
 
     uvicorn_run_config_path = args.uvicorn_run_config_path
     if uvicorn_run_config_path:
@@ -137,12 +111,13 @@ def main(argv: None | list[str] | Namespace = None, /):
     run_config.setdefault("forwarded_allow_ips", "*")
     run_config.setdefault("timeout_graceful_shutdown", 1)
 
-    from p115tiny302 import make_application
+    from p115nano302 import make_application
     from uvicorn import run
 
     print(__doc__)
-    app = make_application(cookies, debug=args.debug)
+    app = make_application(client, debug=args.debug)
     run(app, **run_config)
+
 
 if __name__ == "__main__":
     from pathlib import Path

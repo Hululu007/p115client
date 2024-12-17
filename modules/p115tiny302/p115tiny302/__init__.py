@@ -179,8 +179,6 @@ def make_application(cookies: str, debug: bool = False) -> Application:
         if not json["state"]:
             raise OSError(text)
         url = loads(decrypt(json["data"]))["url"]
-        if not url:
-            raise FileNotFoundError(text)
         if "&c=0&f=&" in url:
             DOWNLOAD_URL_CACHE[pickcode] = url
         return url
