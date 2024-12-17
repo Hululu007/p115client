@@ -19,6 +19,7 @@ from contextlib import closing, suppress
 from datetime import datetime
 from functools import partial
 from io import BytesIO
+from itertools import cycle
 from math import isinf, isnan
 from pathlib import Path
 from posixpath import split as splitpath, splitext
@@ -627,6 +628,8 @@ LIMIT 1;""", (share_code, id))
     ) -> None | P115ID:
         return next(share_info_to_path_gen(share_code, path, ensure_file, parent_id), None)
 
+    get_webapi = cycle(("http://webapi.115.com", "http://webapi.115.com", "http://webapi.115.com", "http://anxia.com/webapi", "http://v.anxia.com/webapi")).__next__
+
     async def iterdir(cid: int, first_page_size: int = 0, page_size: int = 1_150) -> tuple[int, list[dict], AsyncIterator[AttrDict]]:
         if page_size <= 0:
             page_size = 1_150
@@ -637,7 +640,7 @@ LIMIT 1;""", (share_code, id))
             "o": "user_utime", "offset": 0, "show_dir": 1, 
         }
         get_list = client.fs_files
-        resp = await get_list(payload, async_=True)
+        resp = await get_list(payload, base_url=get_webapi(), async_=True)
         check_response(resp)
         if cid and int(resp["path"][-1]["cid"]) != cid:
             raise FileNotFoundError(cid)
@@ -660,7 +663,7 @@ LIMIT 1;""", (share_code, id))
                 if offset >= resp["count"]:
                     break
                 payload["offset"] = offset
-                resp = await get_list(payload, async_=True)
+                resp = await get_list(payload, base_url=get_webapi(), async_=True)
                 check_response(resp)
                 if cid and int(resp["path"][-1]["cid"]) != cid:
                     raise FileNotFoundError(cid)
@@ -872,6 +875,7 @@ LIMIT 1;""", (share_code, id))
             pickcode, 
             headers={"User-Agent": user_agent}, 
             use_web_api=use_web_api, 
+            app="android", 
             async_=True, 
         )
 
@@ -1385,7 +1389,7 @@ END;
         offset = 0
         payload = {"offset": offset, "limit": 1150}
         while True:
-            resp = await get_share_list(payload, async_=True)
+            resp = await get_share_list(payload, base_url=get_webapi(), async_=True)
             check_response(resp)
             for share in resp["list"]:
                 SHARE_CODE_MAP[share["share_code"]] = share
@@ -1405,13 +1409,13 @@ END;
             if receive_code:
                 resp = await client.share_snap(
                     {"share_code": share_code, "receive_code": receive_code, "cid": 0, "limit": 1}, 
-                    
+                    base_url=get_webapi(), 
                     async_=True, 
                 )
                 if resp["state"]:
                     share_info = resp["data"]["shareinfo"]
             else:
-                resp = await client.share_info(share_code, async_=True)
+                resp = await client.share_info(share_code, base_url=get_webapi(), async_=True)
                 if resp["state"]:
                     share_info = resp["data"]
             share_info["share_code"] = share_info

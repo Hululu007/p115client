@@ -31,7 +31,7 @@ from tempfile import TemporaryFile
 from threading import Lock
 from time import time
 from typing import cast, overload, Any, Final, Literal, Self, TypeVar, Unpack
-from urllib.parse import quote, urlencode, urlsplit, urlunsplit
+from urllib.parse import quote, unquote, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 from warnings import warn
 
@@ -142,6 +142,23 @@ def complete_webapi(
     else:
         base = "webapi"
     return complete_api(path, base, base_url=base_url)
+
+
+def complete_proapi(
+    path: str, 
+    /, 
+    base_url: bool | str = False, 
+    app: str = "", 
+) -> str:
+    if path and not path.startswith("/"):
+        path = "/" + path
+    if app and not app.startswith("/"):
+        app = "/" + app
+    if not base_url:
+        base_url = "http://proapi.115.com"
+    elif base_url is True:
+        base_url = "https://proapi.115.com"
+    return f"{base_url}{app}{path}"
 
 
 def complete_lixian_api(
@@ -2789,6 +2806,7 @@ class P115Client:
         /, 
         strict: bool = True, 
         use_web_api: bool = False, 
+        app: str = "chrome", 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -2801,6 +2819,7 @@ class P115Client:
         /, 
         strict: bool = True, 
         use_web_api: bool = False, 
+        app: str = "chrome", 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -2812,6 +2831,7 @@ class P115Client:
         /, 
         strict: bool = True, 
         use_web_api: bool = False, 
+        app: str = "chrome", 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -2821,12 +2841,13 @@ class P115Client:
         :param pickcode: 提取码
         :param strict: 如果为 True，当目标是目录时，会抛出 IsADirectoryError 异常
         :param use_web_api: 是否使用网页版接口执行请求
+        :param app: 使用此设备的接口
         :param async_: 是否异步
         :param request_kwargs: 其它请求参数
 
         :return: 下载链接
         """
-        if use_web_api:
+        if use_web_api or app in ("web", "desktop", "harmony"):
             resp = self.download_url_web(
                 pickcode, 
                 async_=async_, 
@@ -2851,12 +2872,22 @@ class P115Client:
         else:
             resp = self.download_url_app(
                 pickcode, 
+                app=app, 
                 async_=async_, 
                 **request_kwargs, 
             )
             def get_url(resp: dict) -> P115URL:
                 resp["pickcode"] = pickcode
                 check_response(resp)
+                if "url" in resp["data"]:
+                    url = resp["data"]["url"]
+                    return P115URL(
+                        url, 
+                        pickcode=pickcode, 
+                        name=unquote(urlsplit(url).path.rsplit("/", 1)[-1]), 
+                        is_directory=False, 
+                        headers=resp["headers"], 
+                    )
                 for fid, info in resp["data"].items():
                     url = info["url"]
                     if strict and not url:
@@ -2891,7 +2922,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "chrome", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -2903,7 +2934,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "chrome", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -2914,7 +2945,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "chrome", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -2927,11 +2958,11 @@ class P115Client:
             - pickcode: str 💡 如果 `app` 为 "chrome"，则可以接受多个，多个用逗号 "," 隔开
         """
         if app == "chrome":
-            api = f"{base_url}/app/chrome/downurl"
+            api = complete_proapi("/app/chrome/downurl", base_url)
             if isinstance(payload, str):
                 payload = {"pickcode": payload}
         else:
-            api = f"{base_url}/{app}/2.0/ufile/download"
+            api = complete_proapi("/2.0/ufile/download", base_url, app)
             if isinstance(payload, str):
                 payload = {"pick_code": payload}
             else:
@@ -3693,7 +3724,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -3705,7 +3736,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -3716,7 +3747,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -3729,7 +3760,7 @@ class P115Client:
             - cid: int | str
             - aid: int | str = 1
         """
-        api = f"{base_url}/{app}/2.0/category/get"
+        api = complete_proapi("/2.0/category/get", base_url, app)
         if isinstance(payload, (int, str)):
             payload = {"cid": payload}
         else:
@@ -4130,7 +4161,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -4142,7 +4173,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -4153,7 +4184,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -4165,7 +4196,7 @@ class P115Client:
         :payload:
             - path: str
         """
-        api = f"{base_url}/{app}/files/getid"
+        api = api = complete_proapi("/files/getid", base_url, app)
         if isinstance(payload, str):
             payload = {"path": payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
@@ -4538,7 +4569,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         mixin: str = "", 
         *, 
         async_: Literal[False] = False, 
@@ -4551,7 +4582,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         mixin: str = "", 
         *, 
         async_: Literal[True], 
@@ -4563,7 +4594,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         mixin: str = "", 
         *, 
         async_: Literal[False, True] = False, 
@@ -4644,7 +4675,7 @@ class P115Client:
         """
         if mixin and not mixin.startswith("/"):
             mixin = "/" + mixin
-        api = f"{base_url}/{app}/2.0{mixin}/ufile/files"
+        api = complete_proapi(f"/2.0{mixin}/ufile/files", base_url, app)
         if isinstance(payload, (int, str)):
             payload = {
                 "aid": 1, "count_folders": 1, "limit": 32, "offset": 0, 
@@ -4665,7 +4696,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         mixin: str = "", 
         *, 
         async_: Literal[False] = False, 
@@ -4678,7 +4709,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         mixin: str = "", 
         *, 
         async_: Literal[True], 
@@ -4690,7 +4721,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         mixin: str = "", 
         *, 
         async_: Literal[False, True] = False, 
@@ -4765,7 +4796,7 @@ class P115Client:
         """
         if mixin and not mixin.startswith("/"):
             mixin = "/" + mixin
-        api = f"{base_url}/{app}{mixin}/files"
+        api = complete_proapi(f"{mixin}/files", base_url, app)
         if isinstance(payload, (int, str)):
             payload = {
                 "aid": 1, "count_folders": 1, "limit": 32, "offset": 0, 
@@ -5340,7 +5371,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -5352,7 +5383,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -5363,7 +5394,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -5376,7 +5407,7 @@ class P115Client:
             - pick_code: str
             - action: str = "get_one"
         """
-        api = f"{base_url}/{app}/history"
+        api = complete_proapi("/history", base_url, app)
         if isinstance(payload, dict):
             payload = {"action": "get_one", **payload}
         else:
@@ -5735,7 +5766,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -5747,7 +5778,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -5758,7 +5789,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -5784,7 +5815,7 @@ class P115Client:
               - 创建时间："user_ptime"
               - 上一次打开时间："user_otime"
         """
-        api = f"{base_url}/{app}/files/imglist"
+        api = complete_proapi("/files/imglist", base_url, app)
         if isinstance(payload, (int, str)):
             payload = {"limit": 32, "offset": 0, "aid": 1, "cid": payload}
         else:
@@ -6290,7 +6321,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -6302,7 +6333,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -6313,7 +6344,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -6340,7 +6371,7 @@ class P115Client:
             - fc_mix: 0 | 1 = <default> 💡 是否目录和文件混合，如果为 0 则目录在前（目录置顶）
             - module: str = <default> 💡 "label_search" 表示用于搜索的排序
         """
-        api = f"{base_url}/{app}/2.0/ufile/order"
+        api = complete_proapi("/2.0/ufile/order", base_url, app)
         if isinstance(payload, str):
             payload = {"file_id": 0, "user_asc": 1, "user_order": payload}
         else:
@@ -6400,7 +6431,7 @@ class P115Client:
         payload: tuple[int | str, str] | dict | Iterable[tuple[int | str, str]], 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -6412,7 +6443,7 @@ class P115Client:
         payload: tuple[int | str, str] | dict | Iterable[tuple[int | str, str]], 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -6423,7 +6454,7 @@ class P115Client:
         payload: tuple[int | str, str] | dict | Iterable[tuple[int | str, str]], 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -6435,7 +6466,7 @@ class P115Client:
         :payload:
             - files_new_name[{file_id}]: str 💡 值为新的文件名（basename）
         """
-        api = f"{base_url}/{app}/files/batch_rename"
+        api = complete_proapi("/files/batch_rename", base_url, app)
         if isinstance(payload, tuple) and len(payload) == 2 and isinstance(payload[0], (int, str)):
             payload = {f"files_new_name[{payload[0]}]": payload[1]}
         elif not isinstance(payload, dict):
@@ -6644,7 +6675,7 @@ class P115Client:
         payload: str | dict = ".", 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -6656,7 +6687,7 @@ class P115Client:
         payload: str | dict = ".", 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -6667,7 +6698,7 @@ class P115Client:
         payload: str | dict = ".", 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -6717,7 +6748,7 @@ class P115Client:
               - 7: 书籍
               - 99: 仅文件
         """
-        api = f"{base_url}/{app}/files/search"
+        api = complete_proapi("/files/search", base_url, app)
         if isinstance(payload, str):
             payload = {
                 "aid": 1, "cid": 0, "format": "json", "limit": 32, "offset": 0, 
@@ -6778,7 +6809,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -6789,7 +6820,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -6799,7 +6830,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -6808,7 +6839,7 @@ class P115Client:
 
         GET https://proapi.115.com/{app}/1.0/user/space_info
         """
-        api = f"{base_url}/{app}/1.0/user/space_info"
+        api = complete_proapi("/1.0/user/space_info", base_url, app)
         return self.request(url=api, async_=async_, **request_kwargs)
 
     @overload
@@ -7036,7 +7067,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -7048,7 +7079,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -7059,7 +7090,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -7079,7 +7110,7 @@ class P115Client:
             - local: 0 | 1 = <default> 💡 是否本地，如果为 1，则不包括 m3u8
             - user_id: int = <default> 💡 不用管
         """
-        api = f"{base_url}/{app}/2.0/video/play"
+        api = complete_proapi("/2.0/video/play", base_url, app)
         if isinstance(payload, str):
             payload = {"pickcode": payload, "user_id": self.user_id}
         else:
@@ -7205,7 +7236,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -7217,7 +7248,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -7228,7 +7259,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -7240,7 +7271,7 @@ class P115Client:
         :payload:
             - pickcode: str
         """
-        api = f"{base_url}/{app}/2.0/video/subtitle"
+        api = complete_proapi("/2.0/video/subtitle", base_url, app)
         if isinstance(payload, str):
             payload = {"pickcode": payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
@@ -7253,7 +7284,7 @@ class P115Client:
         payload: str | dict = "", 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -7265,7 +7296,7 @@ class P115Client:
         payload: str | dict = "", 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -7276,7 +7307,7 @@ class P115Client:
         payload: str | dict = "", 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *,
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -7310,7 +7341,7 @@ class P115Client:
             - offset: int = 0
             - date: str = <default> 💡 默认为今天，格式为 yyyy-mm-dd
         """
-        api = f"{base_url}/{app}/1.0/behavior/detail"
+        api = complete_proapi("/1.0/behavior/detail", base_url, app)
         if isinstance(payload, str):
             payload = {"limit": 32, "offset": 0, "date": str(date.today()), "type": payload}
         else:
@@ -7616,6 +7647,9 @@ class P115Client:
     def login_info(
         self, 
         /, 
+        app: str = "android", 
+        base_url: bool | str = False, 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -7624,6 +7658,9 @@ class P115Client:
     def login_info(
         self, 
         /, 
+        app: str = "android", 
+        base_url: bool | str = False, 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -7631,6 +7668,9 @@ class P115Client:
     def login_info(
         self, 
         /, 
+        app: str = "android", 
+        base_url: bool | str = False, 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -7638,7 +7678,7 @@ class P115Client:
 
         GET https://proapi.115.com/android/2.0/user/login_info
         """
-        api = "https://proapi.115.com/android/2.0/user/login_info"
+        api = complete_proapi("/2.0/user/login_info", base_url, app)
         return self.request(url=api, async_=async_, **request_kwargs)
 
     @overload
@@ -9259,6 +9299,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        base_url: bool | str = False, 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -9268,6 +9310,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        base_url: bool | str = False, 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -9276,6 +9320,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        base_url: bool | str = False, 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -9288,7 +9334,7 @@ class P115Client:
             - receive_code: str
             - share_code: str
         """
-        api = "https://proapi.115.com/app/share/downurl"
+        api = complete_proapi("/app/share/downurl", base_url)
         def parse(resp, content: bytes, /) -> dict:
             resp = json_loads(content)
             if resp["state"]:
@@ -10018,6 +10064,8 @@ class P115Client:
     def upload_info(
         self, 
         /, 
+        base_url: bool | str = False, 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -10026,6 +10074,8 @@ class P115Client:
     def upload_info(
         self, 
         /, 
+        base_url: bool | str = False, 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -10033,6 +10083,8 @@ class P115Client:
     def upload_info(
         self, 
         /, 
+        base_url: bool | str = False, 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -10040,7 +10092,7 @@ class P115Client:
 
         GET https://proapi.115.com/app/uploadinfo
         """
-        api = "https://proapi.115.com/app/uploadinfo"
+        api = complete_proapi("/app/uploadinfo", base_url)
         return self.request(url=api, async_=async_, **request_kwargs)
 
     @overload
@@ -10083,7 +10135,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -10094,7 +10146,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -10104,7 +10156,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -10113,8 +10165,8 @@ class P115Client:
 
         GET https://proapi.115.com/{app}/2.0/user/upload_key
         """
+        api = complete_proapi("/2.0/user/upload_key", base_url, app)
         def gen_step():
-            api = f"{base_url}/{app}/2.0/user/upload_key"
             resp = yield self.request(url=api, async_=async_, **request_kwargs)
             if resp["state"]:
                 self.user_key = resp["data"]["userkey"]
@@ -11127,7 +11179,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -11138,7 +11190,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -11148,7 +11200,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -11157,7 +11209,7 @@ class P115Client:
 
         GET https://proapi.115.com/{app}/2.0/user/points_sign
         """
-        api = f"{base_url}/{app}/2.0/user/points_sign"
+        api = complete_proapi("/2.0/user/points_sign", base_url, app)
         return self.request(url=api, async_=async_, **request_kwargs)
 
     @overload
@@ -11165,7 +11217,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -11176,7 +11228,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -11186,7 +11238,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -11195,7 +11247,7 @@ class P115Client:
 
         POST https://proapi.115.com/{app}/2.0/user/points_sign
         """
-        api = f"{base_url}/{app}/2.0/user/points_sign"
+        api = complete_proapi("/2.0/user/points_sign", base_url, app)
         t = int(time())
         payload = {
             "token": sha1(b"%d-Points_Sign@#115-%d" % (self.user_id, t)).hexdigest(), 
@@ -11354,7 +11406,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -11365,7 +11417,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -11375,7 +11427,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -11384,7 +11436,7 @@ class P115Client:
 
         GET https://proapi.115.com/{app}/1.0/user/setting
         """
-        api = f"{base_url}/{app}/1.0/user/setting"
+        api = complete_proapi("/1.0/user/setting", base_url, app)
         return self.request(url=api, async_=async_, **request_kwargs)
 
     @overload
@@ -11393,7 +11445,7 @@ class P115Client:
         payload: dict, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -11405,7 +11457,7 @@ class P115Client:
         payload: dict, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -11416,7 +11468,7 @@ class P115Client:
         payload: dict, 
         /, 
         app: str = "android", 
-        base_url: str = "http://proapi.115.com", 
+        base_url: bool | str = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -11425,7 +11477,7 @@ class P115Client:
 
         POST https://proapi.115.com/{app}/1.0/user/setting
         """
-        api = f"{base_url}/{app}/1.0/user/setting"
+        api = complete_proapi("/1.0/user/setting", base_url, app)
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     ########## User Share API ##########

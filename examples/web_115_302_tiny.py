@@ -6,48 +6,60 @@ __version__ = (0, 0, 6)
 __all__ = ["make_application"]
 __licence__ = "GPLv3 <https://www.gnu.org/licenses/gpl-3.0.txt>"
 __doc__ = """\
-    🛫 115 302 微型版 🛬
+                            \x1b[1;5m🛫 115 302 微型版 🛬\x1b[0m
 
-> 网盘文件支持用 pickcode、id、sha1 或 name 查询
-> 分享文件支持用 id 或 name 查询
+    ╭────────────────────── \x1b[31mWelcome to \x1b[1mweb_115_302_tiny.py\x1b[0m ────────────────────────╮
+    │                                                                              │
+    │  \x1b[35mmaintained by\x1b[0m \x1b[3;5;31m❤\x1b[0m     \x1b[32mChenyangGao \x1b[4;34mhttps://chenyanggao.github.io\x1b[0m               │
+    │                                                                              │
+    │                      \x1b[32mGithub      \x1b[4;34mhttps://github.com/ChenyangGao/p115client/\x1b[0m  │
+    │                                                                              │
+    │                      \x1b[32mlicence     \x1b[4;34mhttps://www.gnu.org/licenses/gpl-3.0.txt\x1b[0m    │
+    │                                                                              │
+    │                      \x1b[32mversion     \x1b[1;36m0.0.6\x1b[0m                                       │
+    │                                                                              │
+    ╰──────────────────────────────────────────────────────────────────────────────╯
 
-⏰ 此版本不依赖于 p115client 和 pycryptodome，至少要求 python 3.8
+> 网盘文件支持用 \x1b[3;36mpickcode\x1b[0m、\x1b[3;36mid\x1b[0m、\x1b[3;36msha1\x1b[0m 或 \x1b[3;36mname\x1b[0m 查询
+> 分享文件支持用 \x1b[3;36mid\x1b[0m 或 \x1b[3;36mname\x1b[0m 查询
+
+⏰ 此版本不依赖于 \x1b[31mp115client\x1b[0m 和 \x1b[31mpycryptodome\x1b[0m，至少要求 \x1b[31mpython \x1b[1m3.8\x1b[0m
 
 🌰 查询示例：
 
-    0. 查询 pickcode
-        http://localhost:8000?ecjq9ichcb40lzlvx
-        http://localhost:8000/ecjq9ichcb40lzlvx
-        http://localhost:8000?pickcode=ecjq9ichcb40lzlvx
-    1. 带（任意）名字查询 pickcode
-        http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?ecjq9ichcb40lzlvx
-        http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?pickcode=ecjq9ichcb40lzlvx
-    2. 查询 id
-        http://localhost:8000?2691590992858971545
-        http://localhost:8000/2691590992858971545
-        http://localhost:8000?id=2691590992858971545
-    3. 带（任意）名字查询 id
-        http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?2691590992858971545
-        http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?id=2691590992858971545
-    4. 查询 sha1
-        http://localhost:8000?E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
-        http://localhost:8000/E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
-        http://localhost:8000?sha1=E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
-    5. 带（任意）名字查询 sha1
-        http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
-        http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?sha1=E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
-    6. 查询 name（直接以路径作为 name，且不要有任何查询参数）
-        http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv
-    7. 查询分享文件（如果是你自己的分享，则无须提供密码 receive_code）
-        http://localhost:8000?share_code=sw68md23w8m&receive_code=q353&id=2580033742990999218
-        http://localhost:8000?share_code=sw68md23w8m&receive_code=q353&id=2580033742990999218
-        http://localhost:8000?share_code=sw68md23w8m&id=2580033742990999218
-    8. 带（任意）名字查询分享文件（如果是你自己的分享，则无须提供密码 receive_code）
-        http://localhost:8000/Cosmos.S01E01.1080p.AMZN.WEB-DL.DD+5.1.H.264-iKA.mkv?share_code=sw68md23w8m&receive_code=q353&id=2580033742990999218
-        http://localhost:8000/Cosmos.S01E01.1080p.AMZN.WEB-DL.DD+5.1.H.264-iKA.mkv?share_code=sw68md23w8m&id=2580033742990999218
-    9. 用 name 查询分享文件（直接以路径作为 name，且不要有 id 查询参数。如果是你自己的分享，则无须提供密码 receive_code）
-        http://localhost:8000/Cosmos.S01E01.1080p.AMZN.WEB-DL.DD+5.1.H.264-iKA.mkv?share_code=sw68md23w8m&receive_code=q353
-        http://localhost:8000/Cosmos.S01E01.1080p.AMZN.WEB-DL.DD+5.1.H.264-iKA.mkv?share_code=sw68md23w8m
+    0. 查询 \x1b[3;36mpickcode\x1b[0m
+        \x1b[4;34mhttp://localhost:8000?ecjq9ichcb40lzlvx\x1b[0m
+        \x1b[4;34mhttp://localhost:8000/ecjq9ichcb40lzlvx\x1b[0m
+        http://localhost:8000?pickcode=ecjq9ichcb40lzlvx\x1b[0m
+    1. 带（任意）名字查询 \x1b[3;36mpickcode\x1b[0m
+        \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?ecjq9ichcb40lzlvx\x1b[0m
+        \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?pickcode=ecjq9ichcb40lzlvx\x1b[0m
+    2. 查询 \x1b[3;36mid\x1b[0m
+        \x1b[4;34mhttp://localhost:8000?2691590992858971545\x1b[0m
+        \x1b[4;34mhttp://localhost:8000/2691590992858971545\x1b[0m
+        \x1b[4;34mhttp://localhost:8000?id=2691590992858971545\x1b[0m
+    3. 带（任意）名字查询 \x1b[3;36mid\x1b[0m
+        \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?2691590992858971545\x1b[0m
+        \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?id=2691590992858971545\x1b[0m
+    4. 查询 \x1b[3;36msha1\x1b[0m
+        \x1b[4;34mhttp://localhost:8000?E7FAA0BE343AF2DA8915F2B694295C8E4C91E691\x1b[0m
+        \x1b[4;34mhttp://localhost:8000/E7FAA0BE343AF2DA8915F2B694295C8E4C91E691\x1b[0m
+        \x1b[4;34mhttp://localhost:8000?sha1=E7FAA0BE343AF2DA8915F2B694295C8E4C91E691\x1b[0m
+    5. 带（任意）名字查询 \x1b[3;36msha1\x1b[0m
+        \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?E7FAA0BE343AF2DA8915F2B694295C8E4C91E691\x1b[0m
+        \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?sha1=E7FAA0BE343AF2DA8915F2B694295C8E4C91E691\x1b[0m
+    6. 查询 \x1b[3;36mname\x1b[0m（直接以路径作为 \x1b[3;36mname\x1b[0m，且不要有任何查询参数）
+        \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv\x1b[0m
+    7. 查询分享文件（如果是你自己的分享，则无须提供密码 \x1b[3;36mreceive_code\x1b[0m）
+        \x1b[4;34mhttp://localhost:8000?share_code=sw68md23w8m&receive_code=q353&id=2580033742990999218\x1b[0m
+        \x1b[4;34mhttp://localhost:8000?share_code=sw68md23w8m&receive_code=q353&id=2580033742990999218\x1b[0m
+        \x1b[4;34mhttp://localhost:8000?share_code=sw68md23w8m&id=2580033742990999218\x1b[0m
+    8. 带（任意）名字查询分享文件（如果是你自己的分享，则无须提供密码 \x1b[3;36mreceive_code\x1b[0m）
+        \x1b[4;34mhttp://localhost:8000/Cosmos.S01E01.1080p.AMZN.WEB-DL.DD+5.1.H.264-iKA.mkv?share_code=sw68md23w8m&receive_code=q353&id=2580033742990999218\x1b[0m
+        \x1b[4;34mhttp://localhost:8000/Cosmos.S01E01.1080p.AMZN.WEB-DL.DD+5.1.H.264-iKA.mkv?share_code=sw68md23w8m&id=2580033742990999218\x1b[0m
+    9. 用 \x1b[3;36mname\x1b[0m 查询分享文件（直接以路径作为 \x1b[3;36mname\x1b[0m，且不要有 \x1b[3;36mid\x1b[0m 查询参数。如果是你自己的分享，则无须提供密码 \x1b[3;36mreceive_code\x1b[0m）
+        \x1b[4;34mhttp://localhost:8000/Cosmos.S01E01.1080p.AMZN.WEB-DL.DD+5.1.H.264-iKA.mkv?share_code=sw68md23w8m&receive_code=q353\x1b[0m
+        \x1b[4;34mhttp://localhost:8000/Cosmos.S01E01.1080p.AMZN.WEB-DL.DD+5.1.H.264-iKA.mkv?share_code=sw68md23w8m\x1b[0m
 """
 
 if __name__ == "__main__":
@@ -77,6 +89,7 @@ try:
     from blacksheep import redirect, text, Application, Request, Router
     from blacksheep.client import ClientSession
     from blacksheep.contents import FormContent
+    from blacksheep.server.compression import use_gzip_compression
     from blacksheep.server.remotes.forwarding import ForwardedHeadersMiddleware
 except ImportError:
     from sys import executable
@@ -85,6 +98,7 @@ except ImportError:
     from blacksheep import redirect, text, Application, Request, Router
     from blacksheep.client import ClientSession
     from blacksheep.contents import FormContent
+    from blacksheep.server.compression import use_gzip_compression
     from blacksheep.server.remotes.forwarding import ForwardedHeadersMiddleware
 
 from collections.abc import ItemsView, Mapping
@@ -150,7 +164,6 @@ def xor(src, key):
 
 
 def encrypt(data):
-    "RSA 加密"
     xor_text = bytearray(16)
     tmp = memoryview(xor(data, b"\x8d\xa5\xa5\x8d"))[::-1]
     xor_text += xor(tmp, b"x\x06\xadL3\x86]\x18L\x01?F")
@@ -162,7 +175,6 @@ def encrypt(data):
 
 
 def decrypt(cipher_data):
-    "RSA 解密"
     cipher_data = memoryview(b64decode(cipher_data))
     data = bytearray()
     for l, r, _ in acc_step(0, len(cipher_data), 128):
@@ -233,6 +245,7 @@ def make_application(cookies: str, debug: bool = False) -> Application:
     RECEIVE_CODE_MAP = {}             # type: dict[str, str]
 
     app = Application(router=Router(), show_error_details=debug)
+    use_gzip_compression(app)
     client: ClientSession
 
     if debug:
@@ -265,7 +278,6 @@ def make_application(cookies: str, debug: bool = False) -> Application:
             yield
 
     async def get_pickcode_to_id(id: int) -> str:
-        "获得 id 所对应的 pickcode"
         pickcode = ID_TO_PICKCODE.get(id, "")
         if pickcode:
             return pickcode
@@ -279,7 +291,6 @@ def make_application(cookies: str, debug: bool = False) -> Application:
         return pickcode
 
     async def get_pickcode_for_sha1(sha1: str) -> str:
-        "搜索 sha1 所对应的某个 pickcode"
         pickcode = SHA1_TO_PICKCODE.get(sha1, "")
         if pickcode:
             return pickcode
@@ -343,8 +354,6 @@ def make_application(cookies: str, debug: bool = False) -> Application:
         return id
 
     async def get_downurl(pickcode: str, user_agent: bytes | str = b"") -> str:
-        """获取文件的下载链接
-        """
         resp = await client.post(
             f"{get_proapi_url()}/android/2.0/ufile/download", 
             content=FormContent([("data", encrypt(b'{"pick_code":"%s"}' % bytes(pickcode, "ascii")).decode("utf-8"))]), 
@@ -360,8 +369,6 @@ def make_application(cookies: str, debug: bool = False) -> Application:
         return url
 
     async def get_share_downurl(share_code: str, receive_code: str, file_id: int):
-        """获取分享文件的下载链接
-        """
         resp = await client.post(
             f"{get_proapi_url()}/app/share/downurl", 
             content=FormContent([("data", encrypt(f'{{"share_code":"{share_code}","receive_code":"{receive_code}","file_id":{file_id}}}'.encode("utf-8")).decode("utf-8"))]), 
@@ -379,8 +386,6 @@ def make_application(cookies: str, debug: bool = False) -> Application:
         return url["url"]
 
     async def get_receive_code(share_code: str) -> str:
-        """获取文件的下载链接
-        """
         receive_code = RECEIVE_CODE_MAP.get(share_code, "")
         if receive_code:
             return receive_code
