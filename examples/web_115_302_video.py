@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
-__licence__ = "GPLv3"
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __version__ = (0, 0, 5)
 __all__ = ["make_application"]
+__licence__ = "GPLv3 <https://www.gnu.org/licenses/gpl-3.0.txt>"
 __doc__ = """\
         \x1b[5m🚄\x1b[0m \x1b[1m115 302 服务(针对视频)\x1b[0m \x1b[5m🌊\x1b[0m
 
@@ -61,10 +61,14 @@ if __name__ == "__main__":
     parser.add_argument("-H", "--host", default="0.0.0.0", help="ip 或 hostname，默认值：'0.0.0.0'")
     parser.add_argument("-P", "--port", default=8000, type=int, help="端口号，默认值：8000")
     parser.add_argument("-v", "--version", action="store_true", help="输出版本号")
+    parser.add_argument("-l", "--license", action="store_true", help="输出授权信息")
 
     args = parser.parse_args()
     if args.version:
         print(".".join(map(str, __version__)))
+        raise SystemExit(0)
+    elif args.license:
+        print(__licence__)
         raise SystemExit(0)
 
 try:
@@ -415,6 +419,7 @@ def make_application(
             url = await p115client.download_url(
                 pickcode, 
                 headers={"User-Agent": user_agent}, 
+                app="android", 
                 request=blacksheep_request, 
                 session=client, 
                 async_=True, 
