@@ -30,7 +30,7 @@ __doc__ = """\
     0. 查询 \x1b[3;36mpickcode\x1b[0m
         \x1b[4;34mhttp://localhost:8000?ecjq9ichcb40lzlvx\x1b[0m
         \x1b[4;34mhttp://localhost:8000/ecjq9ichcb40lzlvx\x1b[0m
-        http://localhost:8000?pickcode=ecjq9ichcb40lzlvx\x1b[0m
+        \x1b[4;34mhttp://localhost:8000?pickcode=ecjq9ichcb40lzlvx\x1b[0m
     1. 带（任意）名字查询 \x1b[3;36mpickcode\x1b[0m
         \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?ecjq9ichcb40lzlvx\x1b[0m
         \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?pickcode=ecjq9ichcb40lzlvx\x1b[0m
