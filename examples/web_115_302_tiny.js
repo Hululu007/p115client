@@ -1,43 +1,55 @@
 #!/usr/bin/env node
 
 const { readFileSync } = require("fs");
-const { createServer } = require("http");
-const { request } = require("https");
+const { createServer, request } = require("http");
 const { networkInterfaces } = require("os");
 const { parse } = require("url");
 
-const LICENSE = "GPLv3"
-const VERSION = "0.0.2"
 const AUTHOR = "ChenyangGao <https://chenyanggao.github.io>"
+const LICENSE = "GPLv3 <https://www.gnu.org/licenses/gpl-3.0.txt>"
+const VERSION = "0.0.3"
 const DOC = `usage: web_115_302_tiny.js [-h] [-c COOKIES] [-cp COOKIES_PATH] [-H HOST] [-P PORT] [-v]
 
-    🛫 115 302 微型版 (\x1b[4;5;34m${AUTHOR}\x1b[0m) 🛬
+                            \x1b[1;5m🛫 115 302 微型版 🛬\x1b[0m
 
-💡 目前仅支持用 pickcode 或 sha1 查询
+    ╭────────────────────── \x1b[31mWelcome to \x1b[1mweb_115_302_tiny.js\x1b[0m ────────────────────────╮
+    │                                                                              │
+    │  \x1b[35mmaintained by\x1b[0m \x1b[3;5;31m❤\x1b[0m     \x1b[32mChenyangGao \x1b[4;34mhttps://chenyanggao.github.io\x1b[0m               │
+    │                                                                              │
+    │                      \x1b[32mGithub      \x1b[4;34mhttps://github.com/ChenyangGao/p115client/\x1b[0m  │
+    │                                                                              │
+    │                      \x1b[32mlicence     \x1b[4;34mhttps://www.gnu.org/licenses/gpl-3.0.txt\x1b[0m    │
+    │                                                                              │
+    │                      \x1b[32mversion     \x1b[1;36m${VERSION}\x1b[0m                                       │
+    │                                                                              │
+    ╰──────────────────────────────────────────────────────────────────────────────╯
+
+💡 目前仅支持用 \x1b[3;36mpickcode\x1b[0m 或 \x1b[3;36msha1\x1b[0m 查询
 
 🌰 查询示例：
 
-    1. 查询 pickcode
-        http://localhost:8000?ecjq9ichcb40lzlvx
-        http://localhost:8000?pickcode=ecjq9ichcb40lzlvx
-    2. 带（任意）名字查询 pickcode
-        http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?ecjq9ichcb40lzlvx
-        http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?pickcode=ecjq9ichcb40lzlvx
-    3. 查询 sha1
-        http://localhost:8000?E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
-        http://localhost:8000?sha1=E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
-    4. 带（任意）名字查询 sha1
-        http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
-        http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?sha1=E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
+    1. 查询 \x1b[3;36mpickcode\x1b[0m
+        \x1b[4;34mhttp://localhost:8000?ecjq9ichcb40lzlvx\x1b[0m
+        \x1b[4;34mhttp://localhost:8000?pickcode=ecjq9ichcb40lzlvx\x1b[0m
+    2. 带（任意）名字查询 \x1b[3;36mpickcode\x1b[0m
+        \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?ecjq9ichcb40lzlvx\x1b[0m
+        \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?pickcode=ecjq9ichcb40lzlvx\x1b[0m
+    3. 查询 \x1b[3;36msha1\x1b[0m
+        \x1b[4;34mhttp://localhost:8000?E7FAA0BE343AF2DA8915F2B694295C8E4C91E691\x1b[0m
+        \x1b[4;34mhttp://localhost:8000?sha1=E7FAA0BE343AF2DA8915F2B694295C8E4C91E691\x1b[0m
+    4. 带（任意）名字查询 \x1b[3;36msha1\x1b[0m
+        \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?E7FAA0BE343AF2DA8915F2B694295C8E4C91E691\x1b[0m
+        \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?sha1=E7FAA0BE343AF2DA8915F2B694295C8E4C91E691\x1b[0m
 
 options:
   -h, --help            show this help message and exit
-  -c COOKIES, --cookies COOKIES
-                        cookies 字符串
-  -cp COOKIES_PATH, --cookies-path COOKIES_PATH
-                        cookies 文件保存路径，默认为当前工作目录下的 115-cookies.txt
-  -H HOST, --host HOST  ip 或 hostname，默认值：'0.0.0.0'
-  -P PORT, --port PORT  端口号，默认值：8000
+  -c \x1b[1mCOOKIES\x1b[0m, --cookies \x1b[1mCOOKIES\x1b[0m
+                        \x1b[3;36mcookies\x1b[0m 字符串
+  -cp \x1b[1mCOOKIES_PATH\x1b[0m, --cookies-path \x1b[1mCOOKIES_PATH\x1b[0m
+                        \x1b[3;36mcookies\x1b[0m 文件保存路径，默认为当前工作目录下的 \x1b[1;4;34m115-cookies.txt\x1b[0m
+  -H \x1b[1mHOST\x1b[0m, --host \x1b[1mHOST\x1b[0m  \x1b[3;36mip\x1b[0m 或 \x1b[3;36mhostname\x1b[0m，默认值：\x1b[1;2m'0.0.0.0'\x1b[0m
+  -P \x1b[1mPORT\x1b[0m, --port \x1b[1mPORT\x1b[0m  端口号，默认值：\x1b[1;36m8000\x1b[0m
+  -l, --license         输出开源协议
   -v, --version         输出版本号`
 
 const G_kts = new Uint8Array([
@@ -178,7 +190,7 @@ function getPickcodeForSha1(sha1, headers) {
         if (pickcode)
             return resolve(pickcode)
         const options = {
-            hostname: "webapi.115.com", 
+            hostname: "web.api.115.com", 
             path: `/files/shasearch?sha1=${sha1}`, 
             method: "GET", 
             headers: headers, 
@@ -215,7 +227,7 @@ function getUrl(pickcode, headers) {
         headers["Content-Type"] = "application/x-www-form-urlencoded";
         headers["Content-Length"] = Buffer.byteLength(data);
         const options = {
-            hostname: "proapi.115.com", 
+            hostname: "pro.api.115.com", 
             path: "/android/2.0/ufile/download", 
             method: "POST", 
             headers: headers, 
@@ -283,6 +295,11 @@ for (let i = 0; i < argv.length; i++) {
         case "--version":
             console.log(VERSION);
             process.exit(0);
+        case "-l":
+            case "--license":
+                console.log(LICENSE);
+                console.log(`  by ${AUTHOR}`);
+                process.exit(0);
         case "-h":
         case "--help":
             console.log(DOC);
@@ -354,7 +371,7 @@ const server = createServer(async (req, res) => {
         else 
             statusColor = 31;
         const duration = (stop_s * 1000 + stop_ns / 1e6) - (start_s * 1000 + start_ns / 1e6);
-        console.log(`[\x1b[1m${(new Date()).toISOString()}\x1b[0m] \x1b[5;37m${req.socket.remoteAddress}\x1b[0m - \x1b[36m${req.method}\x1b[0m \x1b[4;34m${req.url}\x1b[0m - \x1b[${statusColor}m${status_code}\x1b[0m - ${duration.toFixed(3)} ms`);
+        console.log(`[\x1b[1m${(new Date()).toISOString()}\x1b[0m] \x1b[5;37m${req.socket.remoteAddress}:${req.socket.remotePort}\x1b[0m - \x1b[36m${req.method}\x1b[0m \x1b[4;34m${req.url}\x1b[0m - \x1b[${statusColor}m${status_code}\x1b[0m - ${duration.toFixed(3)} ms`);
     }
 });
 server.listen(args.port, args.host, () => {
