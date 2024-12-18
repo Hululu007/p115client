@@ -89,6 +89,16 @@ CREATE TABLE IF NOT EXISTS event (
     created_at DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+08:00', 'now', '+8 hours')) -- 创建时间
 );
 
+-- 触发器
+CREATE TRIGGER IF NOT EXISTS trg_data_before_update
+BEFORE UPDATE ON data
+FOR EACH ROW
+BEGIN
+    SELECT CASE
+        WHEN NEW.mtime < OLD.mtime THEN RAISE(IGNORE)
+    END;
+END;
+
 -- 索引
 CREATE INDEX IF NOT EXISTS idx_data_pid ON data(parent_id);
 CREATE INDEX IF NOT EXISTS idx_data_pc ON data(pickcode);

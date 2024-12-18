@@ -4,7 +4,7 @@
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __version__ = (0, 0, 4)
 __all__ = ["make_application"]
-__licence__ = "GPLv3 <https://www.gnu.org/licenses/gpl-3.0.txt>"
+__license__ = "GPLv3 <https://www.gnu.org/licenses/gpl-3.0.txt>"
 __requirements__ = ["blacksheep", "blacksheep_client_request", "cachetools", "p115client", "posixpatht", "uvicorn"]
 __doc__ = """\
         \x1b[5m🚀\x1b[0m \x1b[1m115 直链服务\x1b[0m \x1b[5m🍳\x1b[0m
@@ -73,7 +73,7 @@ if __name__ == "__main__":
         print(".".join(map(str, __version__)))
         raise SystemExit(0)
     elif args.license:
-        print(__licence__)
+        print(__license__)
         raise SystemExit(0)
 
 try:

@@ -11,7 +11,7 @@ __doc__ = """\
     │                                                                              │
     │                      \x1b[32mGithub      \x1b[4;34mhttps://github.com/ChenyangGao/p115client/\x1b[0m  │
     │                                                                              │
-    │                      \x1b[32mlicence     \x1b[4;34mhttps://www.gnu.org/licenses/gpl-3.0.txt\x1b[0m    │
+    │                      \x1b[32mlicense     \x1b[4;34mhttps://www.gnu.org/licenses/gpl-3.0.txt\x1b[0m    │
     │                                                                              │
     │                      \x1b[32mversion     \x1b[1;36m0.0.1\x1b[0m                                       │
     │                                                                              │

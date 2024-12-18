@@ -83,7 +83,7 @@ get_origin = cycle(("http://anxia.com", "http://v.anxia.com")).__next__
 def make_prefix_generator(
     n: int = 1, 
     /, 
-    seq=("/category", "/files", "/history", "/label", "/movies", "/offine", "/photo", "/rb", "/share", "/user", "/usershare"), 
+    seq=("/behavior", "/category", "/files", "/history", "/label", "/movies", "/offine", "/photo", "/rb", "/share", "/user", "/usershare"), 
 ) -> Callable[[], str]:
     if n == 0:
         return cycle(("",)).__next__
@@ -7283,7 +7283,6 @@ class P115Client:
         self, 
         payload: str | dict = "", 
         /, 
-        app: str = "android", 
         base_url: bool | str = False, 
         *, 
         async_: Literal[False] = False, 
@@ -7295,7 +7294,6 @@ class P115Client:
         self, 
         payload: str | dict = "", 
         /, 
-        app: str = "android", 
         base_url: bool | str = False, 
         *, 
         async_: Literal[True], 
@@ -7303,6 +7301,78 @@ class P115Client:
     ) -> Coroutine[Any, Any, dict]:
         ...
     def life_behavior_detail(
+        self, 
+        payload: str | dict = "", 
+        /, 
+        base_url: bool | str = False, 
+        *,
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取 life_list 操作记录明细
+
+        GET https://webapi.115.com/behavior/detail
+
+        .. attention::
+            这个接口最多能拉取前 10_000 条数据，且响应速度也较差，请优先使用 `P115Client.life_behavior_detail_app`
+
+        :payload:
+            - type: str = "" 💡 操作类型
+
+              - "upload_image_file": 1 💡 上传图片
+              - "upload_file":       2 💡 上传文件
+              - "star_file":         4 💡 设置星标
+              - "move_image_file":   5 💡 移动图片
+              - "move_file":         6 💡 移动文件或目录（不包括图片）
+              - "browse_image":      7 💡 浏览图片
+              - "browse_video":      8 💡 浏览视频
+              - "browse_audio":      9 💡 浏览音频
+              - "browse_document":  10 💡 浏览文档
+              - "receive_files":    14 💡 接收文件
+              - "new_folder":       17 💡 新增目录
+              - "copy_folder":      18 💡 复制目录
+              - "folder_label":     19 💡 目录设置标签
+              - "folder_rename":    20 💡 目录改名
+              - "delete_file":      22 💡 删除文件或目录
+              - "copy_file":         ? 💡 复制文件（未实现）
+              - "rename_file":       ? 💡 文件改名（未实现）
+
+            - limit: int = 32          💡 最大值为 1_000
+            - offset: int = 0
+            - date: str = <default>    💡 日期，格式为 YYYY-MM-DD，若指定则只拉取这一天的数据
+        """
+        api = complete_webapi("/behavior/detail", base_url=base_url)
+        if isinstance(payload, str):
+            payload = {"limit": 32, "offset": 0, "type": payload}
+        else:
+            payload = {"limit": 32, "offset": 0, **payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def life_behavior_detail_app(
+        self, 
+        payload: str | dict = "", 
+        /, 
+        app: str = "android", 
+        base_url: bool | str = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def life_behavior_detail_app(
+        self, 
+        payload: str | dict = "", 
+        /, 
+        app: str = "android", 
+        base_url: bool | str = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def life_behavior_detail_app(
         self, 
         payload: str | dict = "", 
         /, 
@@ -7317,35 +7387,35 @@ class P115Client:
         GET https://proapi.115.com/{app}/1.0/behavior/detail
 
         :payload:
-            - type: str 💡 操作类型
+            - type: str = "" 💡 操作类型
 
-              - "browse_document":   浏览文档
-              - "browse_image":      浏览图片
-              - "browse_audio":      浏览音频
-              - "browse_video":      浏览视频
-              - "new_folder":        新增目录
-              - "copy_folder":       复制目录
-              - "folder_rename":     目录改名
-              - "folder_label":      目录设置标签
-              - "star_file":         设置星标
-              - "move_file":         移动文件或目录（不包括图片）
-              - "move_image_file":   移动图片
-              - "delete_file":       删除文件或目录
-              - "upload_file":       上传文件
-              - "upload_image_file": 上传图片
-              - "receive_files":     接收文件
-              - "rename_file":       文件改名（未实现）
-              - "copy_file":         复制文件（未实现）
+              - "upload_image_file": 1 💡 上传图片
+              - "upload_file":       2 💡 上传文件
+              - "star_file":         4 💡 设置星标
+              - "move_image_file":   5 💡 移动图片
+              - "move_file":         6 💡 移动文件或目录（不包括图片）
+              - "browse_image":      7 💡 浏览图片
+              - "browse_video":      8 💡 浏览视频
+              - "browse_audio":      9 💡 浏览音频
+              - "browse_document":  10 💡 浏览文档
+              - "receive_files":    14 💡 接收文件
+              - "new_folder":       17 💡 新增目录
+              - "copy_folder":      18 💡 复制目录
+              - "folder_label":     19 💡 目录设置标签
+              - "folder_rename":    20 💡 目录改名
+              - "delete_file":      22 💡 删除文件或目录
+              - "copy_file":         ? 💡 复制文件（未实现）
+              - "rename_file":       ? 💡 文件改名（未实现）
 
-            - limit: int = 32
+            - limit: int = 32          💡 最大值为 1_000
             - offset: int = 0
-            - date: str = <default> 💡 默认为今天，格式为 yyyy-mm-dd
+            - date: str = <default>    💡 日期，格式为 YYYY-MM-DD，若指定则只拉取这一天的数据
         """
         api = complete_proapi("/1.0/behavior/detail", base_url, app)
         if isinstance(payload, str):
-            payload = {"limit": 32, "offset": 0, "date": str(date.today()), "type": payload}
+            payload = {"limit": 32, "offset": 0, "type": payload}
         else:
-            payload = {"limit": 32, "offset": 0, "date": str(date.today()), **payload}
+            payload = {"limit": 32, "offset": 0, **payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -7379,6 +7449,9 @@ class P115Client:
         """获取 115 生活的开关设置
 
         GET https://life.115.com/api/1.0/web/1.0/calendar/getoption
+
+        .. hint::
+            app 可以是任意字符串，服务器并不做检查。其他可用 app="web" 的接口可能皆是如此
         """
         api = f"https://life.115.com/api/1.0/{app}/1.0/calendar/getoption"
         return self.request(url=api, async_=async_, **request_kwargs)

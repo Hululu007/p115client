@@ -3,7 +3,7 @@
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __version__ = (0, 0, 3)
-__licence__ = "GPLv3 <https://www.gnu.org/licenses/gpl-3.0.txt>"
+__license__ = "GPLv3 <https://www.gnu.org/licenses/gpl-3.0.txt>"
 __doc__ = "115 302 迷你版，仅支持用 pickcode、id 或 sha1 查询"
 __requirements__ = ["blacksheep", "diskcache", "p115client", "uvicorn"]
 
@@ -22,7 +22,7 @@ if __name__ == "__main__":
         print(".".join(map(str, __version__)))
         raise SystemExit(0)
     if args.license:
-        print(__licence__)
+        print(__license__)
         raise SystemExit(0)
 
 try:
@@ -120,7 +120,7 @@ if __name__ == "__main__":
         forwarded_allow_ips="*", 
     )
 
-# TODO: 数据缓存到本地，使用 sqlite
+# TODO: 数据缓存到本地，使用 sqlite，这个可以专门做个模块
 # TODO: 要有 tiny 版的所有功能
 # TODO: 这个完成后，或许可以把 video 版进行移除
 # TODO: 增加后台任务，以更新数据库，主要是更新名字

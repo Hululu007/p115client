@@ -3,11 +3,12 @@
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __all__ = [
-    "ID_TO_DIRNODE_CACHE", "P115ID", "type_of_attr", "get_path_to_cid", "get_ancestors_to_cid", 
-    "get_id_to_path", "get_id_to_sha1", "get_id_to_pickcode", "filter_na_ids", "iter_stared_dirs_raw", 
-    "iter_stared_dirs", "ensure_attr_path", "iterdir_raw", "iterdir", "iter_files", "iter_files_raw", 
-    "dict_files", "traverse_files", "iter_dupfiles", "dict_dupfiles", "iter_image_files", 
-    "dict_image_files", "iter_dangling_files", "share_extract_payload", "share_iterdir", "share_iter_files", 
+    "ID_TO_DIRNODE_CACHE", "P115ID", "unescape_115_charref", "type_of_attr", "get_path_to_cid", 
+    "get_ancestors_to_cid", "get_id_to_path", "get_id_to_sha1", "get_id_to_pickcode", "filter_na_ids", 
+    "iter_stared_dirs_raw", "iter_stared_dirs", "ensure_attr_path", "iterdir_raw", "iterdir", 
+    "iter_files", "iter_files_raw", "dict_files", "traverse_files", "iter_dupfiles", "dict_dupfiles", 
+    "iter_image_files", "dict_image_files", "iter_dangling_files", "share_extract_payload", 
+    "share_iterdir", "share_iter_files", 
 ]
 __doc__ = "这个模块提供了一些和目录信息罗列有关的函数"
 
@@ -40,6 +41,7 @@ K = TypeVar("K")
 
 CRE_SHARE_LINK_search1 = re_compile(r"(?:/s/|share\.115\.com/)(?P<share_code>[a-z0-9]+)\?password=(?:(?P<receive_code>[a-z0-9]{4}))?").search
 CRE_SHARE_LINK_search2 = re_compile(r"(?P<share_code>[a-z0-9]+)(?:-(?P<receive_code>[a-z0-9]{4}))?").search
+CRE_115_CHARREF_sub = re_compile("\\[\x02([0-9]+)\\]").sub
 
 
 class DirNode(NamedTuple):
@@ -102,6 +104,18 @@ def _overview_attr(info: Mapping, /) -> OverviewAttr:
     else:
         raise ValueError(f"can't overview attr data: {info!r}")
     return OverviewAttr(is_dir, id, pid, name, ctime, mtime)
+
+
+def unescape_115_charref(s: str, /) -> str:
+    """对 115 的字符引用进行解码
+
+    :example:
+
+        .. code:: python
+
+            unescape_115_charref("[\x02128074]0号：优质资源") == "👊0号：优质资源"
+    """
+    return CRE_115_CHARREF_sub(lambda a: chr(int(a[1])), s)
 
 
 def type_of_attr(attr: Mapping, /) -> int:

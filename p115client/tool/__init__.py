@@ -7,5 +7,6 @@ from .download import *
 from .edit import *
 from .export_dir import *
 from .iterdir import *
+from .life import *
 from .request import *
 from .xys import *

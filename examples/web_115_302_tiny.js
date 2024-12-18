@@ -18,7 +18,7 @@ const DOC = `usage: web_115_302_tiny.js [-h] [-c COOKIES] [-cp COOKIES_PATH] [-H
     │                                                                              │
     │                      \x1b[32mGithub      \x1b[4;34mhttps://github.com/ChenyangGao/p115client/\x1b[0m  │
     │                                                                              │
-    │                      \x1b[32mlicence     \x1b[4;34mhttps://www.gnu.org/licenses/gpl-3.0.txt\x1b[0m    │
+    │                      \x1b[32mlicense     \x1b[4;34mhttps://www.gnu.org/licenses/gpl-3.0.txt\x1b[0m    │
     │                                                                              │
     │                      \x1b[32mversion     \x1b[1;36m${VERSION}\x1b[0m                                       │
     │                                                                              │
