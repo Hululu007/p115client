@@ -135,7 +135,7 @@ def type_of_attr(attr: Mapping, /) -> int:
         - 7: 书籍
         - 99: 其它文件
 """
-    if attr["is_directory"]:
+    if attr.get("is_directory") or attr.get("is_dir"):
         return 0
     type: None | int
     if type := CLASS_TO_TYPE.get(attr.get("class", "")):

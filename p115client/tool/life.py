@@ -70,7 +70,7 @@ def life_show(
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
-    :return: 迭代器，产生 115 生活事件日志数据字典
+    :return: 接口返回值
     """
     if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
@@ -174,7 +174,7 @@ def iter_life_behavior(
     from_time: int | float = 0, 
     from_id: int = 0, 
     interval: int | float = 0, 
-    ignore_types: Container[int] = IGNORE_BEHAVIOR_TYPES, 
+    ignore_types: None | Container[int] = IGNORE_BEHAVIOR_TYPES, 
     app: str = "web", 
     *, 
     async_: Literal[False] = False, 
@@ -187,7 +187,7 @@ def iter_life_behavior(
     from_time: int | float = 0, 
     from_id: int = 0, 
     interval: int | float = 0, 
-    ignore_types: Container[int] = IGNORE_BEHAVIOR_TYPES, 
+    ignore_types: None | Container[int] = IGNORE_BEHAVIOR_TYPES, 
     app: str = "web", 
     *, 
     async_: Literal[True], 
@@ -199,7 +199,7 @@ def iter_life_behavior(
     from_time: int | float = 0, 
     from_id: int = 0, 
     interval: int | float = 0, 
-    ignore_types: Container[int] = IGNORE_BEHAVIOR_TYPES, 
+    ignore_types: None | Container[int] = IGNORE_BEHAVIOR_TYPES, 
     app: str = "web", 
     *, 
     async_: Literal[False, True] = False, 

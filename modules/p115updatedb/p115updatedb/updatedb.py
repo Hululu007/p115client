@@ -2,7 +2,7 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__all__ = ["updatedb", "updatedb_one", "updatedb_tree"]
+__all__ = ["updatedb_life", "updatedb_one", "updatedb_tree", "updatedb"]
 
 import logging
 
@@ -11,19 +11,21 @@ from collections.abc import Collection, Iterator, Iterable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from errno import EBUSY
 from itertools import takewhile
-from math import isnan, isinf
+from math import inf, isnan, isinf
 from posixpath import splitext
 from sqlite3 import connect, Connection, Cursor
 from string import digits
 from time import perf_counter
-from typing import cast, Final
+from typing import cast, Final, NoReturn
 
 from concurrenttools import run_as_thread
+from orjson import dumps
 from p115client import check_response, P115Client
 from p115client.const import CLASS_TO_TYPE, SUFFIX_TO_TYPE
 from p115client.exception import BusyOSError, DataError
 from p115client.tool.edit import update_desc, update_star
 from p115client.tool.iterdir import filter_na_ids, get_id_to_path, iter_stared_dirs
+from p115client.tool.life import iter_life_behavior, IGNORE_BEHAVIOR_TYPES
 from sqlitetools import execute, find, query, transact, upsert_items, AutoCloseConnection
 
 from .query import (
@@ -33,6 +35,8 @@ from .query import (
 from .util import ZERO_DICT, bfs_gen
 
 
+# NOTE: 需要更新 mtime 的 115 生活事件类型集
+MTIME_BEHAVIOR_TYPES: Final = frozenset((1, 2, 14, 17, 18, 20))
 # NOTE: 初始化日志对象
 logger = logging.Logger("115-updatedb", level=logging.INFO)
 handler = logging.StreamHandler()
@@ -79,6 +83,13 @@ CREATE TABLE IF NOT EXISTS dir (
     mtime INTEGER NOT NULL DEFAULT 0   -- 更新时间戳，如果名字、备注被设置（即使值没变），或者进出回收站，或者增删直接子节点，或者设置封面，会更新此值，但移动并不更新
 );
 
+-- 创建 life 表，用来收集 115 生活事件
+CREATE TABLE IF NOT EXISTS life (
+    id INTEGER NOT NULL PRIMARY KEY, -- 事件 id
+    data JSON NOT NULL,              -- 事件日志数据
+    create_time INTEGER NOT NULL     -- 事件时间
+);
+
 -- 创建 event 表，用于记录 data 表上发生的变更事件
 CREATE TABLE IF NOT EXISTS event (
     _id INTEGER PRIMARY KEY AUTOINCREMENT, -- 主键
@@ -106,6 +117,7 @@ CREATE INDEX IF NOT EXISTS idx_data_sha1 ON data(sha1);
 CREATE INDEX IF NOT EXISTS idx_data_name ON data(name);
 CREATE INDEX IF NOT EXISTS idx_data_utime ON data(updated_at);
 CREATE INDEX IF NOT EXISTS idx_dir_mtime ON dir(mtime);
+CREATE INDEX IF NOT EXISTS idx_life_create ON life(create_time);
 CREATE INDEX IF NOT EXISTS idx_event_create ON event(created_at);
 """
     if disable_event:
@@ -279,9 +291,9 @@ def update_stared_dirs(
         ), 
     ))
     if data:
-        with transact(con):
-            insert_dir_items(con, data)
-            upsert_items(con, data)
+        with transact(con) as cur:
+            insert_dir_items(cur, data)
+            upsert_items(cur, data)
     return data
 
 
@@ -452,13 +464,13 @@ def diff_dir(
                 remove_extend(his_ids - seen)
         return result
     finally:
-        with transact(con):
+        with transact(con) as cur:
             if ancestors:
-                upsert_items(con, ancestors, extras={"is_alive": 1, "is_dir": 1})
-                upsert_items(con, ancestors, table="dir")
+                upsert_items(cur, ancestors, extras={"is_alive": 1, "is_dir": 1})
+                upsert_items(cur, ancestors, table="dir")
             if dirs:
-                upsert_items(con, dirs, extras={"is_alive": 1})
-                insert_dir_items(con, dirs)
+                upsert_items(cur, dirs, extras={"is_alive": 1})
+                insert_dir_items(cur, dirs)
 
 
 def normalize_attr(info: Mapping, /) -> dict:
@@ -531,9 +543,112 @@ def _init_client(
     if isinstance(dbfile, (Connection, Cursor)):
         con = dbfile
     else:
-        con = connect(dbfile, uri=dbfile.startswith("file:"), check_same_thread=False, factory=AutoCloseConnection)
+        con = connect(
+            dbfile, 
+            uri=dbfile.startswith("file:"), 
+            check_same_thread=False, 
+            factory=AutoCloseConnection, 
+            timeout=inf, 
+        )
         initdb(con, disable_event=disable_event)
     return client, con
+
+
+def updatedb_life(
+    client: str | P115Client, 
+    dbfile: None | str | Connection | Cursor = None, 
+    from_time: int | float = 0, 
+    from_id: int = 0, 
+    interval: int | float = 0, 
+    **request_kwargs, 
+) -> NoReturn:
+    """持续采集 115 生活日志，以更新数据库
+
+    :param client: 115 网盘客户端对象
+    :param dbfile: 数据库文件路径，如果为 None，则自动确定
+    :param from_time: 开始时间（含），若为 0 则从当前时间开始，若小于 0 则从最早开始
+    :param from_id: 开始的事件 id （不含）
+    :param interval: 睡眠时间间隔，如果小于等于 0，则不睡眠
+    :param request_kwargs: 其它 http 请求参数，会传给具体的请求函数，默认的是 httpx，可用参数 request 进行设置
+    """
+    client, con = _init_client(client, dbfile)
+    for event in iter_life_behavior(
+        client, 
+        from_time=from_time, 
+        from_id=from_id, 
+        interval=interval, 
+        ignore_types=(), 
+        app="android", 
+    ):
+        type = event["type"]
+        create_time = int(event["create_time"])
+        if type not in IGNORE_BEHAVIOR_TYPES:
+            sha1 = event["sha1"]
+            is_dir = not sha1
+            id = int(event["file_id"])
+            parent_id = int(event["parent_id"])
+            attr = {
+                "id": id, 
+                "parent_id": parent_id, 
+                "pickcode": event["pick_code"], 
+                "sha1": sha1, 
+                "name": event["file_name"], 
+                "size": int(event.get("file_size") or 0), 
+                "is_dir": is_dir, 
+                "is_alive": 1, 
+            }
+            if type == 22:
+                attr["is_alive"] = 0
+            elif type in MTIME_BEHAVIOR_TYPES:
+                attr["mtime"] = create_time
+                if type in (1, 2):
+                    attr["ctime"] = create_time
+            if is_dir:
+                attr["type"] = 0
+            elif event.get("is_v"):
+                attr["type"] = 4
+            elif "muc" in event:
+                attr["type"] = 3
+            elif event.get("thumb", "").startswith("?"):
+                attr["type"] = 2
+            else:
+                attr["type"] = SUFFIX_TO_TYPE.get(splitext(attr["name"])[-1].lower(), 99)
+            if not has_id(con, parent_id):
+                ancestors: list[dict] = []
+                try:
+                    if parent_id == 0:
+                        pass
+                    elif is_dir:
+                        resp = check_response(client.fs_files_app({"cid": id, "hide_data": 1}))
+                        if int(resp["path"][-1]["cid"]) == id:
+                            ancestors.extend(
+                                {"id": int(a["cid"]), "parent_id": int(a["pid"]), "name": a["name"]} 
+                                for a in resp["path"][1:]
+                            )
+                    else:
+                        resp = check_response(client.fs_category_get(id))
+                        pid = 0
+                        for a in resp["paths"][1:]:
+                            fid = int(a["file_id"])
+                            ancestors.append({"id": fid, "parent_id": pid, "name": a["file_name"]})
+                            pid = fid
+                except FileNotFoundError:
+                    pass
+                if ancestors:
+                    with transact(con) as cur:
+                        upsert_items(cur, ancestors, extras={"is_alive": 1, "is_dir": 1})
+                        upsert_items(cur, ancestors, table="dir")
+            with transact(con) as cur:
+                if is_dir:
+                    insert_dir_items(cur, attr)
+                upsert_items(cur, attr)
+        execute(
+            con, 
+            "INSERT OR IGNORE INTO life(id, data, create_time) VALUES (?,?,?)", 
+            (int(event["id"]), dumps(event), create_time), 
+            commit=True, 
+        )
+    raise
 
 
 def updatedb_one(
@@ -554,11 +669,11 @@ def updatedb_one(
     """
     client, con = _init_client(client, dbfile)
     to_upsert, to_remove = diff_dir(con, client, id, **request_kwargs)
-    with transact(con):
+    with transact(con) as cur:
         if to_upsert:
-            upsert_items(con, to_upsert)
+            upsert_items(cur, to_upsert)
         if to_remove:
-            kill_items(con, to_remove)
+            kill_items(cur, to_remove)
     return to_upsert, to_remove
 
 
@@ -632,11 +747,11 @@ def updatedb_tree(
             pids = {pid for pid in iter_parent_id(con, pids) if pid and pid != id and pid not in all_pids}
     if not no_dir_moved:
         update_stared_dirs(con, client, **request_kwargs)
-    with transact(con):
+    with transact(con) as cur:
         if to_remove:
-            kill_items(con, to_remove)
+            kill_items(cur, to_remove)
         if to_upsert:
-            upsert_items(con, to_upsert)
+            upsert_items(cur, to_upsert)
     return to_upsert, to_remove
 
 
@@ -797,9 +912,6 @@ def updatedb(
         if need_calc_size:
             executor.shutdown(wait=False, cancel_futures=True)
 
-# TODO: 支持从 115 事件中获取数据
-# TODO: 如果一个文件夹被移动，那么它的更新时间不会变，只是它的上级 id 的更新时间会变，因此必要时，还是需要结合 115 更新事件
 # TODO: 增加一个选项，允许对数据进行全量而不是增量更新，这样可以避免一些问题
 # TODO: 为数据库插入弄单独一个线程，就不需要等待数据库插入完成，就可以开始下一批数据拉取
-# TODO: 先拉取一次 115 的生活事件，这个事件从数据库中最新一条数据的更新事件开始，如果没有数据，则为当前（不需要立即拉一次），以后轮到下一个任务时，只需要在最近一次拉取时间之后进行拉取，如果事件发生时间在当前记录的更新时间之前，则忽略此事件
 # TODO: 再实现一个拉取数据的函数，只拉取文件数据，不拉取目录，只看更新时间，只要更新时间较新的，就写入数据库，只增改不删，如果是全新的，就用多线程（20线程），如果不是则从日期最新开始拉，如果一个目录太大，则临时找出所有子目录，再分拆，如果目标是文件，则直接把数据保存到数据库，然后停工（通过category_get获取）
