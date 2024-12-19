@@ -16,8 +16,6 @@ pip install -U p115nano302
 $ p115nano302 -h
 usage: p115nano302 [-h] [-c COOKIES] [-cp COOKIES_PATH] [-H HOST] [-P PORT] [-d] [-uc UVICORN_RUN_CONFIG_PATH] [-v] [-l]
 
-            🚄 115 302 极小版 🚇
-
     ╭───────────────────────── Welcome to 115 nano 302 ────────────────────────────╮
     │                                                                              │
     │  maintained by ❤     ChenyangGao https://chenyanggao.github.io               │

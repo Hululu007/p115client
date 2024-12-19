@@ -16,8 +16,6 @@ pip install -U p115tiny302
 $ p115tiny302 -h
 usage: p115tiny302 [-h] [-c COOKIES] [-cp COOKIES_PATH] [-H HOST] [-P PORT] [-d] [-uc UVICORN_RUN_CONFIG_PATH] [-v] [-l]
 
-                                🛫 115 微型 302 🛬
-
     ╭───────────────────────── Welcome to 115_tiny_302 ────────────────────────────╮
     │                                                                              │
     │  maintained by ❤     ChenyangGao https://chenyanggao.github.io               │

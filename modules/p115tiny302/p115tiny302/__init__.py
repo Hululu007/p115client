@@ -2,15 +2,16 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 0, 1)
+__version__ = (0, 0, 2)
 __all__ = ["make_application"]
 __license__ = "GPLv3 <https://www.gnu.org/licenses/gpl-3.0.txt>"
 
 from collections.abc import Mapping, MutableMapping
 from itertools import cycle
 from string import digits, hexdigits
+from time import time
 from typing import Final
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from blacksheep import redirect, text, Application, Request, Router
 from blacksheep.client import ClientSession
@@ -38,7 +39,8 @@ def make_application(cookies: str, debug: bool = False) -> Application:
     SHA1_TO_PICKCODE: MutableMapping[str, str] = LRUDict(65536)
     NAME_TO_PICKCODE: MutableMapping[str, str] = LRUDict(65536)
     SHARE_NAME_TO_ID: MutableMapping[tuple[str, str], int] = LRUDict(65536)
-    DOWNLOAD_URL_CACHE: MutableMapping[str | tuple[str, int], str] = TTLDict(65536, 2900)
+    DOWNLOAD_URL_CACHE: MutableMapping[str | tuple[str, int], str] = TTLDict(65536, 3600)
+    DOWNLOAD_URL_CACHE2: MutableMapping[tuple[str, str], tuple[str, int]] = LRUDict(1024)
     RECEIVE_CODE_MAP: dict[str, str] = {}
 
     app = Application(router=Router(), show_error_details=debug)
@@ -122,7 +124,7 @@ def make_application(cookies: str, debug: bool = False) -> Application:
             raise FileNotFoundError(text)
         info = json["data"][0]
         if info["n"] != name:
-            raise FileNotFoundError(name)
+            raise FileNotFoundError(f"name not found: {name!r}")
         pickcode = NAME_TO_PICKCODE[name] = info["pc"]
         return pickcode
 
@@ -159,20 +161,25 @@ def make_application(cookies: str, debug: bool = False) -> Application:
             raise FileNotFoundError(text)
         info = json["data"]["list"][0]
         if info["n"] != name:
-            raise FileNotFoundError(name)
+            raise FileNotFoundError(f"name not found: {name!r}")
         id = SHARE_NAME_TO_ID[(share_code, name)] = int(info["fid"])
         return id
 
     async def get_downurl(
         pickcode: str, 
-        user_agent: bytes | str = b"", 
+        user_agent: str = "", 
     ) -> str:
         if url := DOWNLOAD_URL_CACHE.get(pickcode, ""):
             return url
+        elif pairs := DOWNLOAD_URL_CACHE2.get((pickcode, user_agent)):
+            url, expire_ts = pairs
+            if expire_ts >= time():
+                return url
+            DOWNLOAD_URL_CACHE2.pop((pickcode, user_agent))
         resp = await client.post(
             f"{get_proapi_url()}/android/2.0/ufile/download", 
             content=FormContent([("data", encrypt(b'{"pick_code":"%s"}' % bytes(pickcode, "ascii")).decode("utf-8"))]), 
-            headers={b"User-Agent": user_agent}, 
+            headers={"User-Agent": user_agent}, 
         )
         text = await resp.text()
         json = loads(text)
@@ -181,6 +188,9 @@ def make_application(cookies: str, debug: bool = False) -> Application:
         url = loads(decrypt(json["data"]))["url"]
         if "&c=0&f=&" in url:
             DOWNLOAD_URL_CACHE[pickcode] = url
+        elif "&c=0&f=1&" in url:
+            expire_ts = int(next(v for k, v in parse_qsl(urlsplit(url).query) if k == "t"))
+            DOWNLOAD_URL_CACHE2[(pickcode, user_agent)] = (url, expire_ts - 60)
         return url
 
     async def get_share_downurl(
@@ -276,7 +286,7 @@ def make_application(cookies: str, debug: bool = False) -> Application:
                     else:
                         pickcode = await get_pickcode_for_name(name, refresh=refresh)
             if not pickcode:
-                return text(str(request.url), 404)
+                raise FileNotFoundError(f"not found: {str(request.url)!r}")
             user_agent = (request.get_first_header(b"User-agent") or b"").decode("latin-1")
             url = await get_downurl(pickcode.lower(), user_agent)
 

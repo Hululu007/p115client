@@ -35,8 +35,10 @@ from .query import (
 from .util import ZERO_DICT, bfs_gen
 
 
-# NOTE: 需要更新 mtime 的 115 生活事件类型集
+# NOTE: 需要 mtime 的 115 生活事件类型集
 MTIME_BEHAVIOR_TYPES: Final = frozenset((1, 2, 14, 17, 18, 20))
+# NOTE: 需要 ctime 的 115 生活事件类型集
+CTIME_BEHAVIOR_TYPES: Final = frozenset((1, 2, 14, 17, 18))
 # NOTE: 初始化日志对象
 logger = logging.Logger("115-updatedb", level=logging.INFO)
 handler = logging.StreamHandler()
@@ -599,10 +601,10 @@ def updatedb_life(
             }
             if type == 22:
                 attr["is_alive"] = 0
-            elif type in MTIME_BEHAVIOR_TYPES:
+            if type in MTIME_BEHAVIOR_TYPES:
                 attr["mtime"] = create_time
-                if type in (1, 2):
-                    attr["ctime"] = create_time
+            if type in CTIME_BEHAVIOR_TYPES:
+                attr["ctime"] = create_time
             if is_dir:
                 attr["type"] = 0
             elif event.get("is_v"):
@@ -915,3 +917,4 @@ def updatedb(
 # TODO: 增加一个选项，允许对数据进行全量而不是增量更新，这样可以避免一些问题
 # TODO: 为数据库插入弄单独一个线程，就不需要等待数据库插入完成，就可以开始下一批数据拉取
 # TODO: 再实现一个拉取数据的函数，只拉取文件数据，不拉取目录，只看更新时间，只要更新时间较新的，就写入数据库，只增改不删，如果是全新的，就用多线程（20线程），如果不是则从日期最新开始拉，如果一个目录太大，则临时找出所有子目录，再分拆，如果目标是文件，则直接把数据保存到数据库，然后停工（通过category_get获取）
+# TODO: 为 115 生活单独做一个命令行命令

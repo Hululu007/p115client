@@ -2838,6 +2838,17 @@ class P115Client:
     ) -> P115URL | Coroutine[Any, Any, P115URL]:
         """获取文件的下载链接，此接口是对 `download_url_app` 的封装
 
+        .. note::
+            获取的直链中，部分查询参数的解释：
+
+            - `t`: 过期时间戳
+            - `u`: 用户 id
+            - `c`: 允许同时打开次数，如果为 0，则是无限次数
+            - `f`: 请求时要求携带请求头
+                - 如果为空，则无要求
+                - 如果为 1，则需要 User-Agent（和请求直链时的一致）
+                - 如果为 3，则需要 User-Agent（和请求直链时的一致） 和 Cookie（由请求直链时的响应所返回的 Set-Cookie 响应头）
+
         :param pickcode: 提取码
         :param strict: 如果为 True，当目标是目录时，会抛出 IsADirectoryError 异常
         :param use_web_api: 是否使用网页版接口执行请求
