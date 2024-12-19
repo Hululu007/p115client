@@ -83,7 +83,7 @@ def make_application(cookies: str, debug: bool = False) -> Application:
         resp = await client.get(f"{get_webapi_url()}/files/file?file_id={id}")
         text = await resp.text()
         json = loads(text)
-        if not json["state"]:
+        if not (json and json["state"]):
             raise FileNotFoundError(text)
         info = json["data"][0]
         pickcode = ID_TO_PICKCODE[id] = info["pick_code"]
@@ -96,7 +96,7 @@ def make_application(cookies: str, debug: bool = False) -> Application:
         resp = await client.get(f"{get_webapi_url()}/files/shasearch?sha1={sha1}")
         text = await resp.text()
         json = loads(text)
-        if not json["state"]:
+        if not (json and json["state"]):
             raise FileNotFoundError(text)
         info = json["data"]
         pickcode = SHA1_TO_PICKCODE[sha1] = info["pick_code"]

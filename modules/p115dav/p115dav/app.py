@@ -628,20 +628,87 @@ LIMIT 1;""", (share_code, id))
     ) -> None | P115ID:
         return next(share_info_to_path_gen(share_code, path, ensure_file, parent_id), None)
 
-    # TODO: 如果依然风控严重，则引入 aps 和 proapi 接口进行分流
-    get_webapi = cycle(("http://webapi.115.com", "http://webapi.115.com", "http://webapi.115.com", "https://webapi.115.com", "http://anxia.com/webapi", "http://v.anxia.com/webapi")).__next__
+    t_webapi = ("http://webapi.115.com", "https://webapi.115.com", "http://anxia.com/webapi", "http://v.anxia.com/webapi")
+    t_apsapi = (False, "http://anxia.com", "http://v.anxia.com")
+    t_proapi = ("http://proapi.115.com", "https://proapi.115.com") * 2
 
-    async def iterdir(cid: int, first_page_size: int = 0, page_size: int = 1_150) -> tuple[int, list[dict], AsyncIterator[AttrDict]]:
-        if page_size <= 0:
-            page_size = 1_150
+    get_web_base_url = cycle(t_webapi).__next__
+
+    def iter_fs_files_without_aps():
+        base_url: bool | str
+        while True:
+            for base_url in t_webapi:
+                yield client.fs_files, base_url
+            for base_url in t_proapi:
+                yield client.fs_files_app, base_url
+
+    get_fs_files_without_aps = iter_fs_files_without_aps().__next__
+
+    def iter_fs_files():
+        base_url: bool | str
+        while True:
+            for base_url in t_webapi:
+                yield client.fs_files, base_url
+            for base_url in t_apsapi:
+                yield client.fs_files_aps, base_url
+            for base_url in t_proapi:
+                yield client.fs_files_app, base_url
+
+    get_fs_files = iter_fs_files().__next__
+
+    async def iterdir(cid: int, first_page_size: int = 0) -> tuple[int, list[dict], AsyncIterator[AttrDict]]:
+        get_list, base_url = get_fs_files()
         if first_page_size <= 0:
-            first_page_size = page_size
+            first_page_size = 8_000
         payload = {
-            "asc": 0, "cid": cid, "cur": 1, "custom_order": 1, "fc_mix": 1, "limit": first_page_size, 
+            "asc": 1, "cid": cid, "cur": 1, "custom_order": 1, "fc_mix": 0, "limit": first_page_size, 
+            "o": "file_name", "offset": 0, "show_dir": 1, 
+        }
+        resp = await get_list(payload, base_url=base_url, async_=True)
+        check_response(resp)
+        if cid and int(resp["path"][-1]["cid"]) != cid:
+            raise FileNotFoundError(cid)
+        count = resp["count"]
+        ancestors = [{"id": "0", "parent_id": "0", "name": ""}]
+        ancestors.extend(
+            {"id": a["cid"], "parent_id": a["pid"], "name": a["name"]} 
+            for a in resp["path"][1:]
+        )
+        payload["limit"] = 8_000
+        async def iter():
+            nonlocal resp
+            offset = 0
+            while True:
+                update_cache(ancestors[1:])
+                data = resp["data"]
+                for attr in map(normalize_attr, data):
+                    yield attr
+                offset += len(data)
+                if offset >= resp["count"]:
+                    break
+                payload["offset"] = offset
+                get_list, base_url = get_fs_files_without_aps()
+                resp = await get_list(payload, base_url=base_url, async_=True)
+                check_response(resp)
+                if cid and int(resp["path"][-1]["cid"]) != cid:
+                    raise FileNotFoundError(cid)
+                ancestors[1:] = (
+                    {"id": a["cid"], "parent_id": a["pid"], "name": a["name"]} 
+                    for a in resp["path"][1:]
+                )
+                if count != resp["count"]:
+                    raise BusyOSError(f"count changes during iteration: {cid}")
+        return count, ancestors, iter()
+
+    async def iterdir_order_by_utime_desc(cid: int, first_page_size: int = 0) -> tuple[int, list[dict], AsyncIterator[AttrDict]]:
+        if first_page_size <= 0:
+            first_page_size = 1150
+        payload = {
+            "asc": 0, "cid": cid, "cur": 1, "custom_order": 1, "fc_mix": 0, "limit": first_page_size, 
             "o": "user_utime", "offset": 0, "show_dir": 1, 
         }
         get_list = client.fs_files
-        resp = await get_list(payload, base_url=get_webapi(), async_=True)
+        resp = await get_list(payload, base_url=get_web_base_url(), async_=True)
         check_response(resp)
         if cid and int(resp["path"][-1]["cid"]) != cid:
             raise FileNotFoundError(cid)
@@ -654,7 +721,6 @@ LIMIT 1;""", (share_code, id))
         async def iter():
             nonlocal resp
             offset = 0
-            payload["limit"] = page_size
             while True:
                 update_cache(ancestors[1:])
                 data = resp["data"]
@@ -664,7 +730,7 @@ LIMIT 1;""", (share_code, id))
                 if offset >= resp["count"]:
                     break
                 payload["offset"] = offset
-                resp = await get_list(payload, base_url=get_webapi(), async_=True)
+                resp = await get_list(payload, base_url=get_web_base_url(), async_=True)
                 check_response(resp)
                 if cid and int(resp["path"][-1]["cid"]) != cid:
                     raise FileNotFoundError(cid)
@@ -676,11 +742,11 @@ LIMIT 1;""", (share_code, id))
                     raise BusyOSError(f"count changes during iteration: {cid}")
         return count, ancestors, iter()
 
-    async def update_file_list_partial(cid: int, file_list: dict, page_size: int = 1150):
+    async def update_file_list_partial(cid: int, file_list: dict):
         """更新文件列表
         """
         try:
-            count, ancestors, it = await iterdir(cid, 16, page_size)
+            count, ancestors, it = await iterdir_order_by_utime_desc(cid, 16)
         except FileNotFoundError:
             put_task(("UPDATE data SET parent_id=NULL WHERE id=?;", cid))
             raise
@@ -737,8 +803,8 @@ LIMIT 1;""", (share_code, id))
     async def get_file_list(
         cid: int, 
         /, 
-        page_size: int = 10_000, 
         refresh_thumbs: bool = False, 
+        full_update: bool = True, 
     ) -> dict:
         """获取目录中的文件信息列表
         """
@@ -763,14 +829,15 @@ LIMIT 1;""", (share_code, id))
                     will_full_update = earliest_thumb_ts > 0 and earliest_thumb_ts - time() < 600
             if not will_full_update:
                 file_list = cast(dict, file_list)
-                if isnan(ttl) or isinf(ttl) or  ttl < 0:
+                if isnan(ttl) or isinf(ttl) or ttl < 0:
                     return file_list
                 elif ttl > 0:
                     updated_at = await to_thread(query, "SELECT updated_at FROM list WHERE id=?", cid)
                     if not updated_at or time() - updated_at <= ttl:
                         return file_list
-                await update_file_list_partial(cid, file_list, page_size=page_size)
-                return file_list
+                if not full_update:
+                    await update_file_list_partial(cid, file_list)
+                    return file_list
             try:
                 count, ancestors, it = await iterdir(cid)
             except FileNotFoundError:
