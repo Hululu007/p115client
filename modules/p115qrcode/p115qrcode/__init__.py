@@ -7,6 +7,7 @@
 # https://qrcodeapi.115.com
 # https://hnqrcodeapi.115.com
 # https://passportapi.115.com
+# https://hnpassportapi.115.com
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __version__ = (0, 0, 2)

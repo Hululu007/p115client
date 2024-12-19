@@ -2,7 +2,7 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 0, 2)
+__version__ = (0, 0, 3)
 __all__ = ["make_application"]
 __license__ = "GPLv3 <https://www.gnu.org/licenses/gpl-3.0.txt>"
 
@@ -200,10 +200,8 @@ def make_application(cookies: str, debug: bool = False) -> Application:
     ):
         if url := DOWNLOAD_URL_CACHE.get((share_code, file_id), ""):
             return url
-        resp = await client.post(
-            f"{get_proapi_url()}/app/share/downurl", 
-            content=FormContent([("data", encrypt(f'{{"share_code":"{share_code}","receive_code":"{receive_code}","file_id":{file_id}}}'.encode("utf-8")).decode("utf-8"))]), 
-        )
+        payload = {"share_code": share_code, "receive_code": receive_code, "file_id": file_id}
+        resp = await client.get(f"{get_proapi_url()}/android/2.0/share/downurl?{urlencode(payload)}")
         text = await resp.text()
         json = loads(text)
         if not json["state"]:
@@ -211,7 +209,7 @@ def make_application(cookies: str, debug: bool = False) -> Application:
                 receive_code = await get_receive_code(share_code)
                 return await get_share_downurl(share_code, receive_code, file_id)
             raise OSError(text)
-        url_info = loads(decrypt(json["data"]))["url"]
+        url_info = json["data"]["url"]
         if not url_info:
             raise FileNotFoundError(text)
         url = url_info["url"]

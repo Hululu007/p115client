@@ -12,9 +12,7 @@ from asyncio import (
     get_running_loop, run_coroutine_threadsafe, to_thread, AbstractEventLoop, Lock, 
 )
 from collections import deque
-from collections.abc import (
-    AsyncIterator, Callable, Iterator, Mapping, MutableMapping, Sequence, 
-)
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from contextlib import closing, suppress
 from datetime import datetime
 from functools import partial
@@ -178,7 +176,7 @@ def make_application(
     from blacksheep.server.compression import use_gzip_compression
     from blacksheep.server.remotes.forwarding import ForwardedHeadersMiddleware
     from blacksheep.server.responses import view_async
-    from cachetools import LRUCache, TTLCache
+    from cachedict import LRUDict, TTLDict
     from dictattr import AttrDict
     from encode_uri import encode_uri, encode_uri_component_loose
     # NOTE: 其它可用模块
@@ -217,27 +215,27 @@ def make_application(
     )
 
     # NOTE: 缓存图片的 CDN 直链，缓存 59 分钟
-    IMAGE_URL_CACHE: MutableMapping[str | tuple[str, int], str] = TTLCache(65536, ttl=60*59)
+    IMAGE_URL_CACHE: TTLDict[str | tuple[str, int], str] = TTLDict(65536, ttl=60*59)
     # NOTE: 缓存直链（主要是音乐链接）
-    DOWNLOAD_URL_CACHE: MutableMapping[str | tuple[str, int], P115URL] = TTLCache(65536, ttl=2900)
+    DOWNLOAD_URL_CACHE: TTLDict[str | tuple[str, int], P115URL] = TTLDict(65536, ttl=2900)
     # NOTE: 限制请求频率，以一组请求信息为 key，0.5 秒内相同的 key 只放行一个
-    URL_COOLDOWN: MutableMapping[tuple, None] = TTLCache(1024, ttl=0.5)
+    URL_COOLDOWN: TTLDict[tuple, None] = TTLDict(1024, ttl=0.5)
     # NOTE: 下载链接缓存，以减少接口调用频率，只需缓存很短时间
-    URL_CACHE: MutableMapping[tuple, P115URL] = TTLCache(64, ttl=1)
+    URL_CACHE: TTLDict[tuple, P115URL] = TTLDict(64, ttl=1)
     # NOTE: 缓存文件列表数据
-    CACHE_ID_TO_LIST: MutableMapping[int | tuple[str, int], dict] = LRUCache(64)
+    CACHE_ID_TO_LIST: LRUDict[int | tuple[str, int], dict] = LRUDict(64)
     # NOTE: 缓存文件信息数据
-    CACHE_ID_TO_ATTR: MutableMapping[int | tuple[str, int], AttrDict] = LRUCache(1024)
+    CACHE_ID_TO_ATTR: LRUDict[int | tuple[str, int], AttrDict] = LRUDict(1024)
     # NOTE: 缓存文件信息数据，但是弱引用
-    ID_TO_ATTR: MutableMapping[int | tuple[str, int], AttrDict] = WeakValueDictionary()
+    ID_TO_ATTR: WeakValueDictionary[int | tuple[str, int], AttrDict] = WeakValueDictionary()
     # NOTE: 获取文件列表数据时加锁，实现了对任何 1 个目录 id，只允许同时运行 1 个拉取
-    ID_TO_LIST_LOCK: MutableMapping[int | tuple[str, int], Lock] = WeakValueDictionary()
+    ID_TO_LIST_LOCK: WeakValueDictionary[int | tuple[str, int], Lock] = WeakValueDictionary()
     # NOTE: 缓存 115 分享链接的提取码到接收码（密码）的映射
     SHARE_CODE_MAP: dict[str, dict] = {}
     # NOTE: 后台任务队列
     QUEUE: SimpleQueue[None | tuple[str, Any]] = SimpleQueue()
     # NOTE: webdav 的文件对象缓存
-    DAV_FILE_CACHE: MutableMapping[str, DAVNonCollection] = LRUCache(65536)
+    DAV_FILE_CACHE: LRUDict[str, DAVNonCollection] = LRUDict(65536)
 
     put_task = QUEUE.put_nowait
     get_task = QUEUE.get
@@ -901,7 +899,6 @@ LIMIT 1;""", (share_code, id))
                 cid, 
                 page_size=page_size, 
                 normalize_attr=normalize_attr, 
-                base_url=True, 
                 async_=True, 
             )))
             dirname = "/".join(escape(a["name"]) for a in ancestors)
@@ -1504,6 +1501,7 @@ END;
         return await client.share_download_url(
             {"share_code": share_code, "receive_code": receive_code, "file_id": id}, 
             use_web_api=use_web_api, 
+            app="android", 
             async_=True, 
         )
 
@@ -1646,6 +1644,7 @@ END;
             if parent_id is None:
                 resp = await client.share_download_url_app(
                     {"share_code": share_code, "receive_code": receive_code, "file_id": id}, 
+                    app="android", 
                     async_=True, 
                 )
                 if not resp["state"]:
