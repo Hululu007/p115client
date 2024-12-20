@@ -21,7 +21,7 @@ from p115client import check_response, P115Client
 
 IGNORE_BEHAVIOR_TYPES: Final = frozenset((4, 7, 8, 9, 10, 19))
 #: 115 生活事件名称到类型的映射
-BEHAVIOR_TYPE_TO_NAME: Final = {
+BEHAVIOR_NAME_TO_TYPE: Final = {
     "upload_image_file": 1, 
     "upload_file": 2, 
     "star_file": 4, 
@@ -39,7 +39,7 @@ BEHAVIOR_TYPE_TO_NAME: Final = {
     "delete_file": 22, 
 }
 #: 115 生活事件类型到名称的映射
-BEHAVIOR_NAME_TO_TYPE: Final = {v: k for k, v in BEHAVIOR_TYPE_TO_NAME.items()}
+BEHAVIOR_TYPE_TO_NAME: Final = {v: k for k, v in BEHAVIOR_NAME_TO_TYPE.items()}
 
 
 @overload
