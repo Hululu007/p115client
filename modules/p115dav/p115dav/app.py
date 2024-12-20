@@ -626,14 +626,13 @@ LIMIT 1;""", (share_code, id))
     ) -> None | P115ID:
         return next(share_info_to_path_gen(share_code, path, ensure_file, parent_id), None)
 
-    t_webapi = ("http://webapi.115.com", "https://webapi.115.com", "http://anxia.com/webapi", "http://v.anxia.com/webapi")
-    t_apsapi = (False, "http://anxia.com", "http://v.anxia.com")
-    t_proapi = ("http://proapi.115.com", "https://proapi.115.com") * 2
+    t_webapi = ("http://webapi.115.com", "http://web.api.115.com", "http://anxia.com/webapi", "http://v.anxia.com/webapi")
+    t_apsapi = ("http://aps.115.com", "http://anxia.com/aps", "http://v.anxia.com/aps")
+    t_proapi = ("http://proapi.115.com", "http://pro.api.115.com")
 
     get_web_base_url = cycle(t_webapi).__next__
 
     def iter_fs_files_without_aps():
-        base_url: bool | str
         while True:
             for base_url in t_webapi:
                 yield client.fs_files, base_url
@@ -643,7 +642,6 @@ LIMIT 1;""", (share_code, id))
     get_fs_files_without_aps = iter_fs_files_without_aps().__next__
 
     def iter_fs_files():
-        base_url: bool | str
         while True:
             for base_url in t_webapi:
                 yield client.fs_files, base_url

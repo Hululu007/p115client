@@ -205,7 +205,7 @@ def get_path_to_cid(
         nonlocal cid
         parts: list[str] = []
         if cid and (refresh or cid not in id_to_dirnode):
-            resp = yield client.fs_files_app({"cid": cid, "limit": 1}, async_=async_, **request_kwargs)
+            resp = yield client.fs_files_app({"cid": cid, "hide_data": 1}, async_=async_, **request_kwargs)
             check_response(resp)
             if cid and int(resp["path"][-1]["cid"]) != cid:
                 raise FileNotFoundError(errno.ENOENT, cid)
@@ -288,7 +288,7 @@ def get_ancestors_to_cid(
         nonlocal cid
         parts: list[dict] = []
         if cid and (refresh or cid not in id_to_dirnode):
-            resp = yield client.fs_files_app({"cid": cid, "limit": 1}, async_=async_, **request_kwargs)
+            resp = yield client.fs_files_app({"cid": cid, "hide_data": 1}, async_=async_, **request_kwargs)
             check_response(resp)
             if cid and int(resp["path"][-1]["cid"]) != cid:
                 raise FileNotFoundError(errno.ENOENT, cid)
@@ -314,9 +314,10 @@ class P115ID(P115DictAttrLike, int):
         return int.__repr__(self)
 
 
+# TODO: 首先用 id_to_dirnode 获取其中最长能匹配的路径，如果 refresh 为 True，则还要用 fs_files_app 比较一下每一级的 id 和 name
+# TODO: fs_dir_getid 接口经常会用到，所以需要进行分流
 # TODO: 如果以 "/" 结尾，则 ensure_file 为 None 时，视为 False
 # TODO: 再增加一个函数，get_id_to_posixpath，其它与路径有关的函数，也都增加此 posix 版本
-# TODO: 查看一下缓存，如果可以获取路径所对应的 id，然后检验一下它自己（如果为目录）或它的parent的ancestors，如果里面的 id 全都相同，则说明路径没变动
 @overload
 def get_id_to_path(
     client: str | P115Client, 

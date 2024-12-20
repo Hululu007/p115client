@@ -10,7 +10,7 @@ from collections import deque
 from collections.abc import Collection, Iterator, Iterable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from errno import EBUSY
-from itertools import takewhile
+from itertools import cycle, takewhile
 from math import inf, isnan, isinf
 from posixpath import splitext
 from sqlite3 import connect, Connection, Cursor
@@ -47,6 +47,8 @@ handler.setFormatter(logging.Formatter(
     "\x1b[0m\x1b[1;35m%(name)s\x1b[0m \x1b[5;31m➜\x1b[0m %(message)s"
 ))
 logger.addHandler(handler)
+# NOTE: 轮流获取 proapi 的 origin
+get_proapi = cycle(("http://proapi.115.com", "http://pro.api.115.com")).__next__
 
 
 def initdb(con: Connection | Cursor, /, disable_event: bool = False) -> Cursor:
@@ -346,6 +348,7 @@ def iterdir(
     def get_files(payload, /):
         while True:
             try:
+                request_kwargs["base_url"] = get_proapi()
                 return check_response(fs_files(payload, **request_kwargs))
             except DataError:
                 if payload["limit"] <= 1150:
@@ -621,14 +624,16 @@ def updatedb_life(
                     if parent_id == 0:
                         pass
                     elif is_dir:
-                        resp = check_response(client.fs_files_app({"cid": id, "hide_data": 1}))
+                        request_kwargs["base_url"] = get_proapi()
+                        resp = check_response(client.fs_files_app({"cid": id, "hide_data": 1}, **request_kwargs))
                         if int(resp["path"][-1]["cid"]) == id:
                             ancestors.extend(
                                 {"id": int(a["cid"]), "parent_id": int(a["pid"]), "name": a["name"]} 
                                 for a in resp["path"][1:]
                             )
                     else:
-                        resp = check_response(client.fs_category_get(id))
+                        request_kwargs["base_url"] = get_proapi()
+                        resp = check_response(client.fs_category_get_app(id, **request_kwargs))
                         pid = 0
                         for a in resp["paths"][1:]:
                             fid = int(a["file_id"])
@@ -826,6 +831,7 @@ def updatedb(
         def get_dir_size(cid: int = 0, /) -> int | float:
             try:
                 if cid:
+                    kwargs["base_url"] = get_proapi()
                     resp = client.fs_category_get_app(cid, **kwargs)
                     if not resp:
                         return 0
