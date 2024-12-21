@@ -580,7 +580,7 @@ def normalize_attr_app(
     if "thumb" in info:
         thumb = info["thumb"]
         if thumb.startswith("?"):
-            thumb = f"https://imgjump.115.com{thumb}&size=0&sha1={sha1}"
+            thumb = f"http://imgjump.115.com{thumb}&size=0&sha1={sha1}"
         attr["thumb"] = thumb
     if "uppt" in info: # pptime
         attr["ctime"] = attr["user_ptime"] = int(info["uppt"])
@@ -3557,7 +3557,7 @@ class P115Client:
         """推送一个解压缩任务给服务器，完成后，就可以查看压缩包的文件列表了
 
         .. warning::
-            只能云解压 20GB 以内文件，不支持云解压分卷压缩包
+            只能云解压 20GB 以内文件，不支持云解压分卷压缩包，只支持 .zip、.rar 和 .7z 等
 
         POST https://webapi.115.com/files/push_extract
 
@@ -3796,7 +3796,7 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """显示属性，可获取文件或目录的统计信息（提示：但得不到根目录的统计信息，所以 cid 为 0 时无意义）
 
-        GET https://proapi.115.com/{app}/2.0/category/get
+        GET https://proapi.115.com/android/2.0/category/get
 
         :payload:
             - cid: int | str
@@ -3999,7 +3999,7 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """复制文件或目录
 
-        POST https://proapi.115.com/{app}/files/copy
+        POST https://proapi.115.com/android/files/copy
 
         :payload:
             - fid: int | str 💡 文件或目录的 id，多个用逗号 "," 隔开
@@ -4147,7 +4147,7 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """删除文件或目录
 
-        POST https://proapi.115.com/{app}/rb/delete
+        POST https://proapi.115.com/android/rb/delete
 
         .. todo::
             待破解
@@ -4331,7 +4331,7 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """由路径获取对应的 id（但只能获取目录，不能获取文件）
 
-        GET https://proapi.115.com/{app}/files/getid
+        GET https://proapi.115.com/android/files/getid
 
         :payload:
             - path: str
@@ -4339,6 +4339,95 @@ class P115Client:
         api = complete_proapi("/files/getid", base_url, app)
         if isinstance(payload, str):
             payload = {"path": payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_document(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_document(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_document(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取图片的各种链接
+
+        GET https://webapi.115.com/files/document
+
+        :payload:
+            - pickcode: str
+        """
+        api = complete_webapi("/files/document", base_url=base_url)
+        if isinstance(payload, str):
+            payload = {"pickcode": payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_document_app(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: str = "", 
+        app: str = "android", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_document_app(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: str = "", 
+        app: str = "android", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_document_app(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: str = "", 
+        app: str = "android", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取图片的各种链接
+
+        GET https://proapi.115.com/android/files/document
+
+        :payload:
+            - pickcode: str
+        """
+        api = complete_proapi("/files/document", base_url, app)
+        if isinstance(payload, str):
+            payload = {"pickcode": payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -4576,7 +4665,11 @@ class P115Client:
             payload = {"file_id": payload}
         elif not isinstance(payload, dict):
             payload = {"file_id": ",".join(map(str, payload))}
-        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+        if request_kwargs.get("method", "get").lower() == "post":
+            request_kwargs.update(data=payload)
+        else:
+            request_kwargs.update(params=payload)
+        return self.request(url=api, async_=async_, **request_kwargs)
 
     @overload
     def fs_files(
@@ -4739,7 +4832,7 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """获取目录中的文件列表和基本信息
 
-        GET https://proapi.115.com/{app}/2.0/ufile/files
+        GET https://proapi.115.com/android/2.0/ufile/files
 
         .. hint::
             如果要遍历获取所有文件，需要指定 show_dir=0 且 cur=0（或不指定 cur），这个接口并没有 type=99 时获取所有文件的意义
@@ -4861,7 +4954,7 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """获取目录中的文件列表和基本信息
 
-        GET https://proapi.115.com/{app}/files
+        GET https://proapi.115.com/android/files
 
         .. hint::
             如果要遍历获取所有文件，需要指定 show_dir=0 且 cur=0（或不指定 cur），这个接口并没有 type=99 时获取所有文件的意义
@@ -5145,12 +5238,12 @@ class P115Client:
         POST https://webapi.115.com/files/history
 
         :payload:
-            - pick_code: str
-            - op: str = "update"
+            - pick_code: str 💡 视频的提取码
+            - op: str = "update" 💡 操作类型，具体有哪些还需要再研究
             - category: int = <default>
-            - definition: int = <default>
+            - definition: int = <default> 💡 视频清晰度
             - share_id: int | str = <default>
-            - time: int = <default>
+            - time: int = <default> 💡 播放时间点（用来向服务器同步播放进度）
             - ...（其它未找全的参数）
         """
         api = complete_webapi("/files/history", base_url=base_url)
@@ -5249,7 +5342,7 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """文件或目录置顶
 
-        GET https://webapi.115.com/files/top
+        POST https://webapi.115.com/files/top
 
         :payload:
             - file_id: int | str 💡 文件或目录的 id，多个用逗号 "," 隔开
@@ -5486,13 +5579,16 @@ class P115Client:
 
         :payload:
             - pick_code: str
-            - action: str = "get_one"
+            - action: str = "get_one" 💡 可用的值："get_one"、"update"、...
+            - category: int = <default>
+            - from: int = <default>
+            - time: int = <default>
         """
         api = complete_webapi("/history", base_url=base_url)
-        if isinstance(payload, dict):
-            payload = {"action": "get_one", **payload}
-        else:
+        if isinstance(payload, str):
             payload = {"action": "get_one", "pick_code": payload}
+        else:
+            payload = {"action": "get_one", **payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -5531,17 +5627,20 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """获取历史记录
 
-        GET https://proapi.115.com/{app}/history
+        GET https://proapi.115.com/android/history
 
         :payload:
             - pick_code: str
-            - action: str = "get_one"
+            - action: str = "get_one" 💡 可用的值："get_one"、"update"、...
+            - category: int = <default>
+            - from: int = <default>
+            - time: int = <default>
         """
         api = complete_proapi("/history", base_url, app)
-        if isinstance(payload, dict):
-            payload = {"action": "get_one", **payload}
-        else:
+        if isinstance(payload, str):
             payload = {"action": "get_one", "pick_code": payload}
+        else:
+            payload = {"action": "get_one", **payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -5695,7 +5794,7 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """历史记录列表
 
-        GET https://proapi.115.com/{app}/history/list
+        GET https://proapi.115.com/android/history/list
 
         :payload:
             - offset: int = 0
@@ -5848,7 +5947,7 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """接收列表
 
-        GET https://proapi.115.com/{app}/history/receive_list
+        GET https://proapi.115.com/android/history/receive_list
 
         :payload:
             - offset: int = 0
@@ -6036,7 +6135,7 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """获取目录中的图片列表和基本信息
 
-        GET https://proapi.115.com/{app}/files/imglist
+        GET https://proapi.115.com/android/files/imglist
 
         :payload:
             - cid: int | str = 0 💡 目录 id
@@ -6298,6 +6397,63 @@ class P115Client:
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
+    def fs_label_list_app(
+        self, 
+        payload: str | dict = "", 
+        /, 
+        base_url: str = "", 
+        app: str = "android", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_label_list_app(
+        self, 
+        payload: str | dict = "", 
+        /, 
+        base_url: str = "", 
+        app: str = "android", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_label_list_app(
+        self, 
+        payload: str | dict = "", 
+        /, 
+        base_url: str = "", 
+        app: str = "android", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """罗列标签列表（如果要获取做了标签的文件列表，用 `fs_search` 接口）
+
+        GET https://proapi.115.com/android/label/list
+
+        :payload:
+            - offset: int = 0 💡 索引偏移，从 0 开始
+            - limit: int = 11500 💡 一页大小
+            - keyword: str = <default> 💡 搜索关键词
+            - sort: "name" | "update_time" | "create_time" = <default> 💡 排序字段
+
+              - 名称: "name"
+              - 创建时间: "create_time"
+              - 更新时间: "update_time"
+
+            - order: "asc" | "desc" = <default> 💡 排序顺序："asc"(升序), "desc"(降序)
+        """
+        api = complete_proapi("/label/list", base_url, app)
+        if isinstance(payload, str):
+            payload = {"offset": 0, "limit": 11500, "keyword": payload}
+        else:
+            payload = {"offset": 0, "limit": 11500, **payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
     def fs_label_set(
         self, 
         fids: int | str | Iterable[int | str], 
@@ -6480,7 +6636,7 @@ class P115Client:
         .. todo::
             待破解
 
-        POST https://proapi.115.com/{app}/1.0/folder/update
+        POST https://proapi.115.com/android/1.0/folder/update
         """
         api = complete_proapi("/folder/update", base_url, app)
         payload = dict(payload, user_id=self.user_id)
@@ -6580,13 +6736,197 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """移动文件或目录
 
-        POST https://proapi.115.com/{app}/files/move
+        POST https://proapi.115.com/android/files/move
 
         .. todo::
             待破解
         """
         api = complete_proapi("/files/move", base_url, app)
         payload = dict(payload, user_id=self.user_id)
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_music(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_music(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_music(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取音乐信息（其实只有一个下载链接）
+
+        GET https://webapi.115.com/files/music
+
+        :payload:
+            - pickcode: str 💡 提取码
+        """
+        api = complete_webapi("/files/music", base_url=base_url)
+        if isinstance(payload, str):
+            payload = {"pickcode": payload}
+        request_kwargs.update(request=None, follow_redirects=False)
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_music_set(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: bool | str = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_music_set(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: bool | str = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_music_set(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: bool | str = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """从听单添加或移除音乐，或者给音乐加减星标
+
+        POST https://webapi.115.com/files/music
+
+        :payload:
+            - file_id: int
+            - topic_id: int = 0
+            - op: str = "add" 💡 操作类型："add": 添加到听单, "delete": 从听单删除, "fond": 设置星标
+            - fond: 0 | 1 = 1
+        """
+        api = complete_webapi("/files/music", base_url=base_url)
+        payload = {"op": "add", "fond": 1, "topic_id": 0, **payload}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_music_app(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: str = "", 
+        app: str = "android", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_music_app(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: str = "", 
+        app: str = "android", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_music_app(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: str = "", 
+        app: str = "android", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取音乐信息
+
+        GET https://proapi.115.com/android/music/musicplay
+
+        :payload:
+            - pickcode: str 💡 提取码
+            - format: str = "json"
+            - music_id: int = <default>
+            - topic_id: int = <default>
+        """
+        api = complete_proapi("/music/musicplay", base_url, app)
+        if isinstance(payload, str):
+            payload = {"pickcode": payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_music_fond_set(
+        self, 
+        payload: int | dict, 
+        /, 
+        base_url: bool | str = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_music_fond_set(
+        self, 
+        payload: int | dict, 
+        /, 
+        base_url: bool | str = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_music_fond_set(
+        self, 
+        payload: int | dict, 
+        /, 
+        base_url: bool | str = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """给听单加减星标
+
+        POST https://webapi.115.com/files/music_topic_fond
+
+        :payload:
+            - topic_id: int
+            - fond: 0 | 1 = 1
+        """
+        api = complete_webapi("/files/music_topic_fond", base_url=base_url)
+        if isinstance(payload, int):
+            payload = {"fond": 1, "topic_id": payload}
+        else:
+            payload = {"fond": 1, **payload}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -6682,7 +7022,7 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """设置某个目录内文件的默认排序
 
-        POST https://proapi.115.com/{app}/2.0/ufile/order
+        POST https://proapi.115.com/android/2.0/ufile/order
 
         .. error::
             这个接口暂时并不能正常工作，应该是参数构造有问题，暂时请用 `P115Client.fs_order_set`
@@ -6792,7 +7132,7 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """重命名文件或目录
 
-        POST https://proapi.115.com/{app}/files/batch_rename
+        POST https://proapi.115.com/android/files/batch_rename
 
         :payload:
             - files_new_name[{file_id}]: str 💡 值为新的文件名（basename）
@@ -6891,7 +7231,7 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """查找重复文件（罗列除此以外的 sha1 相同的文件）
 
-        GET https://proapi.115.com/{app}/2.0/ufile/get_repeat_sha
+        GET https://proapi.115.com/android/2.0/ufile/get_repeat_sha
 
         :payload:
             - file_id: int | str
@@ -7088,7 +7428,7 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """搜索文件或目录（提示：好像最多只能罗列前 10,000 条数据，也就是 limit + offset <= 10_000）
 
-        GET https://proapi.115.com/{app}/files/search
+        GET https://proapi.115.com/android/files/search
 
         .. attention::
             最多只能取回前 10,000 条数据，也就是 limit + offset <= 10_000
@@ -7220,7 +7560,7 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """获取使用空间的统计数据（较为简略，如需更详细，请用 `P115Client.fs_index_info()`）
 
-        GET https://proapi.115.com/{app}/1.0/user/space_info
+        GET https://proapi.115.com/android/1.0/user/space_info
         """
         api = complete_proapi("/1.0/user/space_info", base_url, app)
         return self.request(url=api, async_=async_, **request_kwargs)
@@ -7513,6 +7853,52 @@ class P115Client:
         )
 
     @overload
+    def fs_video_def_set(
+        self, 
+        payload: int | str | dict, 
+        /, 
+        base_url: bool | str = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_video_def_set(
+        self, 
+        payload: int | str | dict, 
+        /, 
+        base_url: bool | str = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_video_def_set(
+        self, 
+        payload: int | str | dict, 
+        /, 
+        base_url: bool | str = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """切换视频清晰度
+
+        .. caution::
+            暂时没搞清楚调用了以后，到底有什么效果，所以建议不要用，除非你知道
+
+        GET https://webapi.115.com/files/video_def
+
+        :payload:
+            - definition: str
+        """
+        api = complete_webapi("/files/video_def", base_url=base_url)
+        if isinstance(payload, (int, str)):
+            payload = {"definition": payload}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
     def fs_video_m3u8(
         self, 
         /, 
@@ -7649,7 +8035,7 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """获取视频字幕
 
-        GET https://proapi.115.com/{app}/2.0/video/subtitle
+        GET https://proapi.115.com/android/2.0/video/subtitle
 
         :payload:
             - pickcode: str
@@ -7692,7 +8078,7 @@ class P115Client:
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
-        """批量删除 115 生活事件列表
+        """批量删除操作历史：批量删除 115 生活事件列表
 
         POST https://life.115.com/api/1.0/web/1.0/life/life_batch_delete
 
@@ -7811,7 +8197,7 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """获取 life_list 操作记录明细
 
-        GET https://proapi.115.com/{app}/1.0/behavior/detail
+        GET https://proapi.115.com/android/1.0/behavior/detail
 
         :payload:
             - type: str = "" 💡 操作类型
@@ -7881,7 +8267,7 @@ class P115Client:
         .. hint::
             app 可以是任意字符串，服务器并不做检查。其他可用 app="web" 的接口可能皆是如此
         """
-        api = f"https://life.115.com/api/1.0/{app}/1.0/calendar/getoption"
+        api = f"http://life.115.com/api/1.0/{app}/1.0/calendar/getoption"
         return self.request(url=api, async_=async_, **request_kwargs)
 
     @overload
@@ -7934,7 +8320,7 @@ class P115Client:
             payload = {"locus": 1, "open_life": 1, **payload}
         else:
             payload = {"locus": 1, "open_life": payload}
-        api = f"https://life.115.com/api/1.0/{app}/1.0/calendar/setoption"
+        api = f"http://life.115.com/api/1.0/{app}/1.0/calendar/setoption"
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -7968,7 +8354,7 @@ class P115Client:
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
-        """清空 115 生活事件列表
+        """清空操作历史：清空 115 生活事件列表
 
         POST https://life.115.com/api/1.0/web/1.0/life/life_clear_history
 
@@ -8157,7 +8543,7 @@ class P115Client:
             - total_count: int = <default> 💡 列表所有项数
             - type: int = <default> 💡 类型
         """
-        api = f"https://life.115.com/api/1.0/{app}/1.0/life/life_list"
+        api = f"http://life.115.com/api/1.0/{app}/1.0/life/life_list"
         if isinstance(payload, (int, str)):
             payload = {"limit": 1_000, "show_type": 0, "start": payload}
         else:
@@ -8374,6 +8760,8 @@ class P115Client:
     def login_online(
         self, 
         /, 
+        app: str = "web", 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -8382,6 +8770,8 @@ class P115Client:
     def login_online(
         self, 
         /, 
+        app: str = "web", 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -8389,6 +8779,8 @@ class P115Client:
     def login_online(
         self, 
         /, 
+        app: str = "web", 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -8396,7 +8788,7 @@ class P115Client:
 
         GET https://passportapi.115.com/app/1.0/web/1.0/login_log/login_online
         """
-        api = "https://passportapi.115.com/app/1.0/web/1.0/login_log/login_online"
+        api = f"http://passportapi.115.com/app/1.0/{app}/1.0/login_log/login_online"
         return self.request(url=api, async_=async_, **request_kwargs)
 
     @overload
@@ -8617,7 +9009,7 @@ class P115Client:
         """
         if app == "desktop":
             app = "web"
-        api = f"https://passportapi.115.com/app/1.0/{app}/1.0/login/qrcode/"
+        api = f"http://passportapi.115.com/app/1.0/{app}/1.0/login/qrcode/"
         while isinstance(uid, P115Client):
             uid = uid.login_uid
         payload = {"account": uid}
@@ -8862,7 +9254,7 @@ class P115Client:
                 app = yield self.login_app(async_=async_)
             if app == "desktop":
                 app = "web"
-            api = f"https://passportapi.115.com/app/1.0/{app}/1.0/logout/logout"
+            api = f"http://passportapi.115.com/app/1.0/{app}/1.0/logout/logout"
             request_kwargs["headers"] = {**(request_kwargs.get("headers") or {}), "Cookie": self.cookies_str}
             request_kwargs.setdefault("parse", ...)
             if request is None:
@@ -8901,7 +9293,7 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """退出登录状态（可以把某个客户端下线，所有已登录设备可从 `login_devices` 获取）
 
-        GET https://passportapi.115.com/app/1.0/web/1.0/logout/mange
+        POST https://passportapi.115.com/app/1.0/web/1.0/logout/mange
 
         :payload:
             - ssoent: str
@@ -9103,12 +9495,12 @@ class P115Client:
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
-        api = f"https://lixian.115.com/lixianssp/?ac={ac}"
+        api = f"http://lixian.115.com/lixianssp/?ac={ac}"
         payload["ac"] = ac
         payload["app_ver"] = "99.99.99.99"
         request_kwargs["headers"] = {
             **(request_kwargs.get("headers") or {}), 
-            "User-Agent": "115disk/99.99.99.99 115Browser/99.99.99.99", 
+            "User-Agent": "Mozilla/5.0 115disk/99.99.99.99 115Browser/99.99.99.99 115wangpan_android/99.99.99.99", 
         }
         def parse(resp, content: bytes) -> dict:
             json = json_loads(content)
@@ -9559,9 +9951,9 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """获取当前正在运行的离线任务数
 
-        GET https://lixian.115.com/lixian/?ct=lixian&ac=get_task_cnt
+        GET https://lixian.115.com/lixian/?ct=lixian&ac=get_task_cnt&flag=0
         """
-        api = complete_lixian_api("?ct=lixian&ac=get_task_cnt", base_url=base_url)
+        api = complete_lixian_api("?ct=lixian&ac=get_task_cnt&flag=0", base_url=base_url)
         return self.request(url=api, async_=async_, **request_kwargs)
 
     @overload
@@ -10119,7 +10511,6 @@ class P115Client:
         """
         if app:
             api = complete_proapi("/2.0/share/downurl", base_url, app)
-            print(api)
             return self.request(url=api, params=payload, async_=async_, **request_kwargs)
         else:
             api = complete_proapi("/app/share/downurl", base_url)
@@ -10254,7 +10645,7 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """获取（自己的）分享信息
 
-        GET https://proapi.115.com/{app}/2.0/share/shareinfo
+        GET https://proapi.115.com/android/2.0/share/shareinfo
 
         :payload:
             - share_code: str
@@ -10346,7 +10737,7 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """罗列（自己的）分享信息列表
 
-        GET https://proapi.115.com/{app}/2.0/share/slist
+        GET https://proapi.115.com/android/2.0/share/slist
 
         :payload:
             - limit: int = 32
@@ -10440,7 +10831,7 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """接收分享链接的某些文件或目录
 
-        POST https://proapi.115.com/{app}/2.0/share/receive
+        POST https://proapi.115.com/android/2.0/share/receive
 
         :payload:
             - share_code: str
@@ -10544,7 +10935,7 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """创建（自己的）分享
 
-        POST https://proapi.115.com/{app}/2.0/share/send
+        POST https://proapi.115.com/android/2.0/share/send
 
         :payload:
             - file_ids: int | str 💡 文件列表，有多个用逗号 "," 隔开
@@ -10662,7 +11053,7 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """开启或关闭免登录下载
 
-        GET https://webapi.115.com/share/skip_login_down
+        POST https://webapi.115.com/share/skip_login_down
 
         :param payload:
             - share_code: str       💡 分享码
@@ -10825,7 +11216,7 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """获取分享链接的某个目录中的文件和子目录的列表（包含详细信息）
 
-        GET https://proapi.115.com/{app}/2.0/share/snap
+        GET https://proapi.115.com/android/2.0/share/snap
 
         :payload:
             - share_code: str
@@ -10933,7 +11324,7 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """变更（自己的）分享的配置（例如改访问密码，取消分享）
 
-        POST https://proapi.115.com/{app}/2.0/share/updateshare
+        POST https://proapi.115.com/android/2.0/share/updateshare
 
         :payload:
             - share_code: str
@@ -11367,7 +11758,7 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """获取 user_key
 
-        GET https://proapi.115.com/{app}/2.0/user/upload_key
+        GET https://proapi.115.com/android/2.0/user/upload_key
         """
         api = complete_proapi("/2.0/user/upload_key", base_url, app)
         def gen_step():
@@ -11587,13 +11978,13 @@ class P115Client:
         request_kwargs["headers"] = {
             **(request_kwargs.get("headers") or {}), 
             "Content-Type": "application/x-www-form-urlencoded", 
-            "User-Agent": "115disk/99.99.99.99 115Browser/99.99.99.99", 
+            "User-Agent": "Mozilla/5.0 115disk/99.99.99.99 115Browser/99.99.99.99 115wangpan_android/99.99.99.99", 
         }
         request_kwargs.setdefault("parse", parse_upload_init_response)
         def gen_step():
             resp = yield self.upload_init(async_=async_, **request_kwargs)
             if resp["status"] == 2 and resp["statuscode"] == 0:
-                # NOTE: 再次调用一下上传接口，确保能在 life_list 接口中看到更新，目前猜测推送 upload_file 的事件信息，需要用 websocket，待破解
+                # NOTE: 再次调用一下上传接口，确保能在 life_list 接口中看到更新，目前猜测推送 upload_file 的事件信息，可能需要用 websocket，待破解
                 request_kwargs["parse"] = ...
                 if async_:
                     create_task(to_thread(self.upload_init, **request_kwargs))
@@ -12274,6 +12665,44 @@ class P115Client:
     ########## User API ##########
 
     @overload
+    def user_card(
+        self, 
+        /, 
+        base_url: str = "", 
+        app: str = "android", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def user_card(
+        self, 
+        /, 
+        base_url: str = "", 
+        app: str = "android", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def user_card(
+        self, 
+        /, 
+        base_url: str = "", 
+        app: str = "android", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取用户信息
+
+        GET https://proapi.115.com/android/user/card
+        """
+        api = complete_proapi("/user/card", base_url, app)
+        return self.request(url=api, async_=async_, **request_kwargs)
+
+    @overload
     def user_fingerprint(
         self, 
         /, 
@@ -12379,6 +12808,41 @@ class P115Client:
         return self.request(url=api, async_=async_, **request_kwargs)
 
     @overload
+    def user_points_balance(
+        self, 
+        /, 
+        app: str = "web", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def user_points_balance(
+        self, 
+        /, 
+        app: str = "web", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def user_points_balance(
+        self, 
+        /, 
+        app: str = "web", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """剩余的签到积分
+
+        GET https://points.115.com/api/1.0/web/1.0/user/balance
+        """
+        api = f"http://points.115.com/api/1.0/{app}/1.0/user/balance"
+        return self.request(url=api, async_=async_, **request_kwargs)
+
+    @overload
     def user_points_sign(
         self, 
         /, 
@@ -12411,7 +12875,7 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """获取签到信息
 
-        GET https://proapi.115.com/{app}/2.0/user/points_sign
+        GET https://proapi.115.com/android/2.0/user/points_sign
         """
         api = complete_proapi("/2.0/user/points_sign", base_url, app)
         return self.request(url=api, async_=async_, **request_kwargs)
@@ -12449,7 +12913,7 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """每日签到（注意：不要用 web，即浏览器，的 cookies，会失败）
 
-        POST https://proapi.115.com/{app}/2.0/user/points_sign
+        POST https://proapi.115.com/android/2.0/user/points_sign
         """
         api = complete_proapi("/2.0/user/points_sign", base_url, app)
         t = int(time())
@@ -12458,6 +12922,53 @@ class P115Client:
             "token_time": t, 
         }
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def user_points_transaction(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        app: str = "web", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def user_points_transaction(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        app: str = "web", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def user_points_transaction(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        app: str = "web", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """签到记录
+
+        GET https://points.115.com/api/1.0/web/1.0/user/transaction
+
+        payload:
+            - start: int = 0
+            - limit: int = 32
+            - month: str = <default> 💡 月份，格式为 YYYYMM
+        """
+        if isinstance(payload, int):
+            payload = {"limit": 32, "start": payload}
+        else:
+            payload = {"limit": 32, **payload}
+        api = f"http://points.115.com/api/1.0/{app}/1.0/user/transaction"
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
     def user_setting(
@@ -12638,7 +13149,7 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """获取此账户的 app 版设置（提示：较为复杂，自己抓包研究）
 
-        GET https://proapi.115.com/{app}/1.0/user/setting
+        GET https://proapi.115.com/android/1.0/user/setting
         """
         api = complete_proapi("/1.0/user/setting", base_url, app)
         return self.request(url=api, async_=async_, **request_kwargs)
@@ -12679,10 +13190,48 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """获取（并可修改）此账户的网页版设置（提示：较为复杂，自己抓包研究）
 
-        POST https://proapi.115.com/{app}/1.0/user/setting
+        POST https://proapi.115.com/android/1.0/user/setting
         """
         api = complete_proapi("/1.0/user/setting", base_url, app)
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def user_vip_check_spw(
+        self, 
+        /, 
+        base_url: str = "", 
+        app: str = "android", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def user_vip_check_spw(
+        self, 
+        /, 
+        base_url: str = "", 
+        app: str = "android", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def user_vip_check_spw(
+        self, 
+        /, 
+        base_url: str = "", 
+        app: str = "android", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取用户积分、余额等信息
+
+        GET https://proapi.115.com/android/vip/check_spw
+        """
+        api = complete_proapi("/vip/check_spw", base_url, app)
+        return self.request(url=api, async_=async_, **request_kwargs)
 
     ########## User Share API ##########
 
