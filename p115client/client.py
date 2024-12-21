@@ -317,6 +317,13 @@ def make_ed2k_url(
     return f"ed2k://|file|{name.translate(ED2K_NAME_TRANSTAB)}|{size}|{hash}|/"
 
 
+def get_first(m: Mapping, /, *keys, default=None):
+    for k in keys:
+        if k in m:
+            return m[k]
+    return default
+
+
 @overload
 def check_response(resp: dict, /) -> dict:
     ...
@@ -331,12 +338,15 @@ def check_response(resp: dict | Awaitable[dict], /) -> dict | Coroutine[Any, Any
             raise P115OSError(errno.EIO, resp)
         if resp.get("state", True):
             return resp
-        if "errno" in resp:
-            match resp["errno"]:
-                # {"state": false, "errno": 99, "error": "请重新登录", "request": "/app/uploadinfo", "data": []}
+        if code := get_first(resp, "errno", "errNo", "errcode", "errCode", "code"):
+            resp.setdefault("errno", code)
+            if "error" not in resp:
+                resp = resp.setdefault("error", get_first(resp, "msg", "error_msg", "message"))
+            match code:
+                # {"state": false, "errno": 99, "error": "请重新登录"}
                 case 99:
                     raise LoginError(errno.EIO, resp)
-                # {"state": false, "errno": 911, "errcode": 911, "error_msg": "请验证账号"}
+                # {"state": false, "errno": 911, "error": "请验证账号"}
                 case 911:
                     raise AuthenticationError(errno.EIO, resp)
                 # {"state": false, "errno": 20001, "error": "目录名称不能为空"}
@@ -348,13 +358,16 @@ def check_response(resp: dict | Awaitable[dict], /) -> dict | Coroutine[Any, Any
                 # {"state": false, "errno": 20009, "error": "父目录不存在。"}
                 case 20009:
                     raise FileNotFoundError(errno.ENOENT, resp)
-                # {"state": false, "errno": 20020, "error": "后缀名不正确，请重新输入", "request": "<api>", "data": []}
+                # {"state": false, "errno": 20018, "error": "文件不存在或已删除。"}
+                case 20018:
+                    raise FileNotFoundError(errno.ENOENT, resp)
+                # {"state": false, "errno": 20020, "error": "后缀名不正确，请重新输入"}
                 case 20020:
                     raise OperationalError(errno.ENOTSUP, resp)
-                # {"state": false, "errNo": 20021, "error": "后缀名不正确，请重新输入"}
+                # {"state": false, "errno": 20021, "error": "后缀名不正确，请重新输入"}
                 case 20021:
                     raise OperationalError(errno.ENOTSUP, resp)
-                # {"state": false, "errno": 50003, "msg": "很抱歉，该文件提取码不存在。", "data": ""}
+                # {"state": false, "errno": 50003, "error": "很抱歉，该文件提取码不存在。"}
                 case 50003:
                     raise FileNotFoundError(errno.ENOENT, resp)
                 # {"state": false, "errno": 90008, "error": "文件（夹）不存在或已经删除。"}
@@ -369,15 +382,28 @@ def check_response(resp: dict | Awaitable[dict], /) -> dict | Coroutine[Any, Any
                 # {"state": false, "errno": 91005, "error": "空间不足，复制失败。"}
                 case 91005:
                     raise OperationalError(errno.ENOSPC, resp)
-                # {"state": false, "errno": 231011, "error": "文件已删除，请勿重复操作","errtype": "war"}
+                # {"state": false, "errno": 231011, "error": "文件已删除，请勿重复操作"}
                 case 231011:
                     raise FileNotFoundError(errno.ENOENT, resp)
                 # {"state": false, "errno": 300104, "error": "文件超过200MB，暂不支持播放"}
                 case 300104:
                     raise P115OSError(errno.EFBIG, resp)
-                # {"state": false, "errno": 980006, "error": "404 Not Found", "request": "<api>", "data": []}
+                # {"state": false, "errno": 800001, "error": "目录不存在。"}
+                case 800001:
+                    raise FileNotFoundError(errno.ENOENT, resp)
+                # {"state": false, "errno": 980006, "error": "404 Not Found"}
                 case 980006:
                     raise NotSupportedError(errno.ENOSYS, resp)
+                # {"state": false, "errno": 990001, "error": "登陆超时，请重新登陆。"}
+                case 990001:
+                    # NOTE: 可能就是被下线了
+                    raise AuthenticationError(errno.EIO, resp)
+                # {"state": false, "errno": 990002, "error": "参数错误。"}
+                case 990002:
+                    raise P115OSError(errno.EINVAL, resp)
+                # {"state": false, "errno": 990003, "error": "操作失败。"}
+                case 990003:
+                    raise OperationalError(errno.EIO, resp)
                 # {"state": false, "errno": 990005, "error": "你的账号有类似任务正在处理，请稍后再试！"}
                 case 990005:
                     raise BusyOSError(errno.EBUSY, resp)
@@ -387,45 +413,21 @@ def check_response(resp: dict | Awaitable[dict], /) -> dict | Coroutine[Any, Any
                 # {"state": false, "errno": 990009, "error": "移动[...]操作尚未执行完成，请稍后再试！"}
                 case 990009:
                     raise BusyOSError(errno.EBUSY, resp)
-                # {"state": false, "errno": 990023, "error": "操作的文件(夹)数量超过5万个", "errtype": ""}
+                # {"state": false, "errno": 990023, "error": "操作的文件(夹)数量超过5万个"}
                 case 990023:
                     raise OperationalError(errno.ENOTSUP, resp)
-                # {"state": 0, "errno": 40100000, "code": 40100000, "error": "参数错误！", "message": "参数错误！", "data": {}}
+                # {"state": 0, "errno": 40100000, "error": "参数错误！"}
                 case 40100000:
                     raise OperationalError(errno.EINVAL, resp)
-                # {"state": 0, "errno": 40101004, "code": 40101004, "error": "IP登录异常,请稍候再登录！", "message": "IP登录异常,请稍候再登录！"}
+                # {"state": 0, "errno": 40101004, "error": "IP登录异常,请稍候再登录！"}
                 case 40101004:
                     raise LoginError(errno.EIO, resp)
-                # {"state": 0, "errno": 40101017, "code": 40101017, "error": "用户验证失败！", "message": "用户验证失败！"}
+                # {"state": 0, "errno": 40101017, "error": "用户验证失败！"}
                 case 40101017:
                     raise AuthenticationError(errno.EIO, resp)
-                # {"state": 0, "errno": 40101032, "code": 40101032, "data": {}, "message": "请重新登录", "error": "请重新登录"}
+                # {"state": 0, "errno": 40101032, "error": "请重新登录"}
                 case 40101032:
                     raise LoginError(errno.EIO, resp)
-        elif "errNo" in resp:
-            match resp["errNo"]:
-                # {"state": False, "errNo": 990001, "error": "登录超时，请重新登录。"}
-                case 990001:
-                    # NOTE: 可能就是被下线了
-                    raise AuthenticationError(errno.EIO, resp)
-                # {"state": false, "errNo": 20021, "error": "后缀名不正确，请重新输入", "request": "<api>"}
-                case 20021:
-                    raise OperationalError(errno.ENOTSUP, resp)
-        elif "errcode" in resp:
-            match resp["errcode"]:
-                case 911:
-                    raise AuthenticationError(errno.EIO, resp)
-        elif "code" in resp:
-            match resp["code"]:
-                case 99:
-                    raise AuthenticationError(errno.EIO, resp)
-                # {"state": false, "code": 20018, "message": "文件不存在或已删除。"}
-                # {"state": false, "code": 800001, 'message': "目录不存在。"}
-                case 20018 | 800001:
-                    raise FileNotFoundError(errno.ENOENT, resp)
-                # {"state": false, "code": 990002, "message": "参数错误。"}
-                case 990002:
-                    raise P115OSError(errno.EINVAL, resp)
         elif "msg_code" in resp:
             match resp["msg_code"]:
                 case 50028:
@@ -519,7 +521,6 @@ def normalize_attr_web(
         ("sta", "status"), 
         ("class", "class"), 
         ("u", "thumb"), 
-        ("vdi", "defination"), 
         ("play_long", "play_long"), 
         ("audio_play_long", "audio_play_long"), 
         ("current_time", "current_time"), 
@@ -528,6 +529,21 @@ def normalize_attr_web(
     ):
         if key in info:
             attr[name] = info[key]
+    if vdi := info.get("vdi"):
+        attr["defination"] = vdi
+        match vdi:
+            case 2:
+                attr["defination_str"] = "video-hd"
+            case 3:
+                attr["defination_str"] = "video-fhd"
+            case 4:
+                attr["defination_str"] = "video-1080p"
+            case 5:
+                attr["defination_str"] = "video-4k"
+            case 100:
+                attr["defination_str"] = "video-origin"
+            case _:
+                attr["defination_str"] = "video-sd"
     if keep_raw:
         attr["raw"] = info
     return attr
@@ -2019,6 +2035,18 @@ class P115Client:
 
                     from blacksheep_client_request import request
         """
+        if url.startswith("//"):
+            url = "http:" + url
+        elif not url.startswith(("http://", "https://")):
+            if url.startswith("?"):
+                url = "http://115.com" + url
+            else:
+                if not url.startswith("/"):
+                    url = "/" + url
+                if url.startswith(("/app/", "/android/", "/115android/", "/ios/", "/115ios/", "/115ipad/", "/wechatmini/", "/alipaymini/")):
+                    url = "http://pro.api.115.com" + url
+                else:
+                    url = "http://web.api.115.com" + url
         if params:
             url = make_url(url, params)
         request_kwargs.setdefault("parse", default_parse)
@@ -5555,14 +5583,14 @@ class P115Client:
             - type: int | str = 0 💡 类型（？？表示还未搞清楚），多个用逗号 "," 隔开
 
               - 全部: 0
-              - 接收文件: 1
+              - ？？: 1
               - ？？: 2
               - 播放视频: 3
               - 上传: 4
               - ？？: 5
               - ？？: 6
-              - 接收目录: 7
-              - ？？: 8
+              - 接收: 7
+              - 移入: 8
 
             - with_file: 0 | 1 = 0
         """
@@ -5615,16 +5643,77 @@ class P115Client:
             - type: int = <default> 💡 类型（？？表示还未搞清楚），多个用逗号 "," 隔开
 
               - 全部: 0
-              - 接收文件: 1
+              - ？？: 1
               - ？？: 2
               - 播放视频: 3
               - 上传: 4
               - ？？: 5
               - ？？: 6
-              - 接收目录: 7
-              - ？？: 8
+              - 接收: 7
+              - 移入: 8
         """
         api = complete_webapi("/history/list", base_url=base_url)
+        if isinstance(payload, (int, str)):
+            payload = {"limit": 1150, "offset": payload}
+        else:
+            payload = {"limit": 1150, "offset": 0, **payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_history_list_app(
+        self, 
+        payload: int | str | dict = 0, 
+        /, 
+        base_url: str = "", 
+        app: str = "android", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_history_list_app(
+        self, 
+        payload: int | str | dict = 0, 
+        /, 
+        base_url: str = "", 
+        app: str = "android", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_history_list_app(
+        self, 
+        payload: int | str | dict = 0, 
+        /, 
+        base_url: str = "", 
+        app: str = "android", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """历史记录列表
+
+        GET https://proapi.115.com/{app}/history/list
+
+        :payload:
+            - offset: int = 0
+            - limit: int = 1150
+            - played_end: 0 | 1 = <default>
+            - type: int = <default> 💡 类型（？？表示还未搞清楚），多个用逗号 "," 隔开
+
+              - 全部: 0
+              - ？？: 1
+              - ？？: 2
+              - 播放视频: 3
+              - 上传: 4
+              - ？？: 5
+              - ？？: 6
+              - 接收: 7
+              - 移入: 8
+        """
+        api = complete_proapi("/history/list", base_url, app)
         if isinstance(payload, (int, str)):
             payload = {"limit": 1150, "offset": payload}
         else:
@@ -5717,6 +5806,55 @@ class P115Client:
             - limit: int = 1150
         """
         api = complete_webapi("/history/receive_list", base_url=base_url)
+        if isinstance(payload, (int, str)):
+            payload = {"limit": 1150, "offset": payload}
+        else:
+            payload = {"limit": 1150, "offset": 0, **payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_history_receive_list_app(
+        self, 
+        payload: int | str | dict = 0, 
+        /, 
+        base_url: str = "", 
+        app: str = "android", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_history_receive_list_app(
+        self, 
+        payload: int | str | dict = 0, 
+        /, 
+        base_url: str = "", 
+        app: str = "android", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_history_receive_list_app(
+        self, 
+        payload: int | str | dict = 0, 
+        /, 
+        base_url: str = "", 
+        app: str = "android", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """接收列表
+
+        GET https://proapi.115.com/{app}/history/receive_list
+
+        :payload:
+            - offset: int = 0
+            - limit: int = 1150
+        """
+        api = complete_proapi("/history/receive_list", base_url, app)
         if isinstance(payload, (int, str)):
             payload = {"limit": 1150, "offset": payload}
         else:
@@ -6718,6 +6856,58 @@ class P115Client:
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
+    def fs_repeat_sha1_app(
+        self, 
+        payload: int | str | dict, 
+        /, 
+        app: str = "android", 
+        base_url: str = "", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_repeat_sha1_app(
+        self, 
+        payload: int | str | dict, 
+        /, 
+        app: str = "android", 
+        base_url: str = "", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_repeat_sha1_app(
+        self, 
+        payload: int | str | dict, 
+        /, 
+        app: str = "android", 
+        base_url: str = "", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """查找重复文件（罗列除此以外的 sha1 相同的文件）
+
+        GET https://proapi.115.com/{app}/2.0/ufile/get_repeat_sha
+
+        :payload:
+            - file_id: int | str
+            - offset: int = 0
+            - limit: int = 1150
+            - source: str = ""
+            - format: str = "json"
+        """
+        api = complete_proapi("/2.0/ufile/get_repeat_sha", base_url, app)
+        if isinstance(payload, (int, str)):
+            payload = {"offset": 0, "limit": 1150, "format": "json", "file_id": payload}
+        else:
+            payload = {"offset": 0, "limit": 1150, "format": "json", **payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
     def fs_score_set(
         self, 
         file_id: int | str, 
@@ -7472,6 +7662,49 @@ class P115Client:
     ########## Life API ##########
 
     @overload
+    def life_batch_delete(
+        self, 
+        payload: Iterable[dict] | dict, 
+        /, 
+        app: str = "web", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def life_batch_delete(
+        self, 
+        payload: Iterable[dict] | dict, 
+        /, 
+        app: str = "web", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def life_batch_delete(
+        self, 
+        payload: Iterable[dict] | dict, 
+        /, 
+        app: str = "web", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """批量删除 115 生活事件列表
+
+        POST https://life.115.com/api/1.0/web/1.0/life/life_batch_delete
+
+        :payload:
+            - delete_data: str 💡 JSON array，每条数据格式为 {"relation_id": str, "behavior_type": str}
+        """
+        if not isinstance(payload, dict):
+            payload = {"delete_data": (b"[%s]" % b",".join(map(dumps, payload))).decode("utf-8")}
+        api = f"http://life.115.com/api/1.0/{app}/1.0/life/life_batch_delete"
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
     def life_behavior_detail(
         self, 
         payload: str | dict = "", 
@@ -7514,7 +7747,8 @@ class P115Client:
 
               - "upload_image_file": 1 💡 上传图片
               - "upload_file":       2 💡 上传文件
-              - "star_file":         4 💡 设置星标
+              - "star_image":        3 💡 设置图片星标
+              - "star_file":         4 💡 设置文件星标（不包括图片）
               - "move_image_file":   5 💡 移动图片
               - "move_file":         6 💡 移动文件或目录（不包括图片）
               - "browse_image":      7 💡 浏览图片
@@ -7584,7 +7818,8 @@ class P115Client:
 
               - "upload_image_file": 1 💡 上传图片
               - "upload_file":       2 💡 上传文件
-              - "star_file":         4 💡 设置星标
+              - "star_image":        3 💡 设置图片星标
+              - "star_file":         4 💡 设置文件星标（不包括图片）
               - "move_image_file":   5 💡 移动图片
               - "move_file":         6 💡 移动文件或目录（不包括图片）
               - "browse_image":      7 💡 浏览图片
@@ -7703,6 +7938,94 @@ class P115Client:
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
+    def life_clear_history(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        app: str = "web", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def life_clear_history(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        app: str = "web", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def life_clear_history(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        app: str = "web", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """清空 115 生活事件列表
+
+        POST https://life.115.com/api/1.0/web/1.0/life/life_clear_history
+
+        :payload:
+            - tab_type: 0 | 1 = <default>
+        """
+        if isinstance(payload, int):
+            payload = {"tab_type": 0}
+        api = f"http://life.115.com/api/1.0/{app}/1.0/life/life_clear_history"
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def life_has_data(
+        self, 
+        payload: int | dict = {}, 
+        /, 
+        app: str = "web", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def life_has_data(
+        self, 
+        payload: int | dict = {}, 
+        /, 
+        app: str = "web", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def life_has_data(
+        self, 
+        payload: int | dict = {}, 
+        /, 
+        app: str = "web", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取有数据的那几天零点的时间戳
+
+        GET https://life.115.com/api/1.0/web/1.0/life/life_has_data
+
+        :payload:
+            - end_time: int = <default>
+            - show_note_cal: 0 | 1 = <default>
+            - start_time: int = <default>
+        """
+        api = f"http://life.115.com/api/1.0/{app}/1.0/life/life_has_data"
+        if isinstance(payload, int):
+            payload = {"start_time": payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
     def life_list(
         self, 
         payload: int | str | dict = 0, 
@@ -7740,45 +8063,105 @@ class P115Client:
         .. note::
             为了实现分页拉取，需要指定 last_data 参数。只要上次返回的数据不为空，就会有这个值，直接使用即可
 
+        .. hint::
+            引用：https://cdnres.115.com/life/m_r/web/static_v11.0/homepage/lifetime.js
+
+            - 'upload_file'          => '上传文件'   💡 上传文件(非图片) 文件类
+            - 'upload_image_file'    => '上传图片'   💡 上传文件(图片)   文件类
+            - 'backup_album'         => '备份相册'   💡 备份相册         文件类
+            - 'sync_communication'   => '同步通讯录' 💡 同步通讯录       文件类
+            - 'receive_files'        => '接收文件'   💡 接收文件         文件类
+            - 'star_file'            => '星标文件'   💡 星标文件         文件类
+            - 'radar_sharing'        => '雷达分享'   💡 雷达分享         文件类
+            - 'file_search'          => '文件搜索'   💡 文件搜索         文件类
+            - 'move_file'            => '移动文件'   💡 移动文件(非图片) 文件类
+            - 'move_image_file'      => '移动图片'   💡 移动文件(图片)   文件类
+            - 'browse_document'      => '浏览文档'   💡 浏览文档         信息预览类
+            - 'browse_video'         => '浏览视频'   💡 浏览视频         信息预览类
+            - 'browse_audio'         => '浏览音频'   💡 浏览音频         信息预览类
+            - 'browse_image'         => '浏览图片'   💡 浏览图片         信息预览类
+            - 'publish_record'       => '发布记录'   💡 发布记录         信息发布类
+            - 'publish_calendar'     => '发布日程'   💡 发布日程         信息发布类
+            - 'publish_home'         => '发布传说'   💡 发布传说         信息发布类
+            - 'account_security'     => '账号安全'   💡 账号安全         账号安全类
+
+            一些筛选条件::
+
+                - 全部：type=0
+                - 上传文件：type=1&file_behavior_type=1
+                - 浏览文件：type=1&file_behavior_type=2
+                - 星标文件：type=1&file_behavior_type=3
+                - 移动文件：type=1&file_behavior_type=4
+                - 文件夹：type=1&file_behavior_type=5
+                - 备份：type=1&file_behavior_type=6
+                - 删除文件：type=1&file_behavior_type=7
+                - 账号安全：type=2
+                - 通讯录：type=3
+                - 其他：type=99
+
+            一些类型分类::
+
+                .. code:: python
+
+                    {
+                        'file':['upload_file', 'upload_image_file', 'backup_album', 'sync_communication', 
+                                'receive_files', 'star_file', 'radar_sharing', 'file_search', 'move_file', 
+                                'move_image_file', 'star_image', 'del_photo_image', 'del_similar_image', 
+                                'generate_smart_albums', 'new_person_albums', 'del_person_albums', 
+                                'generate_photo_story', 'share_photo', 'folder_rename', 'folder_label', 
+                                'new_folder', 'copy_folder', 'delete_file'],
+                        'review':['browse_video', 'browse_document', 'browse_audio', 'browse_image'],
+                        'edit':['publish_record', 'publish_calendar', 'publish_home'],
+                        'safe':['account_security'],
+                        'cloud':[],
+                        'share': ['share_contact']
+                    }
+
         :payload:
             - start: int = 0
-            - limit: int = 1000
-            - check_num: int = <default>
-            - end_time: int = <default> 💡 默认为次日零点前一秒
-            - file_behavior_type: int | str = <default>
-                💡 筛选类型，有多个则用逗号 ',' 隔开:
-                💡 0: 所有
-                💡 1: 上传
-                💡 2: 浏览
-                💡 3: 星标
-                💡 4: 移动
-                💡 5: 标签
-                💡 6: <UNKNOWN>
-                💡 7: 删除
-            - isPullData: 'true' | 'false' = <default>
-            - isShow: 0 | 1 = <default>
-            - last_data: str = <default> 💡 JSON object, e.g. {"last_time":1700000000,"last_count":1,"total_count":200}
-            - mode: str = <default> 💡 例如 "show"
+            - limit: int = 1_000
+            - check_num: int = <default> 💡 选中记录数
+            - del_data: str = <default> 💡 JSON array，删除时传给接口数据
+            - end_time: int = <default>
+            - file_behavior_type: int | str = <default> 💡 筛选类型，有多个则用逗号 ',' 隔开
+
+                - 💡 0: 所有
+                - 💡 1: 上传
+                - 💡 2: 浏览
+                - 💡 3: 星标
+                - 💡 4: 移动
+                - 💡 5: 标签
+                - 💡 6: <UNKNOWN>
+                - 💡 7: 删除
+
+            - isPullData: 'true' | 'false' = <default> 💡 是否下拉加载数据
+            - isShow: 0 | 1 = <default> 💡 是否显示
+            - last_data: str = <default> 💡 JSON object, e.g. '{"last_time":1700000000,"last_count":1,"total_count":200}'
+            - mode: str = <default> 💡 操作模式
+
+                - 💡 "show" 展示列表模式
+                - 💡 "select": 批量操作模式
+
+            - selectedRecords: str = <default> 💡 JSON array，选中记录 id 数组
             - show_note_cal: 0 | 1 = <default>
-            - show_type: int = 0
-                💡 筛选类型，有多个则用逗号 ',' 隔开:
-                💡 0: 所有
-                💡 1: 增、删、改、移动、上传、接收、设置标签等文件系统操作
-                💡 2: 浏览文件
-                💡 3: <UNKNOWN>
-                💡 4: account_security
+            - show_type: int = 0 💡 筛选类型，有多个则用逗号 ',' 隔开
+
+                - 💡 0: 所有
+                - 💡 1: 增、删、改、移动、上传、接收、设置标签等文件系统操作
+                - 💡 2: 浏览文件
+                - 💡 3: <UNKNOWN>
+                - 💡 4: account_security
+
             - start_time: int = <default>
             - tab_type: int = <default>
-            - total_count: int = <default>
-            - type: int = <default>
+            - total_count: int = <default> 💡 列表所有项数
+            - type: int = <default> 💡 类型
         """
         api = f"https://life.115.com/api/1.0/{app}/1.0/life/life_list"
-        now = datetime.now()
-        today_end = int(datetime.combine(now.date(), now.time().max).timestamp())
         if isinstance(payload, (int, str)):
-            payload = {"end_time": today_end, "limit": 1000, "show_type": 0, "start": payload}
+            payload = {"limit": 1_000, "show_type": 0, "start": payload}
         else:
-            payload = {"end_time": today_end, "limit": 1000, "show_type": 0, "start": 0, **payload}
+            payload = {"limit": 1_000, "show_type": 0, "start": 0, **payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     ########## Login API ##########
@@ -9174,7 +9557,7 @@ class P115Client:
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
-        """获取当前离线任务数
+        """获取当前正在运行的离线任务数
 
         GET https://lixian.115.com/lixian/?ct=lixian&ac=get_task_cnt
         """
@@ -9600,7 +9983,7 @@ class P115Client:
         url: str = "", 
         strict: bool = True, 
         use_web_api: bool = False, 
-        app: str = "android", 
+        app: str = "", 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -9614,7 +9997,7 @@ class P115Client:
         url: str = "", 
         strict: bool = True, 
         use_web_api: bool = False, 
-        app: str = "android", 
+        app: str = "", 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -9627,7 +10010,7 @@ class P115Client:
         url: str = "", 
         strict: bool = True, 
         use_web_api: bool = False, 
-        app: str = "android", 
+        app: str = "", 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -9736,6 +10119,7 @@ class P115Client:
         """
         if app:
             api = complete_proapi("/2.0/share/downurl", base_url, app)
+            print(api)
             return self.request(url=api, params=payload, async_=async_, **request_kwargs)
         else:
             api = complete_proapi("/app/share/downurl", base_url)

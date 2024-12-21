@@ -19,11 +19,12 @@ from iterutils import run_gen_step_iter, Yield
 from p115client import check_response, P115Client
 
 
-IGNORE_BEHAVIOR_TYPES: Final = frozenset((4, 7, 8, 9, 10, 19))
+IGNORE_BEHAVIOR_TYPES: Final = frozenset((3, 4, 7, 8, 9, 10, 19))
 #: 115 生活事件名称到类型的映射
 BEHAVIOR_NAME_TO_TYPE: Final = {
     "upload_image_file": 1, 
     "upload_file": 2, 
+    "star_image": 3, 
     "star_file": 4, 
     "move_image_file": 5, 
     "move_file": 6, 

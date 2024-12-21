@@ -1499,7 +1499,6 @@ END;
         return await client.share_download_url(
             {"share_code": share_code, "receive_code": receive_code, "file_id": id}, 
             use_web_api=use_web_api, 
-            app="android", 
             async_=True, 
         )
 
@@ -1642,7 +1641,6 @@ END;
             if parent_id is None:
                 resp = await client.share_download_url_app(
                     {"share_code": share_code, "receive_code": receive_code, "file_id": id}, 
-                    app="android", 
                     async_=True, 
                 )
                 if not resp["state"]:
