@@ -8,7 +8,7 @@ __all__ = ["check_response", "normalize_attr", "normalize_attr_web", "normalize_
 
 import errno
 
-from asyncio import create_task, to_thread, Lock as AsyncLock
+from asyncio import create_task, get_running_loop, run_coroutine_threadsafe, to_thread, Lock as AsyncLock
 from collections.abc import (
     AsyncGenerator, AsyncIterable, Awaitable, Callable, Coroutine, Generator, 
     ItemsView, Iterable, Iterator, Mapping, MutableMapping, Sequence, 
@@ -51,8 +51,9 @@ from http_response import get_total_length
 from httpfile import HTTPFileReader, AsyncHTTPFileReader
 from iterutils import run_gen_step
 from orjson import dumps, loads
-from p115cipher.fast import rsa_encode, rsa_decode, ecdh_aes_decode, make_upload_payload
+from p115cipher.fast import rsa_encode, rsa_decode, ecdh_encode_token, ecdh_aes_encode, ecdh_aes_decode, make_upload_payload
 from property import locked_cacheproperty
+from re import compile as re_compile
 from startfile import startfile, startfile_async # type: ignore
 from urlopen import urlopen
 from yarl import URL
@@ -71,12 +72,12 @@ CRE_SHARE_LINK_search: Final = re_compile(r"/s/(?P<share_code>\w+)(\?password=(?
 CRE_SET_COOKIE: Final = re_compile(r"[0-9a-f]{32}=[0-9a-f]{32}.*")
 CRE_CLIENT_API_search: Final = re_compile(r"^ +((?:GET|POST) .*)", MULTILINE).search
 CRE_COOKIES_UID_search: Final = re_compile(r"(?<=\bUID=)[^\s;]+").search
+CRE_API_match: Final = re_compile(r"http://(web|pro)api.115.com(?=/|\?|#|$)").match
 ED2K_NAME_TRANSTAB: Final = dict(zip(b"/|", ("%2F", "%7C")))
 
 _httpx_request = None
 get_anxia_origin = cycle(("http://anxia.com", "http://v.anxia.com")).__next__
-get_webapi_base = cycle(("webapi", "web.api")).__next__
-get_proapi_base = cycle(("proapi", "pro.api")).__next__
+_default_k_ec = {"k_ec": ecdh_encode_token(0).decode()}
 
 
 def make_prefix_generator(
@@ -138,13 +139,10 @@ def complete_webapi(
         if path and not path.startswith("/"):
             path = "/" + path
         path = get_prefix() + path
-    if base_url:
-        if isinstance(base_url, str):
-            base = ""
-        else:
-            base = "webapi"
+    if isinstance(base_url, str) and base_url:
+        base = ""
     else:
-        base = get_webapi_base()
+        base = "webapi"
     return complete_api(path, base, base_url=base_url)
 
 
@@ -159,7 +157,7 @@ def complete_proapi(
     if app and not app.startswith("/"):
         app = "/" + app
     if not base_url:
-        base_url = f"http://{get_proapi_base()}.115.com"
+        base_url = f"http://proapi.115.com"
     return f"{base_url}{app}{path}"
 
 
@@ -190,8 +188,15 @@ def json_loads(content: bytes, /):
         raise DataError(errno.ENODATA, content) from e
 
 
-def default_parse(resp, content: bytes, /):
-    return json_loads(content)
+def default_parse(resp, content: Buffer, /):
+    if not isinstance(content, (bytes, bytearray, memoryview)):
+        content = memoryview(content)
+    if content and content[0] + content[-1] not in (b"{}", b"[]", b'""'):
+        try:
+            content = ecdh_aes_decode(content, decompress=True)
+        except Exception:
+            pass
+    return json_loads(memoryview(content))
 
 
 def default_check_for_relogin(e: BaseException, /) -> bool:
@@ -341,7 +346,7 @@ def check_response(resp: dict | Awaitable[dict], /) -> dict | Coroutine[Any, Any
         if code := get_first(resp, "errno", "errNo", "errcode", "errCode", "code"):
             resp.setdefault("errno", code)
             if "error" not in resp:
-                resp = resp.setdefault("error", get_first(resp, "msg", "error_msg", "message"))
+                resp.setdefault("error", get_first(resp, "msg", "error_msg", "message"))
             match code:
                 # {"state": false, "errno": 99, "error": "请重新登录"}
                 case 99:
@@ -842,6 +847,7 @@ class P115Client:
     def session(self, /):
         """同步请求的 session 对象
         """
+        import httpx_request
         from httpx import Client, HTTPTransport, Limits
         session = Client(
             limits=Limits(max_connections=256, max_keepalive_connections=64, keepalive_expiry=10), 
@@ -856,6 +862,7 @@ class P115Client:
     def async_session(self, /):
         """异步请求的 session 对象
         """
+        import httpx_request
         from httpx import AsyncClient, AsyncHTTPTransport, Limits
         session = AsyncClient(
             limits=Limits(max_connections=256, max_keepalive_connections=64, keepalive_expiry=10), 
@@ -1967,6 +1974,7 @@ class P115Client:
         params = None, 
         *, 
         async_: Literal[False, True] = False, 
+        ecdh_encrypt: bool = False, 
         request: None | Callable[[Unpack[RequestKeywords]], Any] = None, 
         **request_kwargs, 
     ):
@@ -1975,6 +1983,7 @@ class P115Client:
         :param url: HTTP 的请求链接
         :param method: HTTP 的请求方法
         :param async_: 说明 `request` 是同步调用还是异步调用
+        :param ecdh_encrypt: 使用 ecdh 算法进行加密（返回值也要解密）
         :param request: HTTP 请求调用，如果为 None，则默认用 httpx 执行请求
             如果传入调用，则必须至少能接受以下几个关键词参数：
 
@@ -2049,7 +2058,6 @@ class P115Client:
                     url = "http://web.api.115.com" + url
         if params:
             url = make_url(url, params)
-        request_kwargs.setdefault("parse", default_parse)
         headers = request_kwargs.get("headers")
         need_set_cookies = not (request is None and (urlsplit(url).hostname or "").endswith("115.com"))
         if request is None:
@@ -2059,7 +2067,17 @@ class P115Client:
             request = get_default_request()
         else:
             headers = {**self.headers, **(headers or {})}
+        if need_set_cookies and all(c.lower() != "cookie" for c in headers):
+            headers["Cookie"] = self.cookies_str
+        if m := CRE_API_match(url):
+            headers["Host"] = m.expand(r"\1.api.115.com")
         request_kwargs["headers"] = headers
+        if ecdh_encrypt:
+            url = make_url(url, _default_k_ec)
+            if "data" in request_kwargs:
+                request_kwargs["data"] = ecdh_aes_encode(urlencode(request_kwargs["data"]).encode("latin-1") + b"&")
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
+        request_kwargs.setdefault("parse", default_parse)
         if callable(check_for_relogin := self.check_for_relogin):
             if async_:
                 async def wrap():
@@ -2109,7 +2127,7 @@ class P115Client:
                 for i in count(0):
                     try:
                         cookies_old = self.cookies_str
-                        if need_set_cookies:
+                        if i and need_set_cookies:
                             headers["Cookie"] = cookies_old
                         return request(url=url, method=method, **request_kwargs)
                     except BaseException as e:
@@ -2144,8 +2162,6 @@ class P115Client:
                                 if not (need_read_cookies and cookies_new):
                                     self.login_another_app(replace=True)
         else:
-            if need_set_cookies:
-                headers["Cookie"] = self.cookies_str
             return request(url=url, method=method, **request_kwargs)
 
     ########## Activity API ##########
@@ -3756,8 +3772,6 @@ class P115Client:
         api = complete_webapi("/category/get", base_url=base_url)
         if isinstance(payload, (int, str)):
             payload = {"cid": payload}
-        else:
-            payload = {"cid": 0, **payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -3805,8 +3819,6 @@ class P115Client:
         api = complete_proapi("/2.0/category/get", base_url, app)
         if isinstance(payload, (int, str)):
             payload = {"cid": payload}
-        else:
-            payload = {"cid": 0, **payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -9468,11 +9480,97 @@ class P115Client:
     ########## Offline Download API ##########
 
     @overload
-    def _offline_lixianssp_post(
+    def _offline_web_post(
         self, 
-        ac: str, 
         payload: dict, 
         /, 
+        ac: str = "", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def _offline_web_post(
+        self, 
+        payload: dict, 
+        /, 
+        ac: str = "", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def _offline_web_post(
+        self, 
+        payload: dict, 
+        /, 
+        ac: str = "", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        api = "http://lixian.115.com/web/lixian/"
+        if ac:
+            payload["ac"] = ac
+        return self.request(
+            url=api, 
+            method="POST", 
+            data=payload, 
+            async_=async_, 
+            **request_kwargs, 
+        )
+
+    @overload
+    def _offline_lixian_post(
+        self, 
+        payload: dict, 
+        /, 
+        ac: str = "", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def _offline_lixian_post(
+        self, 
+        payload: dict, 
+        /, 
+        ac: str = "", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def _offline_lixian_post(
+        self, 
+        payload: dict, 
+        /, 
+        ac: str = "", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        api = "http://lixian.115.com/lixian/"
+        if ac:
+            payload["ac"] = ac
+        request_kwargs["ecdh_encrypt"] = True
+        return self.request(
+            url=api, 
+            method="POST", 
+            data=payload, 
+            async_=async_, 
+            **request_kwargs, 
+        )
+
+    @overload
+    def _offline_lixianssp_post(
+        self, 
+        payload: dict, 
+        /, 
+        ac: str = "", 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -9480,28 +9578,32 @@ class P115Client:
     @overload
     def _offline_lixianssp_post(
         self, 
-        ac: str, 
         payload: dict, 
         /, 
+        ac: str = "", 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
         ...
     def _offline_lixianssp_post(
         self, 
-        ac: str, 
         payload: dict, 
         /, 
+        ac: str = "", 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
-        api = f"http://lixian.115.com/lixianssp/?ac={ac}"
-        payload["ac"] = ac
+        api = "http://lixian.115.com/lixianssp/"
+        if ac:
+            payload["ac"] = ac
         payload["app_ver"] = "99.99.99.99"
         request_kwargs["headers"] = {
             **(request_kwargs.get("headers") or {}), 
             "User-Agent": "Mozilla/5.0 115disk/99.99.99.99 115Browser/99.99.99.99 115wangpan_android/99.99.99.99", 
         }
+        request_kwargs["ecdh_encrypt"] = False
         def parse(resp, content: bytes) -> dict:
             json = json_loads(content)
             if data := json.get("data"):
@@ -9520,10 +9622,55 @@ class P115Client:
         )
 
     @overload
+    def _offline_post(
+        self, 
+        payload: dict, 
+        /, 
+        ac: str = "", 
+        use_web_api: bool = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def _offline_post(
+        self, 
+        payload: dict, 
+        /, 
+        ac: str = "", 
+        use_web_api: bool = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def _offline_post(
+        self, 
+        payload: dict, 
+        /, 
+        ac: str = "", 
+        use_web_api: bool = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        ecdh_encrypt: bool = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        if use_web_api:
+            method = self._offline_web_post
+        elif ecdh_encrypt:
+            method = self._offline_lixian_post
+        else:
+            method = self._offline_lixianssp_post
+        return method(payload, ac, async_=async_, ecdh_encrypt=ecdh_encrypt, **request_kwargs)
+
+    @overload
     def offline_add_torrent(
         self, 
         payload: str | dict, 
         /, 
+        use_web_api: bool = False, 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -9533,6 +9680,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        use_web_api: bool = False, 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -9541,6 +9690,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        use_web_api: bool = False, 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -9556,13 +9707,15 @@ class P115Client:
         """
         if isinstance(payload, str):
             payload = {"info_hash": payload}
-        return self._offline_lixianssp_post("add_task_bt", payload, async_=async_, **request_kwargs)
+        return self._offline_post(payload, "add_task_bt", use_web_api=use_web_api, async_=async_, **request_kwargs)
 
     @overload
     def offline_add_url(
         self, 
         payload: str | dict, 
         /, 
+        use_web_api: bool = False, 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -9572,6 +9725,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        use_web_api: bool = False, 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -9580,6 +9735,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        use_web_api: bool = False, 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -9594,13 +9751,15 @@ class P115Client:
         """
         if isinstance(payload, str):
             payload = {"url": payload}
-        return self._offline_lixianssp_post("add_task_url", payload, async_=async_, **request_kwargs)
+        return self._offline_post(payload, "add_task_url", use_web_api=use_web_api, async_=async_, **request_kwargs)
 
     @overload
     def offline_add_urls(
         self, 
         payload: str | Iterable[str] | dict, 
         /, 
+        use_web_api: bool = False, 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -9610,6 +9769,8 @@ class P115Client:
         self, 
         payload: str | Iterable[str] | dict, 
         /, 
+        use_web_api: bool = False, 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -9618,6 +9779,8 @@ class P115Client:
         self, 
         payload: str | Iterable[str] | dict, 
         /, 
+        use_web_api: bool = False, 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -9638,7 +9801,7 @@ class P115Client:
             payload = {f"url[{i}]": url for i, url in enumerate(payload)}
             if not payload:
                 raise ValueError("no `url` specified")
-        return self._offline_lixianssp_post("add_task_urls", payload, async_=async_, **request_kwargs)
+        return self._offline_post(payload, "add_task_urls", use_web_api=use_web_api, async_=async_, **request_kwargs)
 
     @overload
     def offline_clear(
@@ -9883,6 +10046,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        base_url: None | bool | str = None, 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -9892,6 +10057,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        base_url: None | bool | str = None, 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -9900,6 +10067,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        base_url: None | bool | str = None, 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -9913,13 +10082,14 @@ class P115Client:
             - ...
             - flag: 0 | 1 = <default> 💡 是否删除源文件
         """
+        api = complete_lixian_api("?ct=lixian&ac=task_del", base_url=base_url)
         if isinstance(payload, str):
             payload = {"hash[0]": payload}
         elif not isinstance(payload, dict):
             payload = {f"hash[{i}]": hash for i, hash in enumerate(payload)}
             if not payload:
                 raise ValueError("no `hash` (info_hash) specified")
-        return self._offline_lixianssp_post("task_del", payload, async_=async_, **request_kwargs)
+        return self.request(api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
     def offline_task_count(

@@ -1,4 +1,4 @@
-# 微型 115 302 后端
+# 115 tiny 302 backend
 
 ## 安装
 
@@ -16,7 +16,7 @@ pip install -U p115tiny302
 $ p115tiny302 -h
 usage: p115tiny302 [-h] [-c COOKIES] [-cp COOKIES_PATH] [-H HOST] [-P PORT] [-d] [-uc UVICORN_RUN_CONFIG_PATH] [-v] [-l]
 
-    ╭───────────────────────── Welcome to 115_tiny_302 ────────────────────────────╮
+    ╭───────────────────────── Welcome to 115 tiny 302 ────────────────────────────╮
     │                                                                              │
     │  maintained by ❤     ChenyangGao https://chenyanggao.github.io               │
     │                                                                              │
@@ -28,10 +28,7 @@ usage: p115tiny302 [-h] [-c COOKIES] [-cp COOKIES_PATH] [-H HOST] [-P PORT] [-d]
     │                                                                              │
     ╰──────────────────────────────────────────────────────────────────────────────╯
 
-> 网盘文件支持用 pickcode、id、sha1 或 name 查询
-> 分享文件支持用 id 或 name 查询
-
-⏰ 此版本不依赖于 p115client 和 pycryptodome，至少要求 python 3.12
+⏰ 仅支持用 pickcode 查询
 
 🌰 查询示例：
 
@@ -42,32 +39,6 @@ usage: p115tiny302 [-h] [-c COOKIES] [-cp COOKIES_PATH] [-H HOST] [-P PORT] [-d]
     1. 带（任意）名字查询 pickcode
         http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?ecjq9ichcb40lzlvx
         http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?pickcode=ecjq9ichcb40lzlvx
-    2. 查询 id
-        http://localhost:8000?2691590992858971545
-        http://localhost:8000/2691590992858971545
-        http://localhost:8000?id=2691590992858971545
-    3. 带（任意）名字查询 id
-        http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?2691590992858971545
-        http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?id=2691590992858971545
-    4. 查询 sha1
-        http://localhost:8000?E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
-        http://localhost:8000/E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
-        http://localhost:8000?sha1=E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
-    5. 带（任意）名字查询 sha1
-        http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
-        http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?sha1=E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
-    6. 查询 name（直接以路径作为 name，且不要有任何查询参数）
-        http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv
-    7. 查询分享文件（如果是你自己的分享，则无须提供密码 receive_code）
-        http://localhost:8000?share_code=sw68md23w8m&receive_code=q353&id=2580033742990999218
-        http://localhost:8000?share_code=sw68md23w8m&receive_code=q353&id=2580033742990999218
-        http://localhost:8000?share_code=sw68md23w8m&id=2580033742990999218
-    8. 带（任意）名字查询分享文件（如果是你自己的分享，则无须提供密码 receive_code）
-        http://localhost:8000/Cosmos.S01E01.1080p.AMZN.WEB-DL.DD+5.1.H.264-iKA.mkv?share_code=sw68md23w8m&receive_code=q353&id=2580033742990999218
-        http://localhost:8000/Cosmos.S01E01.1080p.AMZN.WEB-DL.DD+5.1.H.264-iKA.mkv?share_code=sw68md23w8m&id=2580033742990999218
-    9. 用 name 查询分享文件（直接以路径作为 name，且不要有 id 查询参数。如果是你自己的分享，则无须提供密码 receive_code）
-        http://localhost:8000/Cosmos.S01E01.1080p.AMZN.WEB-DL.DD+5.1.H.264-iKA.mkv?share_code=sw68md23w8m&receive_code=q353
-        http://localhost:8000/Cosmos.S01E01.1080p.AMZN.WEB-DL.DD+5.1.H.264-iKA.mkv?share_code=sw68md23w8m
 
 options:
   -h, --help            show this help message and exit

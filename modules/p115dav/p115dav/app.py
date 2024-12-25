@@ -15,9 +15,7 @@ from collections import deque
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from contextlib import closing, suppress
 from datetime import datetime
-from functools import partial
 from io import BytesIO
-from itertools import cycle
 from math import isinf, isnan
 from pathlib import Path
 from posixpath import split as splitpath, splitext
@@ -187,6 +185,7 @@ def make_application(
     from p115client import check_response, CLASS_TO_TYPE, SUFFIX_TO_TYPE, P115Client, P115URL
     from p115client.exception import AuthenticationError, BusyOSError
     from p115client.tool import get_id_to_path, get_id_to_pickcode, get_id_to_sha1, share_iterdir, P115ID
+    from p115client.tool.pool import call_wrap_with_cookies_pool, cookies_pool
     from path_predicate import MappingPath
     from posixpatht import escape, normpath, path_is_dir_form, splits
     from property import locked_cacheproperty
@@ -239,6 +238,7 @@ def make_application(
 
     put_task = QUEUE.put_nowait
     get_task = QUEUE.get
+    fs_files: Callable
     client: P115Client
     con: Connection
     loop: AbstractEventLoop
@@ -626,85 +626,17 @@ LIMIT 1;""", (share_code, id))
     ) -> None | P115ID:
         return next(share_info_to_path_gen(share_code, path, ensure_file, parent_id), None)
 
-    t_webapi = ("http://webapi.115.com", "http://web.api.115.com", "http://anxia.com/webapi", "http://v.anxia.com/webapi")
-    t_apsapi = ("http://aps.115.com", "http://anxia.com/aps", "http://v.anxia.com/aps")
-    t_proapi = ("http://proapi.115.com", "http://pro.api.115.com")
-
-    get_web_base_url = cycle(t_webapi).__next__
-
-    def iter_fs_files_without_aps():
-        while True:
-            for base_url in t_webapi:
-                yield client.fs_files, base_url
-            for base_url in t_proapi:
-                yield client.fs_files_app, base_url
-
-    get_fs_files_without_aps = iter_fs_files_without_aps().__next__
-
-    def iter_fs_files():
-        while True:
-            for base_url in t_webapi:
-                yield client.fs_files, base_url
-            for base_url in t_apsapi:
-                yield client.fs_files_aps, base_url
-            for base_url in t_proapi:
-                yield client.fs_files_app, base_url
-
-    get_fs_files = iter_fs_files().__next__
-
-    async def iterdir(cid: int, first_page_size: int = 0) -> tuple[int, list[dict], AsyncIterator[AttrDict]]:
-        get_list, base_url = get_fs_files()
-        if first_page_size <= 0:
-            first_page_size = 8_000
-        payload = {
-            "asc": 1, "cid": cid, "cur": 1, "custom_order": 1, "fc_mix": 0, "limit": first_page_size, 
-            "o": "file_name", "offset": 0, "show_dir": 1, 
-        }
-        resp = await get_list(payload, base_url=base_url, async_=True)
-        check_response(resp)
-        if cid and int(resp["path"][-1]["cid"]) != cid:
-            raise FileNotFoundError(cid)
-        count = resp["count"]
-        ancestors = [{"id": "0", "parent_id": "0", "name": ""}]
-        ancestors.extend(
-            {"id": a["cid"], "parent_id": a["pid"], "name": a["name"]} 
-            for a in resp["path"][1:]
-        )
-        payload["limit"] = 8_000
-        async def iter():
-            nonlocal resp
-            offset = 0
-            while True:
-                update_cache(ancestors[1:])
-                data = resp["data"]
-                for attr in map(normalize_attr, data):
-                    yield attr
-                offset += len(data)
-                if offset >= resp["count"]:
-                    break
-                payload["offset"] = offset
-                get_list, base_url = get_fs_files_without_aps()
-                resp = await get_list(payload, base_url=base_url, async_=True)
-                check_response(resp)
-                if cid and int(resp["path"][-1]["cid"]) != cid:
-                    raise FileNotFoundError(cid)
-                ancestors[1:] = (
-                    {"id": a["cid"], "parent_id": a["pid"], "name": a["name"]} 
-                    for a in resp["path"][1:]
-                )
-                if count != resp["count"]:
-                    raise BusyOSError(f"count changes during iteration: {cid}")
-        return count, ancestors, iter()
-
-    async def iterdir_order_by_utime_desc(cid: int, first_page_size: int = 0) -> tuple[int, list[dict], AsyncIterator[AttrDict]]:
+    async def iterdir(
+        cid: int, 
+        first_page_size: int = 0, 
+    ) -> tuple[int, list[dict], AsyncIterator[AttrDict]]:
         if first_page_size <= 0:
             first_page_size = 1150
         payload = {
             "asc": 0, "cid": cid, "cur": 1, "custom_order": 1, "fc_mix": 0, "limit": first_page_size, 
             "o": "user_utime", "offset": 0, "show_dir": 1, 
         }
-        get_list = client.fs_files
-        resp = await get_list(payload, base_url=get_web_base_url(), async_=True)
+        resp = await fs_files(payload, async_=True)
         check_response(resp)
         if cid and int(resp["path"][-1]["cid"]) != cid:
             raise FileNotFoundError(cid)
@@ -726,7 +658,7 @@ LIMIT 1;""", (share_code, id))
                 if offset >= resp["count"]:
                     break
                 payload["offset"] = offset
-                resp = await get_list(payload, base_url=get_web_base_url(), async_=True)
+                resp = await fs_files(payload, async_=True)
                 check_response(resp)
                 if cid and int(resp["path"][-1]["cid"]) != cid:
                     raise FileNotFoundError(cid)
@@ -742,7 +674,7 @@ LIMIT 1;""", (share_code, id))
         """更新文件列表
         """
         try:
-            count, ancestors, it = await iterdir_order_by_utime_desc(cid, 16)
+            count, ancestors, it = await iterdir(cid, 16)
         except FileNotFoundError:
             put_task(("UPDATE data SET parent_id=NULL WHERE id=?;", cid))
             raise
@@ -800,7 +732,6 @@ LIMIT 1;""", (share_code, id))
         cid: int, 
         /, 
         refresh_thumbs: bool = False, 
-        full_update: bool = True, 
     ) -> dict:
         """获取目录中的文件信息列表
         """
@@ -831,9 +762,8 @@ LIMIT 1;""", (share_code, id))
                     updated_at = await to_thread(query, "SELECT updated_at FROM list WHERE id=?", cid)
                     if not updated_at or time() - updated_at <= ttl:
                         return file_list
-                if not full_update:
-                    await update_file_list_partial(cid, file_list)
-                    return file_list
+                await update_file_list_partial(cid, file_list)
+                return file_list
             try:
                 count, ancestors, it = await iterdir(cid)
             except FileNotFoundError:
@@ -1012,15 +942,28 @@ VALUES (:share_code, :id, :parent_id, :sha1, :name, :path, :is_dir)"""
 
     @app.lifespan
     async def register_client(app: Application):
-        nonlocal client
+        nonlocal client, fs_files
         client = P115Client(
             cookies_path, 
             app="alipaymini", 
             check_for_relogin=True, 
         )
-        async with client.async_session:
-            app.services.register(P115Client, instance=client)
-            yield
+        cookies_rotation_file = f"115-{client.user_id}-cookies-rotation.txt"
+        try:
+            initial_cookies = [c for l in open(cookies_rotation_file, encoding="latin-1") if (c := l.strip())]
+        except Exception:
+            initial_cookies = []
+        get_cookies = cookies_pool(client, "harmony", initial_cookies, cooldown_time=3)
+        deque = getattr(get_cookies, "deque")
+        fs_files = call_wrap_with_cookies_pool(get_cookies)
+        try:
+            async with client.async_session:
+                app.services.register(P115Client, instance=client)
+                yield
+        finally:
+            with open(cookies_rotation_file, "w", encoding="latin-1") as file:
+                for cookie, _ in deque:
+                    print(cookie, file=file)
 
     @app.lifespan
     async def register_connection(app: Application):
@@ -2142,3 +2085,6 @@ if __name__ == "__main__":
 # TODO: 使用多接口+多cookies进行分流，如果是 web 或 harmony，则只分配网页版接口
 # TODO: 把数据库操作的模块专门分拆出来，db.py，原始行为就不是异步
 # TODO: 依然要支持 ctime，不再使用 aps 接口
+# TODO: 图片 CDN 链接
+# TODO: 缓存 m3u8 和 subtitles
+# TODO: 如果没有 client，则字幕文件使用 listdir

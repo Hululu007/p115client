@@ -11,14 +11,12 @@ __doc__ = """\
     │                                                                              │
     │                      \x1b[32mlicense     \x1b[4;34mhttps://www.gnu.org/licenses/gpl-3.0.txt\x1b[0m    │
     │                                                                              │
-    │                      \x1b[32mversion     \x1b[1;36m0.0.3\x1b[0m                                       │
+    │                      \x1b[32mversion     \x1b[1;36m0.0.5\x1b[0m                                       │
     │                                                                              │
     ╰──────────────────────────────────────────────────────────────────────────────╯
 
 > 网盘文件支持用 \x1b[3;36mpickcode\x1b[0m、\x1b[3;36mid\x1b[0m、\x1b[3;36msha1\x1b[0m 或 \x1b[3;36mname\x1b[0m 查询
 > 分享文件支持用 \x1b[3;36mid\x1b[0m 或 \x1b[3;36mname\x1b[0m 查询
-
-⏰ 此版本不依赖于 \x1b[31mp115client\x1b[0m 和 \x1b[31mpycryptodome\x1b[0m，至少要求 \x1b[31mpython \x1b[1m3.12\x1b[0m
 
 🌰 查询示例：
 
@@ -89,10 +87,13 @@ def main(argv: None | list[str] | Namespace = None, /):
     else:
         args = parse_args(argv)
 
-    cookies = args.cookies.strip()
-    if not cookies:
-        cookies_path = args.cookies_path.strip() or "115-cookies.txt"
-        cookies = open(cookies_path, encoding="latin-1").read().strip()
+    from p115client import P115Client
+
+    if cookies := args.cookies.strip():
+        client = P115Client(cookies, check_for_relogin=True)
+    else:
+        from pathlib import Path
+        client = P115Client(Path(args.cookies_path or "115-cookies.txt"), check_for_relogin=True)
 
     uvicorn_run_config_path = args.uvicorn_run_config_path
     if uvicorn_run_config_path:
@@ -139,8 +140,9 @@ def main(argv: None | list[str] | Namespace = None, /):
     from uvicorn import run
 
     print(__doc__)
-    app = make_application(cookies, debug=args.debug)
+    app = make_application(client, debug=args.debug)
     run(app, **run_config)
+
 
 if __name__ == "__main__":
     from pathlib import Path
