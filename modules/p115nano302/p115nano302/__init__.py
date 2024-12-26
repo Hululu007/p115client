@@ -2,16 +2,17 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 0, 5)
+__version__ = (0, 0, 6)
 __all__ = ["make_application"]
 __license__ = "GPLv3 <https://www.gnu.org/licenses/gpl-3.0.txt>"
 
 from collections.abc import Mapping
 from itertools import cycle
+from re import compile as re_compile
 from string import digits, hexdigits
 from time import time
 from typing import Final
-from urllib.parse import parse_qsl, urlencode, urlsplit
+from urllib.parse import parse_qsl, urlencode, unquote, urlsplit
 
 from blacksheep import redirect, text, Application, Request, Router
 from blacksheep.client import ClientSession
@@ -22,6 +23,7 @@ from orjson import dumps, loads
 from p115rsacipher import encrypt, decrypt
 
 
+CRE_name_search: Final = re_compile("[^&=]+(?=&|$)").match
 get_webapi_url: Final = cycle(("http://anxia.com/webapi", "http://v.anxia.com/webapi", "http://web.api.115.com", "http://webapi.115.com")).__next__
 
 
@@ -245,18 +247,22 @@ def make_application(cookies: str, debug: bool = False) -> Application:
         return receive_code
 
     @app.router.route("/", methods=["GET", "HEAD", "POST"])
-    @app.router.route("/<path:name>", methods=["GET", "HEAD", "POST"])
+    @app.router.route("/<path:name2>", methods=["GET", "HEAD", "POST"])
     async def index(
         request: Request, 
-        name: str = "", 
         share_code: str = "", 
         receive_code: str = "", 
         pickcode: str = "", 
         id: int = 0, 
         sha1: str = "", 
+        name: str = "", 
+        name2: str = "", 
         refresh: bool = False, 
         app: str = "", 
     ):
+        name = name or name2
+        if str(request.url) == "/service-worker.js":
+            raise FileNotFoundError
         if share_code:
             if not receive_code:
                 receive_code = await get_receive_code(share_code)
@@ -279,10 +285,8 @@ def make_application(cookies: str, debug: bool = False) -> Application:
                     raise ValueError(f"bad sha1: {sha1!r}")
                 pickcode = await get_pickcode_for_sha1(sha1.upper())
             else:
-                if (query_bytes := request.url.query):
-                    query = query_bytes.decode("latin-1").lstrip("?&=")
-                    if (idx := query.find("&")) > -1:
-                        name = query[:idx]
+                if match := CRE_name_search(unquote(request.url.query or b"")):
+                    name = match[0]
                 if name:
                     if len(name) == 17 and name.isalnum():
                         pickcode = name.lower()

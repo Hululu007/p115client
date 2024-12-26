@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 
 const { readFileSync } = require("fs");
-const { createServer, request, statusCodeS, STATUS_CODES } = require("http");
+const { createServer, request, STATUS_CODES } = require("http");
 const { networkInterfaces } = require("os");
 const { extname } = require("path");
 const { parse, URL, URLSearchParams } = require("url");
 
 const AUTHOR = "ChenyangGao <https://chenyanggao.github.io>"
 const LICENSE = "GPLv3 <https://www.gnu.org/licenses/gpl-3.0.txt>"
-const VERSION = "0.0.4"
+const VERSION = "0.0.6"
 const DOC = `usage: web_115_nano_302.js [-h] [-c COOKIES] [-cp COOKIES_PATH] [-H HOST] [-P PORT] [-l] [-v]
 
     ╭────────────────────── \x1b[31mWelcome to \x1b[1mweb_115_nano_302.js\x1b[0m ────────────────────────╮
@@ -51,6 +51,8 @@ const DOC = `usage: web_115_nano_302.js [-h] [-c COOKIES] [-cp COOKIES_PATH] [-H
         \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?sha1=E7FAA0BE343AF2DA8915F2B694295C8E4C91E691\x1b[0m
     6. 查询 \x1b[3;36mname\x1b[0m（直接以路径作为 \x1b[3;36mname\x1b[0m，且不要有任何查询参数）
         \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv\x1b[0m
+        \x1b[4;34mhttp://localhost:8000?Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv\x1b[0m
+        \x1b[4;34mhttp://localhost:8000?name=Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv\x1b[0m
     7. 查询分享文件（如果是你自己的分享，则无须提供密码 \x1b[3;36mreceive_code\x1b[0m）
         \x1b[4;34mhttp://localhost:8000?share_code=sw68md23w8m&receive_code=q353&id=2580033742990999218\x1b[0m
         \x1b[4;34mhttp://localhost:8000?share_code=sw68md23w8m&id=2580033742990999218\x1b[0m
@@ -60,6 +62,8 @@ const DOC = `usage: web_115_nano_302.js [-h] [-c COOKIES] [-cp COOKIES_PATH] [-H
     9. 用 \x1b[3;36mname\x1b[0m 查询分享文件（直接以路径作为 \x1b[3;36mname\x1b[0m，且不要有 \x1b[3;36mid\x1b[0m 查询参数。如果是你自己的分享，则无须提供密码 \x1b[3;36mreceive_code\x1b[0m）
         \x1b[4;34mhttp://localhost:8000/Cosmos.S01E01.1080p.AMZN.WEB-DL.DD+5.1.H.264-iKA.mkv?share_code=sw68md23w8m&receive_code=q353\x1b[0m
         \x1b[4;34mhttp://localhost:8000/Cosmos.S01E01.1080p.AMZN.WEB-DL.DD+5.1.H.264-iKA.mkv?share_code=sw68md23w8m\x1b[0m
+        \x1b[4;34mhttp://localhost:8000?name=Cosmos.S01E01.1080p.AMZN.WEB-DL.DD%2B5.1.H.264-iKA.mkv&share_code=sw68md23w8m&receive_code=q353\x1b[0m
+        \x1b[4;34mhttp://localhost:8000?name=Cosmos.S01E01.1080p.AMZN.WEB-DL.DD%2B5.1.H.264-iKA.mkv&share_code=sw68md23w8m\x1b[0m
 
 options:
   -h, --help            show this help message and exit
@@ -208,6 +212,13 @@ function decrypt(cipherData) {
     return (new TextDecoder("utf-8")).decode(xor(tmp, new Uint8Array([0x8d, 0xa5, 0xa5, 0x8d])));
 }
 
+class ErrorResponse extends Error {
+    constructor(message, code=400) {
+        super(message);
+        this.code = code;
+    }
+}
+
 async function request115(url, method="GET", headers=null, data=null) {
     const urlp = new URL(url);
     return new Promise((resolve, reject) => {
@@ -243,7 +254,7 @@ async function getPickcodeToId(id) {
     let pickcode = ID_TO_PICKCODE.get(id);
     if (pickcode) return pickcode;
     const response = await request115(`http://web.api.115.com/files/file?file_id=${id}`);
-    if (!response.state) throw new Error(JSON.stringify(response));
+    if (!response.state) throw new ErrorResponse(JSON.stringify(response), 503);
     ID_TO_PICKCODE.set(id, pickcode=response.data[0].pick_code);
     return pickcode;
 }
@@ -252,7 +263,7 @@ async function getPickcodeForSha1(sha1) {
     let pickcode = SHA1_TO_PICKCODE.get(sha1);
     if (pickcode) return pickcode;
     const response = await request115(`http://web.api.115.com/files/shasearch?sha1=${sha1}`);
-    if (!response.state) throw new Error(JSON.stringify(response));
+    if (!response.state) throw new ErrorResponse(JSON.stringify(response), 503);
     SHA1_TO_PICKCODE.set(sha1, pickcode=response.data.pick_code);
     return pickcode;
 }
@@ -272,10 +283,10 @@ async function getPickcodeForName(name, refresh=false) {
         delete payload.suffix;
         response = await request115(`${api}?${new URLSearchParams(payload).toString()}`);
     }
-    if (!response.state) throw new Error(JSON.stringify(response));
+    if (!response.state) throw new ErrorResponse(JSON.stringify(response), 503);
     const info = response.data[0];
     if (!info || info.n != name)
-        throw new Error(`name not found: ${name}`)
+        throw new ErrorResponse(`name not found: ${name}`, 404)
     NAME_TO_PICKCODE.set(name, pickcode=info.pc);
     return pickcode;
 }
@@ -301,10 +312,10 @@ async function shareGetIdForName(share_code, receive_code, name, refresh=false) 
         delete payload.suffix;
         response = await request115(`${api}?${new URLSearchParams(payload).toString()}`);
     }
-    if (!response.state) throw new Error(JSON.stringify(response));
+    if (!response.state) throw new ErrorResponse(JSON.stringify(response), 503);
     const info = response.data.list[0];
     if (!info || info.n != name)
-        throw new Error(`name not found: ${name}`)
+        throw new ErrorResponse(`name not found: ${name}`, 404)
     SHARE_NAME_TO_ID.set(key, id=info.fid);
     return id;
 }
@@ -334,11 +345,11 @@ async function shareGetUrl(share_code, receive_code, file_id) {
             const receive_code = await getReceiveCode(share_code);
             return await shareGetUrl(share_code, receive_code, file_id);
         }
-        throw new Error(JSON.stringify(response));
+        throw new ErrorResponse(JSON.stringify(response), 503);
     }
     const urlInfo = JSON.parse(decrypt(response.data)).url
     if (!urlInfo)
-        throw new Error(JSON.stringify(response));
+        throw new ErrorResponse(JSON.stringify(response), 404);
     return urlInfo.url;
 }
 
@@ -347,7 +358,7 @@ async function getReceiveCode(share_code) {
     if (receive_code = RECEIVE_CODE_MAP.get(share_code))
         return receive_code;
     const response = await request115(`http://web.api.115.com/share/shareinfo?share_code=${share_code}`);
-    if (!response.state) throw new Error(JSON.stringify(response));
+    if (!response.state) throw new ErrorResponse(JSON.stringify(response), 503);
     RECEIVE_CODE_MAP.set(share_code, receive_code=response.data.receive_code);
     return receive_code;
 }
@@ -405,26 +416,21 @@ for (let i = 0; i < argv.length; i++) {
 if (!args.cookies)
     args.cookies = readFileSync("115-cookies.txt", "latin1").trim();
 
-class ErrorResponse extends Error {
-    constructor(message, code=400) {
-        super(message);
-        this.code = code;
-    }
-}
-
 const server = createServer(async (req, res) => {
     const [start_s, start_ns] = process.hrtime();
-    const urlp = parse(req.url, true);
-    const query = (urlp.search || "").slice(1);
-    const params = urlp.query;
-    const share_code = params.share_code;
-    const sha1 = (params.sha1 || "").toUpperCase();
-    const refresh = params.refresh || false;
-    let name = decodeURIComponent((urlp.pathname || "").slice(1));
-    let pickcode = (params.pickcode || "").toLowerCase();
-    let id = params.id || "0";
     let statusCode = 200;
     try {
+        if (req.url === "/service-worker.js")
+            throw new ErrorResponse("", 404);
+        const urlp = parse(req.url, true);
+        const query = (urlp.search || "").slice(1);
+        const params = urlp.query;
+        const share_code = params.share_code;
+        const sha1 = (params.sha1 || "").toUpperCase();
+        const refresh = params.refresh || false;
+        let name = params.name || decodeURIComponent((urlp.pathname || "").slice(1));
+        let pickcode = (params.pickcode || "").toLowerCase();
+        let id = params.id || "0";
         let url;
         if (share_code) {
             let receive_code = params["receive_code"];
@@ -449,7 +455,7 @@ const server = createServer(async (req, res) => {
                 pickcode = await getPickcodeForSha1(sha1);
             } else {
                 if (query) {
-                    const find = query.match(/^[?&=]*([^?&=]+)/);
+                    const find = query.match(/^([^&=]+)(?=&|$)/);
                     if (find) name = decodeURIComponent(find[1]);
                 }
                 if (name) {

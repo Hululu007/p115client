@@ -2089,7 +2089,7 @@ class P115Client:
                                 headers["Cookie"] = cookies_old
                             return await request(url=url, method=method, **request_kwargs)
                         except BaseException as e:
-                            if isinstance(e, AuthenticationError):
+                            if isinstance(e, (AuthenticationError, LoginError)):
                                 if cookies_old != self.cookies_str or cookies_old != self._read_cookies():
                                     continue
                                 raise
@@ -2131,7 +2131,7 @@ class P115Client:
                             headers["Cookie"] = cookies_old
                         return request(url=url, method=method, **request_kwargs)
                     except BaseException as e:
-                        if isinstance(e, AuthenticationError):
+                        if isinstance(e, (AuthenticationError, LoginError)):
                             if cookies_old != self.cookies_str or cookies_old != self._read_cookies():
                                 continue
                             raise
