@@ -227,8 +227,7 @@ def make_application(cookies: str, debug: bool = False) -> Application:
             data = json["data"]
         else:
             data = loads(decrypt(json["data"]))
-        url_info = data["url"]
-        if not url_info:
+        if not (data and (url_info := data["url"])):
             raise FileNotFoundError(text)
         url = url_info["url"]
         if "&c=0&f=&" in url:

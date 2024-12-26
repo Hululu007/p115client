@@ -328,6 +328,7 @@ async function getUrl(pickcode, user_agent="") {
         {"User-Agent": user_agent, "Content-Type": "application/x-www-form-urlencoded", "Content-Length": Buffer.byteLength(data)}, 
         data, 
     );
+    if (!response.state) throw new ErrorResponse(JSON.stringify(response), 503);
     return JSON.parse(decrypt(response.data)).url
 }
 
@@ -347,7 +348,8 @@ async function shareGetUrl(share_code, receive_code, file_id) {
         }
         throw new ErrorResponse(JSON.stringify(response), 503);
     }
-    const urlInfo = JSON.parse(decrypt(response.data)).url
+    response.data = JSON.parse(decrypt(response.data));
+    const urlInfo = response.data.url
     if (!urlInfo)
         throw new ErrorResponse(JSON.stringify(response), 404);
     return urlInfo.url;
