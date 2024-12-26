@@ -470,7 +470,7 @@ const server = createServer(async (req, res) => {
                 }
             }
             if (!pickcode)
-                throw new ErrorResponse(`not found: ${urlp.pathname}${urlp.search}`)
+                throw new ErrorResponse(`not found: ${urlp.pathname}${urlp.search || ""}`)
             url = await getUrl(pickcode, req.headers["user-agent"]);
         }
         statusCode = 302;

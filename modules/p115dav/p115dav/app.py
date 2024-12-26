@@ -217,10 +217,6 @@ def make_application(
     IMAGE_URL_CACHE: TTLDict[str | tuple[str, int], str] = TTLDict(65536, ttl=60*59)
     # NOTE: 缓存直链（主要是音乐链接）
     DOWNLOAD_URL_CACHE: TTLDict[str | tuple[str, int], P115URL] = TTLDict(65536, ttl=2900)
-    # NOTE: 限制请求频率，以一组请求信息为 key，0.5 秒内相同的 key 只放行一个
-    URL_COOLDOWN: TTLDict[tuple, None] = TTLDict(1024, ttl=0.5)
-    # NOTE: 下载链接缓存，以减少接口调用频率，只需缓存很短时间
-    URL_CACHE: TTLDict[tuple, P115URL] = TTLDict(64, ttl=1)
     # NOTE: 缓存文件列表数据
     CACHE_ID_TO_LIST: LRUDict[int | tuple[str, int], dict] = LRUDict(64)
     # NOTE: 缓存文件信息数据
@@ -1288,18 +1284,7 @@ END;
         if url := DOWNLOAD_URL_CACHE.get(pickcode):
             return {"type": "file", "url": url, "headers": None}
         user_agent = (request.get_first_header(b"User-agent") or b"").decode("latin-1")
-        bytes_range = (request.get_first_header(b"Range") or b"").decode("latin-1")
-        if bytes_range and not user_agent.lower().startswith(("vlc/", "oplayer/", "lavf/")):
-            remote_addr = request.original_client_ip
-            cooldown_key = (pickcode, remote_addr, user_agent, bytes_range)
-            if cooldown_key in URL_COOLDOWN:
-                raise TooManyRequests(f"too many requests: {pickcode}")
-            URL_COOLDOWN[cooldown_key] = None
-            key = (pickcode, remote_addr, user_agent, web)
-            if not (url := URL_CACHE.get(key)):
-                URL_CACHE[key] = url = await get_file_url(pickcode, user_agent=user_agent, use_web_api=web)
-        else:
-            url = await get_file_url(pickcode, user_agent=user_agent, use_web_api=web)
+        url = await get_file_url(pickcode, user_agent=user_agent, use_web_api=web)
         if "&c=0&f=&" in url:
             DOWNLOAD_URL_CACHE[pickcode] = url
         return {"type": "file", "url": url, "headers": url.get("headers")}
@@ -1425,8 +1410,8 @@ END;
                 resp = await client.share_info(share_code, base_url=True, async_=True)
                 if resp["state"]:
                     share_info = resp["data"]
-            share_info["share_code"] = share_info
             check_response(resp)
+            share_info["share_code"] = share_code
             SHARE_CODE_MAP[share_code] = share_info
             return share_info
 
@@ -1479,18 +1464,7 @@ END;
         if url := DOWNLOAD_URL_CACHE.get((share_code, id)):
             return {"type": "file", "url": url, "headers": None}
         user_agent = (request.get_first_header(b"User-agent") or b"").decode("latin-1")
-        bytes_range = (request.get_first_header(b"Range") or b"").decode("latin-1")
-        if bytes_range and not user_agent.lower().startswith(("vlc/", "oplayer/", "lavf/")):
-            remote_addr = request.original_client_ip
-            cooldown_key = (share_code, id, remote_addr, user_agent, bytes_range)
-            if cooldown_key in URL_COOLDOWN:
-                raise TooManyRequests(f"too many requests: share_code={share_code}&id={id}")
-            URL_COOLDOWN[cooldown_key] = None
-            key = (share_code, id, remote_addr, user_agent, web)
-            if not (url := URL_CACHE.get(key)):
-                URL_CACHE[key] = url = await get_share_file_url(share_code, receive_code, id, use_web_api=web)
-        else:
-            url = await get_share_file_url(share_code, receive_code, id, use_web_api=web)
+        url = await get_share_file_url(share_code, receive_code, id, use_web_api=web)
         if "&c=0&f=&" in url:
             DOWNLOAD_URL_CACHE[(share_code, id)] = url
         return {"type": "file", "url": url, "headers": url.get("headers")}
@@ -1776,7 +1750,7 @@ END;
 
         :return: 转换后的字幕文本
         """
-        resp = await client.request(
+        content = await client.request(
             url, 
             method=request.method, 
             data=request.stream(), 
@@ -1789,7 +1763,6 @@ END;
             parse=False, 
             async_=True, 
         )
-        content = await client.request(url, parse=False, follow_redirects=True, async_=True)
         return SSAFile.from_string(content.decode("utf-8"), format_=format).to_string("ass")
 
     class DavPathBase:
