@@ -157,7 +157,7 @@ def id_to_path(
     try:
         return next(iter_id_to_path(con, path, ensure_file, parent_id))
     except StopIteration:
-        raise FileNotFoundError(ENOENT, path)
+        raise FileNotFoundError(ENOENT, path) from None
 
 
 def get_id(

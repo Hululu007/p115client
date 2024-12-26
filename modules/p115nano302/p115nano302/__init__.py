@@ -16,7 +16,6 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 from blacksheep import redirect, text, Application, Request, Router
 from blacksheep.client import ClientSession
 from blacksheep.contents import FormContent
-from blacksheep.server.compression import use_gzip_compression
 from blacksheep.server.remotes.forwarding import ForwardedHeadersMiddleware
 from cachedict import LRUDict, TTLDict
 from orjson import dumps, loads
@@ -43,7 +42,6 @@ def make_application(cookies: str, debug: bool = False) -> Application:
     RECEIVE_CODE_MAP: dict[str, str] = {}
 
     app = Application(router=Router(), show_error_details=debug)
-    use_gzip_compression(app)
     client: ClientSession
 
     if debug:
@@ -83,8 +81,7 @@ def make_application(cookies: str, debug: bool = False) -> Application:
         json = loads(text)
         if not (json and json["state"]):
             raise FileNotFoundError(text)
-        info = json["data"][0]
-        pickcode = ID_TO_PICKCODE[id] = info["pick_code"]
+        pickcode = ID_TO_PICKCODE[id] = json["data"][0]["pick_code"]
         return pickcode
 
     async def get_pickcode_for_sha1(sha1: str) -> str:
@@ -95,8 +92,7 @@ def make_application(cookies: str, debug: bool = False) -> Application:
         json = loads(text)
         if not (json and json["state"]):
             raise FileNotFoundError(text)
-        info = json["data"]
-        pickcode = SHA1_TO_PICKCODE[sha1] = info["pick_code"]
+        pickcode = SHA1_TO_PICKCODE[sha1] = json["data"]["pick_code"]
         return pickcode
 
     async def get_pickcode_for_name(name: str, refresh: bool = False) -> str:
@@ -130,9 +126,8 @@ def make_application(cookies: str, debug: bool = False) -> Application:
         name: str, 
         refresh: bool = False, 
     ) -> int:
-        if not refresh:
-            if id := SHARE_NAME_TO_ID.get((share_code, name), 0):
-                return id
+        if not refresh and (id := SHARE_NAME_TO_ID.get((share_code, name), 0)):
+            return id
         api = f"{get_webapi_url()}/share/search"
         payload = {
             "share_code": share_code, 
@@ -283,28 +278,20 @@ def make_application(cookies: str, debug: bool = False) -> Application:
                 if len(sha1) != 40 or sha1.strip(hexdigits):
                     raise ValueError(f"bad sha1: {sha1!r}")
                 pickcode = await get_pickcode_for_sha1(sha1.upper())
-            elif (query_bytes := request.url.query):
-                query = query_bytes.decode("latin-1").lstrip("?&=")
-                if (idx := query.find("&")) > -1:
-                    query = query[:idx]
-                if query:
-                    if len(query) == 17 and query.isalnum():
-                        pickcode = query
-                    elif len(query) == 40 and not query.strip(hexdigits):
-                        pickcode = await get_pickcode_for_sha1(query.upper())
-                    elif not query.strip(digits):
-                        pickcode = await get_pickcode_to_id(int(query))
+            else:
+                if (query_bytes := request.url.query):
+                    query = query_bytes.decode("latin-1").lstrip("?&=")
+                    if (idx := query.find("&")) > -1:
+                        name = query[:idx]
+                if name:
+                    if len(name) == 17 and name.isalnum():
+                        pickcode = name.lower()
+                    elif not name.strip(digits):
+                        pickcode = await get_pickcode_to_id(int(name))
+                    elif len(name) == 40 and not name.strip(hexdigits):
+                        pickcode = await get_pickcode_for_sha1(name.upper())
                     else:
-                        raise ValueError(f"bad query string: {query!r}")
-            elif name:
-                if len(name) == 17 and name.isalnum():
-                    pickcode = name
-                elif len(name) == 40 and not name.strip(hexdigits):
-                    pickcode = await get_pickcode_for_sha1(name.upper())
-                elif not name.strip(digits):
-                    pickcode = await get_pickcode_to_id(int(name))
-                else:
-                    pickcode = await get_pickcode_for_name(name, refresh=refresh)
+                        pickcode = await get_pickcode_for_name(name, refresh=refresh)
             if not pickcode:
                 raise FileNotFoundError(f"not found: {str(request.url)!r}")
             user_agent = (request.get_first_header(b"User-agent") or b"").decode("latin-1")

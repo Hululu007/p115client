@@ -765,6 +765,7 @@ if __name__ == "__main__":
         forwarded_allow_ips="*", 
     )
 
-# TODO: 实现一个单独的模块，名为 p115302
 # TODO: 增加接口，支持一次性查询多个直链（需要使用 pickcode 或 id 才行）
 # TODO: PATH_TO_PICKCODE 进行扩展，包括 id、pickcode、sha1 等信息，缓存到 sqlite 数据库中，允许指定 sqlite 数据库
+# TODO: 数据缓存到本地，使用 sqlite，这个可以专门做个模块
+# TODO: 增加后台任务，以更新数据库，主要是更新名字

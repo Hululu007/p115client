@@ -12,7 +12,6 @@ from time import time
 from urllib.parse import parse_qsl, urlsplit
 
 from blacksheep import redirect, text, Application, Request, Router
-from blacksheep.server.compression import use_gzip_compression
 from blacksheep.server.remotes.forwarding import ForwardedHeadersMiddleware
 from cachedict import LRUDict, TTLDict
 from p115client import check_response, P115Client, P115OSError
@@ -35,7 +34,6 @@ def make_application(client: P115Client, debug: bool = False) -> Application:
     RECEIVE_CODE_MAP: dict[str, str] = {}
 
     app = Application(router=Router(), show_error_details=debug)
-    use_gzip_compression(app)
 
     if debug:
         getattr(app, "logger").level = 10
@@ -101,9 +99,8 @@ def make_application(client: P115Client, debug: bool = False) -> Application:
         refresh: bool = False, 
     ) -> int:
         key = (share_code, name)
-        if not refresh:
-            if id := SHARE_NAME_TO_ID.get(key, 0):
-                return id
+        if not refresh and (id := SHARE_NAME_TO_ID.get(key, 0)):
+            return id
         payload = {
             "share_code": share_code, 
             "receive_code": receive_code, 
@@ -207,28 +204,20 @@ def make_application(client: P115Client, debug: bool = False) -> Application:
                 if len(sha1) != 40 or sha1.strip(hexdigits):
                     raise ValueError(f"bad sha1: {sha1!r}")
                 pickcode = await get_pickcode_for_sha1(sha1.upper())
-            elif (query_bytes := request.url.query):
-                query = query_bytes.decode("latin-1").lstrip("?&=")
-                if (idx := query.find("&")) > -1:
-                    query = query[:idx]
-                if query:
-                    if len(query) == 17 and query.isalnum():
-                        pickcode = query
-                    elif len(query) == 40 and not query.strip(hexdigits):
-                        pickcode = await get_pickcode_for_sha1(query.upper())
-                    elif not query.strip(digits):
-                        pickcode = await get_pickcode_to_id(int(query))
+            else:
+                if (query_bytes := request.url.query):
+                    query = query_bytes.decode("latin-1").lstrip("?&=")
+                    if (idx := query.find("&")) > -1:
+                        name = query[:idx]
+                if name:
+                    if len(name) == 17 and name.isalnum():
+                        pickcode = name.lower()
+                    elif not name.strip(digits):
+                        pickcode = await get_pickcode_to_id(int(name))
+                    elif len(name) == 40 and not name.strip(hexdigits):
+                        pickcode = await get_pickcode_for_sha1(name.upper())
                     else:
-                        raise ValueError(f"bad query string: {query!r}")
-            elif name:
-                if len(name) == 17 and name.isalnum():
-                    pickcode = name
-                elif len(name) == 40 and not name.strip(hexdigits):
-                    pickcode = await get_pickcode_for_sha1(name.upper())
-                elif not name.strip(digits):
-                    pickcode = await get_pickcode_to_id(int(name))
-                else:
-                    pickcode = await get_pickcode_for_name(name, refresh=refresh)
+                        pickcode = await get_pickcode_for_name(name, refresh=refresh)
             if not pickcode:
                 raise FileNotFoundError(f"not found: {str(request.url)!r}")
             user_agent = (request.get_first_header(b"User-agent") or b"").decode("latin-1")
