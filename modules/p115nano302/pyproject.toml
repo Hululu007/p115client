@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "p115nano302"
-version = "0.0.6.1"
+version = "0.0.7.2"
 description = "115 nano 302 backend."
 authors = ["ChenyangGao <wosiwujm@gmail.com>"]
 license = "MIT"

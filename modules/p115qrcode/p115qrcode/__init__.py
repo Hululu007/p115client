@@ -3,16 +3,11 @@
 
 "扫码获取 115 cookies"
 
-# NOTE: 目前发现扫码相关的接口，可用这些 origin
-# https://qrcodeapi.115.com
-# https://hnqrcodeapi.115.com
-# https://passportapi.115.com
-# https://hnpassportapi.115.com
-
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 0, 2)
+__version__ = (0, 0, 3)
 __license__ = "GPLv3 <https://www.gnu.org/licenses/gpl-3.0.txt>"
 __all__ = [
+    "AVAILABLE_ORIGINS", "AVAILABLE_APPS", "APP_TO_SSOENT", "SSOENT_TO_APP", 
     "QrcodeStatus", "QrcodeScanFuture", "QrcodeScanAsyncFuture", "scan_qrcode", 
     "qrcode_token", "qrcode_status", "qrcode_scan", "qrcode_scan_confirm", 
     "qrcode_scan_cancel", "qrcode_result", "qrcode_url", "qrcode_token_url", 
@@ -31,7 +26,73 @@ from itertools import cycle
 from sys import stderr
 from _thread import start_new_thread
 from types import MappingProxyType
-from typing import overload, Any, Literal, Self
+from typing import overload, Any, Final, Literal, Self
+
+
+#: 目前发现扫码相关的接口，可用这些 origin
+AVAILABLE_ORIGINS: Final[list[str]] = [
+    "http://qrcodeapi.115.com", 
+    "https://qrcodeapi.115.com", 
+    "http://hnqrcodeapi.115.com", 
+    "https://hnqrcodeapi.115.com", 
+    "http://passportapi.115.com", 
+    "https://passportapi.115.com", 
+    "http://hnpassportapi.115.com", 
+    "https://hnpassportapi.115.com", 
+]
+#: 目前可用的登录设备
+AVAILABLE_APPS: Final[tuple[str, ...]] = (
+    "web", "ios", "115ios", "android", "115android", "115ipad", "tv", "qandroid", 
+    "windows", "mac", "linux", "wechatmini", "alipaymini", "harmony", 
+)
+#: 目前已知的登录设备和对应的 ssoent
+APP_TO_SSOENT: Final[dict[str, str]] = {
+    "web": "A1", 
+    "desktop": "A1", # 临时
+    "ios": "D1", 
+    "bios": "D1", # 临时
+    "115ios": "D3", 
+    "android": "F1", 
+    "bandroid": "F1", # 临时
+    "115android": "F3", 
+    "ipad": "H1", 
+    "115ipad": "H3", 
+    "tv": "I1", 
+    "qandroid": "M1", 
+    "qios": "N1", 
+    "windows": "P1", 
+    "mac": "P2", 
+    "linux": "P3", 
+    "wechatmini": "R1", 
+    "alipaymini": "R2", 
+    "harmony": "S1", 
+}
+#: 目前已知的 ssoent 和对应的登录设备，一部分因为不知道具体的设备名，所以使用目前可用的设备名，作为临时代替
+SSOENT_TO_APP: Final[dict[str, str]] = {
+    "A1": "web", 
+    "A2": "android", # 临时代替
+    "A3": "ios",     # 临时代替
+    "A4": "115ipad", # 临时代替
+    "B1": "android", # 临时代替
+    "D1": "ios", 
+    "D2": "ios",     # 临时代替
+    "D3": "115ios",  
+    "F1": "android", 
+    "F2": "android", # 临时代替
+    "F3": "115android", 
+    "H1": "115ipad", # 临时代替
+    "H2": "115ipad", # 临时代替
+    "H3": "115ipad", 
+    "I1": "tv", 
+    "M1": "qandroid", 
+    "N1": "ios",     # 临时代替
+    "P1": "windows", 
+    "P2": "mac", 
+    "P3": "linux", 
+    "R1": "wechatmini", 
+    "R2": "alipaymini", 
+    "S1": "harmony", 
+}
 
 
 _httpx_request = None
@@ -400,6 +461,7 @@ def scan_qrcode(
 
 @overload
 def qrcode_token(
+    base_url: str = "http://qrcodeapi.115.com", 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -407,19 +469,21 @@ def qrcode_token(
     ...
 @overload
 def qrcode_token(
+    base_url: str = "http://qrcodeapi.115.com", 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
 ) -> Coroutine[Any, Any, dict]:
     ...
 def qrcode_token(
+    base_url: str = "http://qrcodeapi.115.com", 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
 ) -> dict | Coroutine[Any, Any, dict]:
     """获取二维码 token
     """
-    request_kwargs["url"] = "https://qrcodeapi.115.com/api/1.0/web/1.0/token/"
+    request_kwargs["url"] = f"{base_url}/api/1.0/web/1.0/token/"
     return request(async_=async_, **request_kwargs)
 
 
@@ -427,6 +491,7 @@ def qrcode_token(
 def qrcode_status(
     payload: Mapping, 
     /, 
+    base_url: str = "http://qrcodeapi.115.com", 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -436,6 +501,7 @@ def qrcode_status(
 def qrcode_status(
     payload: Mapping, 
     /, 
+    base_url: str = "http://qrcodeapi.115.com", 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -444,6 +510,7 @@ def qrcode_status(
 def qrcode_status(
     payload: Mapping, 
     /, 
+    base_url: str = "http://qrcodeapi.115.com", 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -462,7 +529,7 @@ def qrcode_status(
     :return: 接口响应值
     """
     request_kwargs.update(
-        url="https://qrcodeapi.115.com/get/status/", 
+        url=f"{base_url}/get/status/", 
         params=payload, 
     )
     request_kwargs.setdefault("timeout", None)
@@ -474,6 +541,7 @@ def qrcode_scan(
     uid: str, 
     cookies: str = "", 
     /, 
+    base_url: str = "http://qrcodeapi.115.com", 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -484,6 +552,7 @@ def qrcode_scan(
     uid: str, 
     cookies: str = "", 
     /, 
+    base_url: str = "http://qrcodeapi.115.com", 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -493,6 +562,7 @@ def qrcode_scan(
     uid: str, 
     cookies: str = "", 
     /, 
+    base_url: str = "http://qrcodeapi.115.com", 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -512,7 +582,7 @@ def qrcode_scan(
         else:
             request_kwargs["headers"] = {"Cookie": cookies}
     request_kwargs.update(
-        url="https://qrcodeapi.115.com/api/2.0/prompt.php", 
+        url=f"{base_url}/api/2.0/prompt.php", 
         params={"uid": uid}, 
     )
     return request(async_=async_, **request_kwargs)
@@ -523,6 +593,7 @@ def qrcode_scan_confirm(
     uid: str, 
     cookies: str = "", 
     /, 
+    base_url: str = "http://qrcodeapi.115.com", 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -533,6 +604,7 @@ def qrcode_scan_confirm(
     uid: str, 
     cookies: str = "", 
     /, 
+    base_url: str = "http://qrcodeapi.115.com", 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -542,6 +614,7 @@ def qrcode_scan_confirm(
     uid: str, 
     cookies: str = "", 
     /, 
+    base_url: str = "http://qrcodeapi.115.com", 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -561,7 +634,7 @@ def qrcode_scan_confirm(
         else:
             request_kwargs["headers"] = {"Cookie": cookies}
     request_kwargs.update(
-        url="https://qrcodeapi.115.com/api/2.0/slogin.php", 
+        url=f"{base_url}/api/2.0/slogin.php", 
         params={"key": uid, "uid": uid, "client": 0}, 
     )
     return request(async_=async_, **request_kwargs)
@@ -572,6 +645,7 @@ def qrcode_scan_cancel(
     uid: str, 
     cookies: str = "", 
     /, 
+    base_url: str = "http://qrcodeapi.115.com", 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -582,6 +656,7 @@ def qrcode_scan_cancel(
     uid: str, 
     cookies: str = "", 
     /, 
+    base_url: str = "http://qrcodeapi.115.com", 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -591,6 +666,7 @@ def qrcode_scan_cancel(
     uid: str, 
     cookies: str = "", 
     /, 
+    base_url: str = "http://qrcodeapi.115.com", 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -610,7 +686,7 @@ def qrcode_scan_cancel(
         else:
             request_kwargs["headers"] = {"Cookie": cookies}
     request_kwargs.update(
-        url="https://qrcodeapi.115.com/api/2.0/cancel.php", 
+        url=f"{base_url}/api/2.0/cancel.php", 
         params={"key": uid, "uid": uid, "client": 0}, 
     )
     return request(async_=async_, **request_kwargs)
@@ -621,6 +697,7 @@ def qrcode_result(
     uid: str, 
     app: str = "alipaymini", 
     /, 
+    base_url: str = "http://qrcodeapi.115.com", 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -631,6 +708,7 @@ def qrcode_result(
     uid: str, 
     app: str = "alipaymini", 
     /, 
+    base_url: str = "http://qrcodeapi.115.com", 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -640,6 +718,7 @@ def qrcode_result(
     uid: str, 
     app: str = "alipaymini", 
     /, 
+    base_url: str = "http://qrcodeapi.115.com", 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -654,27 +733,27 @@ def qrcode_result(
     :return: 接口响应值
     """
     request_kwargs.update(
-        url=f"https://qrcodeapi.115.com/app/1.0/{app}/1.0/login/qrcode/", 
+        url=f"{base_url}/app/1.0/{app}/1.0/login/qrcode/", 
         method="POST", 
         data={"account": uid}, 
     )
     return request(async_=async_, **request_kwargs)
 
 
-def qrcode_url(uid: str, /) -> str:
+def qrcode_url(uid: str, /, base_url: str = "http://qrcodeapi.115.com") -> str:
     """获取二维码图片的下载链接
 
     :return: 下载链接 
     """
-    return "https://qrcodeapi.115.com/api/1.0/web/1.0/qrcode?uid=" + uid
+    return f"{base_url}/api/1.0/web/1.0/qrcode?uid=" + uid
 
 
-def qrcode_token_url(uid: str, /) -> str:
+def qrcode_token_url(uid: str, /, base_url: str = "http://115.com") -> str:
     """获取二维码图片的扫码链接
 
     :return: 扫码链接 
     """
-    return "http://115.com/scan/dg-" + uid
+    return f"{base_url}/scan/dg-{uid}"
 
 
 def qrcode_print(uid: str, /):

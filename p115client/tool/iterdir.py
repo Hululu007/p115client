@@ -318,6 +318,7 @@ class P115ID(P115DictAttrLike, int):
 # TODO: fs_dir_getid 接口经常会用到，所以需要进行分流
 # TODO: 如果以 "/" 结尾，则 ensure_file 为 None 时，视为 False
 # TODO: 再增加一个函数，get_id_to_posixpath，其它与路径有关的函数，也都增加此 posix 版本
+# TODO: 必要时也可用 search 方法来获取名字，parent_id 等于被搜索到目录 id
 @overload
 def get_id_to_path(
     client: str | P115Client, 
@@ -641,7 +642,7 @@ def filter_na_ids(
             ids_it = iter(ids)
             it = takewhile(bool, (tuple(islice(ids_it, batch_size)) for _ in count()))
         for batch in it:
-            resp = yield file_skim(batch, base_url=True, async_=async_, **request_kwargs)
+            resp = yield file_skim(batch, method="POST", async_=async_, **request_kwargs)
             if resp.get("error") == "文件不存在":
                 yield YieldFrom(map(int, batch), identity=True)
             else:

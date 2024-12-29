@@ -4669,6 +4669,9 @@ class P115Client:
 
         GET https://webapi.115.com/files/file
 
+        .. note::
+            如果需要查询到 id 特别多，请指定 `method="POST"`
+
         :payload:
             - file_id: int | str 💡 文件或目录的 id，不能为 0，多个用逗号 "," 隔开
         """
@@ -4891,7 +4894,7 @@ class P115Client:
             - show_dir: 0 | 1 = 1
             - snap: 0 | 1 = <default>
             - source: str = <default>
-            - sys_dir: int | str = <default>
+            - sys_dir: int | str = <default> 💡 似乎和接收列表有关，值为 0 时会罗列 "/我的接收" 目录
             - star: 0 | 1 = <default> 💡 是否星标文件
             - stdir: 0 | 1 = <default>
             - suffix: str = <default> 💡 后缀名（优先级高于 `type`）

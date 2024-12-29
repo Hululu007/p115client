@@ -160,7 +160,6 @@ def batch_get_url(
         if isinstance(id_or_pickcode, int):
             resp = yield client.fs_file_skim(
                 id_or_pickcode, 
-                base_url=True, 
                 async_=async_, 
                 **request_kwargs, 
             )
@@ -182,7 +181,7 @@ def batch_get_url(
             if ids:
                 resp = yield client.fs_file_skim(
                     ids, 
-                    base_url=True, 
+                    method="POST", 
                     async_=async_, 
                     **request_kwargs, 
                 )

@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "p115servedb"
-version = "0.0.5.4.1"
+version = "0.0.5.4.2"
 description = "115 网盘基于 p115updatedb 导出数据库的挂载服务"
 authors = ["ChenyangGao <wosiwujm@gmail.com>"]
 license = "MIT"

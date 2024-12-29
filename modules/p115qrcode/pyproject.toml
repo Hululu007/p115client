@@ -1,13 +1,13 @@
 [tool.poetry]
 name = "p115qrcode"
-version = "0.0.2"
-description = "115 网盘二维码扫码登录."
+version = "0.0.3"
+description = "115 网盘二维码扫码登录"
 authors = ["ChenyangGao <wosiwujm@gmail.com>"]
 license = "MIT"
 readme = "readme.md"
 homepage = "https://github.com/ChenyangGao/p115client/tree/main/modules/p115qrcode"
 repository = "https://github.com/ChenyangGao/p115client/tree/main/modules/p115qrcode"
-keywords = ["python-115", "qrcode"]
+keywords = ["python-115", "115", "qrcode"]
 classifiers = [
     "License :: OSI Approved :: MIT License",
     "Development Status :: 5 - Production/Stable",

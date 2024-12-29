@@ -11,14 +11,41 @@ __doc__ = """\
     │                                                                              │
     │                      \x1b[32mlicense     \x1b[4;34mhttps://www.gnu.org/licenses/gpl-3.0.txt\x1b[0m    │
     │                                                                              │
-    │                      \x1b[32mversion     \x1b[1;36m0.0.6\x1b[0m                                       │
+    │                      \x1b[32mversion     \x1b[1;36m0.0.7\x1b[0m                                       │
     │                                                                              │
     ╰──────────────────────────────────────────────────────────────────────────────╯
 
 > 网盘文件支持用 \x1b[3;36mpickcode\x1b[0m、\x1b[3;36mid\x1b[0m、\x1b[3;36msha1\x1b[0m 或 \x1b[3;36mname\x1b[0m 查询
 > 分享文件支持用 \x1b[3;36mid\x1b[0m 或 \x1b[3;36mname\x1b[0m 查询
+> 支持参数 \x1b[3;36muser_id\x1b[0m，以指定用户 id，并在实际执行时使用此用户的 cookies 和网盘数据
+> 支持参数 \x1b[3;36mrefresh\x1b[0m，用于搜索名字时忽略缓存（强制刷新）
+> 支持参数 \x1b[3;36mapp\x1b[0m，用于指定从此设备的接口获取下载链接
 
 ⏰ 此版本不依赖于 \x1b[31mp115client\x1b[0m 和 \x1b[31mpycryptodome\x1b[0m，至少要求 \x1b[31mpython \x1b[1m3.12\x1b[0m
+
+🌰 携带 sign
+
+通过命令行参数 -t/--token 指定令牌后，你就必须在请求时携带签名，即 \x1b[3;36msign\x1b[0m 参数
+计算方式为
+
+    \x1b[3;35mhashlib.sha1(bytes(f"302@115-{token}-{t}-{value}", "utf-8")).hexdigest()\x1b[0m
+
+其中
+- \x1b[3;36mtoken\x1b[0m 就是命令行所传入的令牌
+- \x1b[3;36mt\x1b[0m 为过期时间点（默认值为 0，即永不过期）
+- \x1b[3;36mvalue\x1b[0m 就是值，像这样的链接，优先级顺序为 \x1b[3;36mpickcode\x1b[0m > \x1b[3;36mid\x1b[0m > \x1b[3;36msha1\x1b[0m > \x1b[3;36mname\x1b[0m > \x1b[3;36mname2\x1b[0m
+
+    \x1b[4;34mhttp://localhost:8000/{name2}?id={id}&name={name}&sha1={sha1}&pickcode={pickcode}\x1b[0m
+
+🌰 更新 cookies
+
+通过命令行参数 -p/--password 指定密码后，你就可以一次性更新很多个 cookies，使用接口（请求时需携带和命令行传入的相同的密码）
+
+    \x1b[1mPOST\x1b[0m \x1b[4;34mhttp://localhost:8000/<cookies?password={password}\x1b[0m
+
+请求体为 json 数据
+
+    \x1b[3;35m{"cookies": "一行写一个 cookies"}\x1b[0m
 
 🌰 查询示例：
 
@@ -58,13 +85,19 @@ __doc__ = """\
         \x1b[4;34mhttp://localhost:8000/Cosmos.S01E01.1080p.AMZN.WEB-DL.DD+5.1.H.264-iKA.mkv?share_code=sw68md23w8m\x1b[0m
         \x1b[4;34mhttp://localhost:8000?name=Cosmos.S01E01.1080p.AMZN.WEB-DL.DD%2B5.1.H.264-iKA.mkv&share_code=sw68md23w8m&receive_code=q353\x1b[0m
         \x1b[4;34mhttp://localhost:8000?name=Cosmos.S01E01.1080p.AMZN.WEB-DL.DD%2B5.1.H.264-iKA.mkv&share_code=sw68md23w8m\x1b[0m
+
+再推荐一个命令行使用，用于执行 HTTP 请求的工具，类似 \x1b[1;3mwget\x1b[0m
+
+    \x1b[4m\x1b[34mhttps://pypi.org/project/httpie/\x1b[0m
 """
 
 from argparse import ArgumentParser, Namespace, RawTextHelpFormatter
 
 parser = ArgumentParser(description=__doc__, formatter_class=RawTextHelpFormatter)
-parser.add_argument("-c", "--cookies", default="", help="cookies 字符串，优先级高于 -cp/--cookies-path")
-parser.add_argument("-cp", "--cookies-path", default="", help="cookies 文件保存路径，默认为当前工作目录下的 115-cookies.txt")
+parser.add_argument("-c", "--cookies", default="", help="cookies 字符串，优先级高于 -cp/--cookies-path，如果有多个则一行写一个")
+parser.add_argument("-p", "--password", default="", help="执行 POST 请求所需密码，仅当提供时，才会启用一组 POST 接口")
+parser.add_argument("-t", "--token", default="", help="签名所用的 token，如果提供，则请求必须携带签名，即 sign 查询参数")
+parser.add_argument("-cp", "--cookies-path", default="", help="cookies 文件保存路径，默认为当前工作目录下的 115-cookies.txt，如果有多个则一行写一个")
 parser.add_argument("-H", "--host", default="0.0.0.0", help="ip 或 hostname，默认值：'0.0.0.0'")
 parser.add_argument("-P", "--port", default=8000, type=int, help="端口号，默认值：8000，如果为 0 则自动确定")
 parser.add_argument("-d", "--debug", action="store_true", help="启用调试，会输出更详细信息")
@@ -142,7 +175,12 @@ def main(argv: None | list[str] | Namespace = None, /):
     from uvicorn import run
 
     print(__doc__)
-    app = make_application(cookies, debug=args.debug)
+    app = make_application(
+        cookies, 
+        debug=args.debug, 
+        password=args.password, 
+        token=args.token, 
+    )
     run(app, **run_config)
 
 if __name__ == "__main__":
