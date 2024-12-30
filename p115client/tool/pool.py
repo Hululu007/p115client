@@ -230,6 +230,7 @@ def call_wrap_with_cookies_pool(
     get_cookies: Callable, 
     /, 
     func: Callable = P115Client("").fs_files, 
+    check: bool | Callable = True, 
 ) -> Callable:
     """包装函数，使得用 cookies 池执行请求
 
@@ -253,7 +254,11 @@ def call_wrap_with_cookies_pool(
                         resp = yield func(*args, headers=headers, async_=True, **kwds)
                     else:
                         resp = func(*args, headers=headers, **kwds)
-                    check_response(resp)
+                    if check:
+                        if check is True:
+                            check_response(resp)
+                        else:
+                            check(resp)
                     revert()
                     return resp
                 except BaseException as e:

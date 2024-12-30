@@ -155,6 +155,7 @@ def get_path_to_cid(
     escape: None | Callable[[str], str] = escape, 
     refresh: bool = False, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    app: str = "web", 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -168,6 +169,7 @@ def get_path_to_cid(
     escape: None | Callable[[str], str] = escape, 
     refresh: bool = False, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    app: str = "web", 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -180,6 +182,7 @@ def get_path_to_cid(
     escape: None | Callable[[str], str] = escape, 
     refresh: bool = False, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    app: str = "web", 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -192,6 +195,7 @@ def get_path_to_cid(
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param refresh: 是否刷新。如果为 True，则会执行网络请求以查询；如果为 False，则直接从 `id_to_dirnode` 中获取
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param app: 使用某个 app （设备）的接口
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -205,7 +209,10 @@ def get_path_to_cid(
         nonlocal cid
         parts: list[str] = []
         if cid and (refresh or cid not in id_to_dirnode):
-            resp = yield client.fs_files_app({"cid": cid, "hide_data": 1}, async_=async_, **request_kwargs)
+            if app in ("", "web", "desktop", "harmony"):
+                resp = yield client.fs_files({"cid": cid, "limit": 1}, async_=async_, **request_kwargs)
+            else:
+                resp = yield client.fs_files_app({"cid": cid, "hide_data": 1}, async_=async_, **request_kwargs)
             check_response(resp)
             if cid and int(resp["path"][-1]["cid"]) != cid:
                 raise FileNotFoundError(errno.ENOENT, cid)
@@ -236,6 +243,7 @@ def get_ancestors_to_cid(
     cid: int = 0, 
     refresh: bool = False, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    app: str = "web", 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -247,6 +255,7 @@ def get_ancestors_to_cid(
     cid: int = 0, 
     refresh: bool = False, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    app: str = "web", 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -257,6 +266,7 @@ def get_ancestors_to_cid(
     cid: int = 0, 
     refresh: bool = False, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    app: str = "web", 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -267,6 +277,7 @@ def get_ancestors_to_cid(
     :param cid: 目录的 id
     :param refresh: 是否刷新。如果为 True，则会执行网络请求以查询；如果为 False，则直接从 `id_to_dirnode` 中获取
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param app: 使用某个 app （设备）的接口
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -288,7 +299,10 @@ def get_ancestors_to_cid(
         nonlocal cid
         parts: list[dict] = []
         if cid and (refresh or cid not in id_to_dirnode):
-            resp = yield client.fs_files_app({"cid": cid, "hide_data": 1}, async_=async_, **request_kwargs)
+            if app in ("", "web", "desktop", "harmony"):
+                resp = yield client.fs_files({"cid": cid, "limit": 1}, async_=async_, **request_kwargs)
+            else:
+                resp = yield client.fs_files_app({"cid": cid, "hide_data": 1}, async_=async_, **request_kwargs)
             check_response(resp)
             if cid and int(resp["path"][-1]["cid"]) != cid:
                 raise FileNotFoundError(errno.ENOENT, cid)
@@ -467,7 +481,7 @@ def get_id_to_path(
                     raise error
                 cid = int(cid)
                 if not refresh and cid not in id_to_dirnode:
-                    yield get_path_to_cid(client, cid, id_to_dirnode=id_to_dirnode, async_=async_, **request_kwargs)
+                    yield get_path_to_cid(client, cid, id_to_dirnode=id_to_dirnode, app=app, async_=async_, **request_kwargs)
                 break
         if len(patht) == i:
             return cid

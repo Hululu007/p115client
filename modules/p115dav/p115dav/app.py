@@ -235,7 +235,9 @@ def make_application(
     put_task = QUEUE.put_nowait
     get_task = QUEUE.get
     fs_files: Callable
+    get_cookies: Callable
     client: P115Client
+    dummy_client: P115Client = P115Client("")
     con: Connection
     loop: AbstractEventLoop
 
@@ -938,7 +940,7 @@ VALUES (:share_code, :id, :parent_id, :sha1, :name, :path, :is_dir)"""
 
     @app.lifespan
     async def register_client(app: Application):
-        nonlocal client, fs_files
+        nonlocal client, fs_files, get_cookies
         client = P115Client(
             cookies_path, 
             app="alipaymini", 
@@ -1129,12 +1131,12 @@ END;
                 return ret
             id_to_dirnode: dict[int, tuple[str, int]] = {}
             try:
-                return update_cache_for_p115id(await get_id_to_path(
-                    client, 
+                call = call_wrap_with_cookies_pool(get_cookies, get_id_to_path, check=False)
+                return update_cache_for_p115id(await call(
+                    dummy_client, 
                     path, 
                     ensure_file=ensure_file, 
                     id_to_dirnode=id_to_dirnode, 
-                    app="android", 
                     async_=True, 
                 ))
             finally:

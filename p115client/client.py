@@ -449,10 +449,12 @@ def check_response(resp: dict | Awaitable[dict], /) -> dict | Coroutine[Any, Any
         raise P115OSError(errno.EIO, resp)
     if isinstance(resp, dict):
         return check(resp)
-    else:
+    elif isawaitable(resp):
         async def check_await() -> dict:
             return check(await resp)
         return check_await()
+    else:
+        raise P115OSError(errno.EIO, resp)
 
 
 def normalize_attr_web(
