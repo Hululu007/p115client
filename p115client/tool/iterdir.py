@@ -31,7 +31,7 @@ from iter_collect import grouped_mapping, grouped_mapping_async, iter_keyed_dups
 from p115client import check_response, normalize_attr, DataError, P115Client, P115OSError, P115Warning
 from p115client.const import CLASS_TO_TYPE, SUFFIX_TO_TYPE
 from p115client.type import P115DictAttrLike
-from posixpatht import escape, splitext, splits
+from posixpatht import escape, path_is_dir_form, splitext, splits
 
 from .edit import update_desc, update_star
 
@@ -58,7 +58,7 @@ class OverviewAttr(NamedTuple):
     mtime: int
 
 
-# TODO: 要不要缓存到本地临时文件
+# TODO: 支持用 sqlite 作为缓存，实现一个 SqliteDefaultDict
 #: 用于缓存每个用户（根据用户 id 区别）的每个目录 id 到所对应的 (名称, 父id) 的元组的字典的字典
 ID_TO_DIRNODE_CACHE: Final[defaultdict[int, dict[int, tuple[str, int] | DirNode]]] = defaultdict(dict)
 
@@ -314,16 +314,12 @@ class P115ID(P115DictAttrLike, int):
         return int.__repr__(self)
 
 
-# TODO: 首先用 id_to_dirnode 获取其中最长能匹配的路径，如果 refresh 为 True，则还要用 fs_files_app 比较一下每一级的 id 和 name
-# TODO: fs_dir_getid 接口经常会用到，所以需要进行分流
-# TODO: 如果以 "/" 结尾，则 ensure_file 为 None 时，视为 False
-# TODO: 再增加一个函数，get_id_to_posixpath，其它与路径有关的函数，也都增加此 posix 版本
-# TODO: 必要时也可用 search 方法来获取名字，parent_id 等于被搜索到目录 id
 @overload
 def get_id_to_path(
     client: str | P115Client, 
-    path: str, 
+    path: str | Sequence[str], 
     ensure_file: None | bool = None, 
+    is_posixpath: bool = False, 
     refresh: bool = False, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
@@ -335,8 +331,9 @@ def get_id_to_path(
 @overload
 def get_id_to_path(
     client: str | P115Client, 
-    path: str, 
+    path: str | Sequence[str], 
     ensure_file: None | bool = None, 
+    is_posixpath: bool = False, 
     refresh: bool = False, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
@@ -347,8 +344,9 @@ def get_id_to_path(
     ...
 def get_id_to_path(
     client: str | P115Client, 
-    path: str, 
+    path: str | Sequence[str], 
     ensure_file: None | bool = None, 
+    is_posixpath: bool = False, 
     refresh: bool = False, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
@@ -366,6 +364,7 @@ def get_id_to_path(
         - False: 必须是目录
         - None: 可以是目录或文件
 
+    :param is_posixpath: 使用 posixpath，会把 "/" 转换为 "|"，因此解析的时候，会对 "|" 进行特别处理
     :param refresh: 是否刷新。如果为 True，则会执行网络请求以查询；如果为 False，则直接从 `id_to_dirnode` 中获取
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
     :param app: 使用某个 app （设备）的接口
@@ -381,67 +380,97 @@ def get_id_to_path(
     error = FileNotFoundError(errno.ENOENT, f"no such path: {path!r}")
     def gen_step():
         nonlocal client, ensure_file
-        if path in (".", "..", "/"):
+        if not isinstance(path, str):
+            patht = ["", *filter(None, path)]
+            if len(patht) == 1:
+                return 0
+            if is_posixpath:
+                for i in range(1, len(patht)):
+                    patht[i] = patht[i].replace("/", "|")
+        elif path in (".", "..", "/"):
             if ensure_file:
                 raise error
             return 0
-        if path.startswith("根目录 > "):
+        elif path.startswith("根目录 > "):
             patht = path.split(" > ")
             patht[0] = ""
+            if is_posixpath:
+                for i in range(1, len(patht)):
+                    patht[i] = patht[i].replace("/", "|")
+        elif is_posixpath:
+            if ensure_file is None and path.endswith("/"):
+                ensure_file = False
+            patht = ["", *filter(None, path.split("/"))]
         else:
+            if ensure_file is None and path_is_dir_form(path):
+                ensure_file = False
             patht, _ = splits("/" + path)
         if len(patht) == 1:
             if ensure_file:
                 raise error
             return 0
-        i = 1
-        if len(patht) > 1:
-            for i in range(1, len(patht) - bool(ensure_file)):
-                name = patht[i]
-                if "/" in name:
-                    break
-            else:
-                i += 1
-        if i == 1:
-            cid = 0
-            dirname = "/"
+        stop = len(patht) - bool(ensure_file)
+        obj = "|" if is_posixpath else "/"
+        for i in range(stop):
+            if obj in patht[i]:
+                break
         else:
-            j = 0
-            if not refresh and id_to_dirnode:
-                pid = 0
-                for j in range(1, len(patht) - bool(ensure_file)):
-                    t = (patht[j], pid)
-                    for id, node in id_to_dirnode.items():
-                        if node == t:
-                            pid = id
-                    else:
-                        break
+            i += 1
+        j = 1
+        pid = 0
+        if stop > 1 and not refresh and id_to_dirnode:
+            if stop == 2:
+                if is_posixpath:
+                    needle = (patht[1].replace("/", "|"), pid)
                 else:
-                    j += 1
-            if j > i:
-                i = j
-                cid = pid
+                    needle = (patht[1], pid)
+                for k, t in id_to_dirnode.items():
+                    if is_posixpath:
+                        t = (t[0].replace("/", "|"), t[1])
+                    if t == needle:
+                        pid = k
+                        j = 2
             else:
-                if ensure_file and len(patht) == i:
-                    i -= 1
-                if app == "web":
-                    fs_dir_getid: Callable = client.fs_dir_getid
+                if is_posixpath:
+                    table = {(n.replace("/", "|"), pid): k for k, (n, pid) in id_to_dirnode.items()}
                 else:
-                    fs_dir_getid = partial(client.fs_dir_getid_app, app=app)
-                cid = 0
-                while i > 1:
-                    dirname = "/".join(patht[:i])
-                    resp = yield fs_dir_getid(dirname, async_=async_, **request_kwargs)
-                    if not (resp["state"] and (cid := resp["id"])):
-                        if len(patht) == i and ensure_file is None:
-                            ensure_file = True
-                            i -= 1
-                            continue
-                        raise error
-                    cid = int(cid)
-                    if len(patht) == i:
-                        return cid
-                    break
+                    table = {cast(tuple[str, int], tuple(t)): k for k, t in id_to_dirnode.items()}
+                try:
+                    for j in range(1, stop):
+                        if is_posixpath:
+                            needle = (patht[j].replace("/", "|"), pid)
+                        else:
+                            needle = (patht[j], pid)
+                        pid = table[needle]
+                    j += 1
+                except KeyError:
+                    pass
+        if j >= i:
+            i = j
+            cid = pid
+        else:
+            if ensure_file and len(patht) == i:
+                i -= 1
+            if app in ("", "web", "desktop", "harmony"):
+                fs_dir_getid: Callable = client.fs_dir_getid
+            else:
+                fs_dir_getid = partial(client.fs_dir_getid_app, app=app)
+            cid = 0
+            while i > 1:
+                dirname = "/".join(patht[:i])
+                resp = yield fs_dir_getid(dirname, async_=async_, **request_kwargs)
+                if not (resp["state"] and (cid := resp["id"])):
+                    if len(patht) == i and ensure_file is None:
+                        ensure_file = True
+                        i -= 1
+                        continue
+                    raise error
+                cid = int(cid)
+                if not refresh and cid not in id_to_dirnode:
+                    yield get_path_to_cid(client, cid, id_to_dirnode=id_to_dirnode, async_=async_, **request_kwargs)
+                break
+        if len(patht) == i:
+            return cid
         for name in patht[i:-1]:
             if async_:
                 async def request():
@@ -449,15 +478,15 @@ def get_id_to_path(
                     async for info in iterdir_raw(
                         client, 
                         cid, 
-                        only_dirs=True, 
+                        ensure_file=False, 
                         app=app, 
                         id_to_dirnode=id_to_dirnode, 
                         async_=True, 
                         **request_kwargs, 
                     ):
                         attr = _overview_attr(info)
-                        if attr.name == name:
-                            cid = attr.parent_id
+                        if (attr.name.replace("/", "|") if is_posixpath else attr.name) == name:
+                            cid = attr.id
                             break
                     else:
                         raise error
@@ -466,14 +495,14 @@ def get_id_to_path(
                 for info in iterdir_raw(
                     client, 
                     cid, 
-                    only_dirs=True, 
+                    ensure_file=False, 
                     app=app, 
                     id_to_dirnode=id_to_dirnode, 
                     **request_kwargs, 
                 ):
                     attr = _overview_attr(info)
-                    if attr.name == name:
-                        cid = attr.parent_id
+                    if (attr.name.replace("/", "|") if is_posixpath else attr.name) == name:
+                        cid = attr.id
                         break
                 else:
                     raise error
@@ -489,7 +518,7 @@ def get_id_to_path(
                     **request_kwargs, 
                 ):
                     attr = _overview_attr(info)
-                    if attr.name == name:
+                    if (attr.name.replace("/", "|") if is_posixpath else attr.name) == name:
                         if ensure_file:
                             if not attr.is_dir:
                                 return P115ID(attr.id, info, about="path")
@@ -507,7 +536,7 @@ def get_id_to_path(
                 **request_kwargs, 
             ):
                 attr = _overview_attr(info)
-                if attr.name == name:
+                if (attr.name.replace("/", "|") if is_posixpath else attr.name) == name:
                     if ensure_file:
                         if not attr.is_dir:
                             return P115ID(attr.id, info, about="path")
@@ -654,11 +683,6 @@ def filter_na_ids(
     return run_gen_step_iter(gen_step, async_=async_)
 
 
-# TODO: 修改 only_dirs 为 ensure_file: None | bool = None
-# TODO: ensure_file 为 True => show_dir=0 （可能需要 cur=1）
-# TODO: 如果 ensure_file 为 False，不过知道总共多少文件夹，则需要进行一些优化，以提升速度（当 app 为 web 时）
-# TODO: 如果 ensure_file 为 False，由于并不能只获取文件夹，因此需要进行判读，遇到文件则结束
-# TODO: 根据参数进行判断，如果必然结果为空，则不执行实际的请求
 @overload
 def _iter_fs_files(
     client: str | P115Client, 
@@ -666,7 +690,7 @@ def _iter_fs_files(
     first_page_size: None | int = None, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
-    only_dirs: bool = False, 
+    ensure_file: None | bool = None, 
     app: str = "web", 
     *, 
     async_: Literal[False] = False, 
@@ -680,7 +704,7 @@ def _iter_fs_files(
     first_page_size: None | int = None, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
-    only_dirs: bool = False, 
+    ensure_file: None | bool = None, 
     app: str = "web", 
     *, 
     async_: Literal[True], 
@@ -693,7 +717,7 @@ def _iter_fs_files(
     first_page_size: None | int = None, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
-    only_dirs: bool = False, 
+    ensure_file: None | bool = None, 
     app: str = "web", 
     *, 
     async_: Literal[False, True] = False, 
@@ -706,7 +730,12 @@ def _iter_fs_files(
     :param first_page_size: 第一次拉取时的分页大小，如果为 None 或 <= 0，则自动确定
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
-    :param only_dirs: 仅罗列目录
+    :param ensure_file: 是否确保为文件
+
+        - True: 必须是文件
+        - False: 必须是目录
+        - None: 可以是目录或文件
+
     :param app: 使用某个 app （设备）的接口
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
@@ -725,17 +754,20 @@ def _iter_fs_files(
         page_size = payload["limit"] = 10_000
     if first_page_size is not None and first_page_size > 0:
         payload["limit"] = first_page_size
-    if only_dirs:
+    key_of_count = "count"
+    if ensure_file:
+        payload["show_dir"] = 0
+        if not (payload.get("suffix") or payload.get("type")):
+            payload.setdefault("cur", 1)
+    elif ensure_file is False:
         payload["fc_mix"] = 0
         payload["show_dir"] = 1
         payload["count_folders"] = 1
         key_of_count = "folder_count"
-    else:
-        key_of_count = "count"
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
     ans: list[tuple[int, str]] = []
-    if app in ("", "web", "desktop"):
+    if app in ("", "web", "desktop", "harmony"):
         fs_files: Callable = client.fs_files
     else:
         fs_files = partial(client.fs_files_app, app=app)
@@ -785,13 +817,15 @@ def _iter_fs_files(
                 attr = _overview_attr(info)
                 if attr.is_dir:
                     id_to_dirnode[attr.id] = DirNode(attr.name, attr.parent_id)
-                elif only_dirs:
+                elif ensure_file is False:
                     return
                 yield Yield(info, identity=True)
             offset += len(resp["data"])
             if count and offset >= count or offset >= resp["count"]:
                 return
             payload["offset"] = offset
+            if count and (diff := count - offset) < page_size:
+                payload["limit"] = diff
             while True:
                 try:
                     resp = yield fs_files(payload, async_=async_, **request_kwargs)
@@ -885,7 +919,7 @@ def iter_stared_dirs_raw(
         first_page_size=first_page_size, 
         id_to_dirnode=id_to_dirnode, 
         raise_for_changed_count=raise_for_changed_count, 
-        only_dirs=True, 
+        ensure_file=False, 
         app=app, 
         async_=async_, 
         **request_kwargs, 
@@ -1225,7 +1259,7 @@ def iterdir_raw(
     fc_mix: Literal[0, 1] = 1, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
-    only_dirs: bool = False, 
+    ensure_file: None | bool = None, 
     app: str = "web", 
     *, 
     async_: Literal[False] = False, 
@@ -1244,7 +1278,7 @@ def iterdir_raw(
     fc_mix: Literal[0, 1] = 1, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
-    only_dirs: bool = False, 
+    ensure_file: None | bool = None, 
     app: str = "web", 
     *, 
     async_: Literal[True], 
@@ -1262,7 +1296,7 @@ def iterdir_raw(
     fc_mix: Literal[0, 1] = 1, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
-    only_dirs: bool = False, 
+    ensure_file: None | bool = None, 
     app: str = "web", 
     *, 
     async_: Literal[False, True] = False, 
@@ -1288,7 +1322,12 @@ def iterdir_raw(
     :param fc_mix: 文件夹置顶。0: 文件夹在文件之前，1: 文件和文件夹混合并按指定排序
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
-    :param only_dirs: 仅罗列目录
+    :param ensure_file: 是否确保为文件
+
+        - True: 必须是文件
+        - False: 必须是目录
+        - None: 可以是目录或文件
+
     :param app: 使用某个 app （设备）的接口
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
@@ -1306,9 +1345,9 @@ def iterdir_raw(
         first_page_size=first_page_size, 
         id_to_dirnode=id_to_dirnode, 
         raise_for_changed_count=raise_for_changed_count, 
-        only_dirs=only_dirs, 
+        ensure_file=ensure_file, 
         app=app, 
-        async_=async_, 
+        async_=async_, # type: ignore
         **request_kwargs, 
     )
 
@@ -1329,7 +1368,7 @@ def iterdir(
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
-    only_dirs: bool = False, 
+    ensure_file: None | bool = None, 
     app: str = "web", 
     *, 
     async_: Literal[False] = False, 
@@ -1352,7 +1391,7 @@ def iterdir(
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
-    only_dirs: bool = False, 
+    ensure_file: None | bool = None, 
     app: str = "web", 
     *, 
     async_: Literal[True], 
@@ -1374,7 +1413,7 @@ def iterdir(
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
-    only_dirs: bool = False, 
+    ensure_file: None | bool = None, 
     app: str = "web", 
     *, 
     async_: Literal[False, True] = False, 
@@ -1404,7 +1443,12 @@ def iterdir(
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
-    :param only_dirs: 仅罗列目录
+    :param ensure_file: 是否确保为文件
+
+        - True: 必须是文件
+        - False: 必须是目录
+        - None: 可以是目录或文件
+
     :param app: 使用某个 app （设备）的接口
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
@@ -1428,7 +1472,7 @@ def iterdir(
             fc_mix=fc_mix, 
             id_to_dirnode=id_to_dirnode, 
             raise_for_changed_count=raise_for_changed_count, 
-            only_dirs=only_dirs, 
+            ensure_file=ensure_file, 
             app=app, 
             async_=async_, # type: ignore
             **request_kwargs, 
@@ -2067,7 +2111,7 @@ def traverse_files(
         auto_splitting_threshold = 16
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
-    if app in ("", "web", "desktop"):
+    if app in ("", "web", "desktop", "harmony"):
         fs_files: Callable = client.fs_files
     else:
         fs_files = partial(client.fs_files_app, app=app)
@@ -2750,7 +2794,7 @@ def iter_dangling_files(
         page_size = 10_000
     elif page_size < 16:
         page_size = 16
-    if app in ("", "web", "desktop"):
+    if app in ("", "web", "desktop", "harmony"):
         fs_files: Callable = client.fs_files
     else:
         fs_files = partial(client.fs_files_app, app=app)

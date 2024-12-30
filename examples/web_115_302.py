@@ -2,7 +2,7 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 0, 4)
+__version__ = (0, 0, 5)
 __all__ = ["make_application"]
 __license__ = "GPLv3 <https://www.gnu.org/licenses/gpl-3.0.txt>"
 __requirements__ = ["blacksheep", "blacksheep_client_request", "cachetools", "p115client", "posixpatht", "uvicorn"]
@@ -90,7 +90,7 @@ try:
     from cachetools import LRUCache, TTLCache
     from openapidocs.v3 import Info # type: ignore
     from p115client import P115Client, AuthenticationError, SUFFIX_TO_TYPE
-    from p115client.tool.iterdir import iter_files, _iter_fs_files
+    from p115client.tool.iterdir import get_id_to_path, iter_files, P115ID
     from posixpatht import dirname, escape, joins, splits
 except ImportError:
     from sys import executable
@@ -109,7 +109,7 @@ except ImportError:
     from cachetools import LRUCache, TTLCache
     from openapidocs.v3 import Info # type: ignore
     from p115client import P115Client, AuthenticationError, SUFFIX_TO_TYPE
-    from p115client.tool.iterdir import iter_files, _iter_fs_files
+    from p115client.tool.iterdir import get_id_to_path, iter_files, P115ID
     from posixpatht import dirname, escape, joins, splits
 
 import errno
@@ -337,25 +337,6 @@ def make_application(
                 qrunning_task = None
                 QUEUE.task_done()
 
-    def iterdir(
-        client: P115Client, 
-        cid: str, 
-        /, 
-        only_dirs_or_files: None | bool = None, 
-        request: None | Callable = None, 
-    ) -> AsyncIterator[dict]:
-        """获取目录中的文件信息迭代器
-        """
-        payload = {"cid": cid, "cur": 1, "fc_mix": 1, "show_dir": 1, "limit": 10_000}
-        only_dirs = only_dirs_or_files
-        if only_dirs is None:
-            only_dirs = False
-        elif only_dirs:
-            payload["fc_mix"] = 0
-        else:
-            payload["show_dir"] = 0
-        return _iter_fs_files(client, payload, only_dirs=only_dirs, app="android", async_=True, request=request)
-
     async def get_attr_by_id(
         client: P115Client, 
         id: str, 
@@ -429,41 +410,21 @@ def make_application(
         if (
             cache and 
             PATH_TO_PICKCODE is not None and
-            (pickcode := PATH_TO_PICKCODE.get(path))
+            (pickcode := PATH_TO_PICKCODE.get(path, ""))
         ):
             return pickcode
-        i = 1
-        if len(patht) > 2:
-            for i in range(1, len(patht) - 1):
-                name = patht[i]
-                if "/" in name:
-                    break
-            else:
-                i += 1
-        if i == 1:
-            cid = "0"
-            dirname = "/"
+        id_to_dirnode: dict = {}
+        try:
+            fid = await get_id_to_path(client, patht, ensure_file=True, refresh=True, id_to_dirnode=id_to_dirnode, async_=True)
+        except FileNotFoundError:
+            raise error from None
+        if isinstance(fid, P115ID):
+            pickcode = fid["pc"]
         else:
-            dirname = "/".join(patht[:i])
-            # TODO: 要不要改成使用 get_id_to_path
-            resp = await client.fs_dir_getid(dirname, async_=True, request=request)
-            if not (resp["state"] and (cid := resp["id"])):
-                raise error
-        for name in patht[i:-1]:
-            async for info in iterdir(client, cid, only_dirs_or_files=True, request=request):
-                if info["fn"] == name:
-                    cid = info["pid"]
-                    dirname += "/" + escape(name)
-                    break
-            else:
-                raise error
-        name = patht[-1]
-        async for info in iterdir(client, cid, only_dirs_or_files=False, request=request):
-            attr = normalize_attr(info, dirname)
-            if attr["name"] == name:
-                return attr["pickcode"]
-        else:
-            raise error
+            pickcode = await get_pickcode_by_id(client, str(fid), request=request)
+        if PATH_TO_PICKCODE is not None:
+            PATH_TO_PICKCODE[path] = pickcode
+        return pickcode
 
     async def get_url(
         client: P115Client, 
