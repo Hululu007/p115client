@@ -633,12 +633,14 @@ def updatedb_life(
                             )
                     else:
                         request_kwargs["base_url"] = get_proapi()
-                        resp = check_response(client.fs_category_get_app(id, **request_kwargs))
-                        pid = 0
-                        for a in resp["paths"][1:]:
-                            fid = int(a["file_id"])
-                            ancestors.append({"id": fid, "parent_id": pid, "name": a["file_name"]})
-                            pid = fid
+                        resp = client.fs_category_get_app(id, **request_kwargs)
+                        if resp:
+                            check_response(resp)
+                            pid = 0
+                            for a in resp["paths"][1:]:
+                                fid = int(a["file_id"])
+                                ancestors.append({"id": fid, "parent_id": pid, "name": a["file_name"]})
+                                pid = fid
                 except FileNotFoundError:
                     pass
                 if ancestors:
