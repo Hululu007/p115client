@@ -10,12 +10,30 @@ pip install -U p115nano302
 
 ## 用法
 
-### 命令行使用
+### 作为模块
+
+```python
+from p115nano302 import make_application
+from uvicorn import run
+
+cookies = "UID=...; CID=...; SEID=...; KID=..."
+run(
+    make_application(cookies, debug=True), 
+    host="0.0.0.0", 
+    port=8000, 
+    proxy_headers=True, 
+    server_header=False, 
+    forwarded_allow_ips="*", 
+    timeout_graceful_shutdown=1, 
+)
+```
+
+### 作为命令
 
 ```console
 $ p115nano302 -h
-usage: p115nano302 [-h] [-c COOKIES] [-p PASSWORD] [-t TOKEN] [-cp COOKIES_PATH] [-H HOST] [-P PORT] [-d] [-uc UVICORN_RUN_CONFIG_PATH]
-                   [-v] [-l]
+usage: p115nano302 [-h] [-c COOKIES] [-p PASSWORD] [-t TOKEN] [-cp COOKIES_PATH] [-H HOST] [-P PORT] [-d] [-uc UVICORN_RUN_CONFIG_PATH] [-v]
+                   [-l]
 
     ╭───────────────────────── Welcome to 115 nano 302 ────────────────────────────╮
     │                                                                              │
@@ -25,7 +43,7 @@ usage: p115nano302 [-h] [-c COOKIES] [-p PASSWORD] [-t TOKEN] [-cp COOKIES_PATH]
     │                                                                              │
     │                      license     https://www.gnu.org/licenses/gpl-3.0.txt    │
     │                                                                              │
-    │                      version     0.0.7                                       │
+    │                      version     0.0.8                                       │
     │                                                                              │
     ╰──────────────────────────────────────────────────────────────────────────────╯
 
@@ -74,6 +92,7 @@ usage: p115nano302 [-h] [-c COOKIES] [-p PASSWORD] [-t TOKEN] [-cp COOKIES_PATH]
     1. 带（任意）名字查询 pickcode
         http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?ecjq9ichcb40lzlvx
         http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?pickcode=ecjq9ichcb40lzlvx
+        http://localhost:8000/ecjq9ichcb40lzlvx/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv
     2. 查询 id
         http://localhost:8000?2691590992858971545
         http://localhost:8000/2691590992858971545
@@ -81,6 +100,7 @@ usage: p115nano302 [-h] [-c COOKIES] [-p PASSWORD] [-t TOKEN] [-cp COOKIES_PATH]
     3. 带（任意）名字查询 id
         http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?2691590992858971545
         http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?id=2691590992858971545
+        http://localhost:8000/2691590992858971545/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv
     4. 查询 sha1
         http://localhost:8000?E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
         http://localhost:8000/E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
@@ -88,6 +108,7 @@ usage: p115nano302 [-h] [-c COOKIES] [-p PASSWORD] [-t TOKEN] [-cp COOKIES_PATH]
     5. 带（任意）名字查询 sha1
         http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
         http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?sha1=E7FAA0BE343AF2DA8915F2B694295C8E4C91E691
+        http://localhost:8000/E7FAA0BE343AF2DA8915F2B694295C8E4C91E691/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv
     6. 查询 name（直接以路径作为 name，且不要有 pickcode、id、sha1 或 name）
         http://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv
         http://localhost:8000?Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv

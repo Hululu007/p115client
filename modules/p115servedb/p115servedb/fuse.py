@@ -90,6 +90,7 @@ def main(argv: None | list[str] | Namespace = None, /):
         predicate = make_predicate(predicate, {"re": re}, type=args.predicate_type)
     if args.fast_strm:
         strm_predicate = make_predicate("""(
+    path["type"] in (3, 4) or
     path.media_type.startswith(("video/", "audio/")) and
     path.suffix.lower() != ".ass" or
     path.suffix.lower() in (".divx", ".iso", ".m2ts", ".swf", ".xvid")
@@ -167,6 +168,7 @@ parser.add_argument("-fs", "--fast-strm", action="store_true", help="""快速实
 
     --strm-predicate-type expr \\
     --strm-predicate '(
+        path["type"] in (3, 4) or
         path.media_type.startswith(("video/", "audio/")) and
         path.suffix.lower() != ".ass" or
         path.suffix.lower() in (".divx", ".iso", ".m2ts", ".swf", ".xvid")

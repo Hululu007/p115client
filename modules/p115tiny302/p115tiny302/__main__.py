@@ -11,12 +11,28 @@ __doc__ = """\
     │                                                                              │
     │                      \x1b[32mlicense     \x1b[4;34mhttps://www.gnu.org/licenses/gpl-3.0.txt\x1b[0m    │
     │                                                                              │
-    │                      \x1b[32mversion     \x1b[1;36m0.0.6\x1b[0m                                       │
+    │                      \x1b[32mversion     \x1b[1;36m0.0.8\x1b[0m                                       │
     │                                                                              │
     ╰──────────────────────────────────────────────────────────────────────────────╯
 
 > 网盘文件支持用 \x1b[3;36mpickcode\x1b[0m、\x1b[3;36mid\x1b[0m、\x1b[3;36msha1\x1b[0m 或 \x1b[3;36mname\x1b[0m 查询
 > 分享文件支持用 \x1b[3;36mid\x1b[0m 或 \x1b[3;36mname\x1b[0m 查询
+> 支持参数 \x1b[3;36mrefresh\x1b[0m，用于搜索名字时忽略缓存（强制刷新）
+> 支持参数 \x1b[3;36mapp\x1b[0m，用于指定从此设备的接口获取下载链接
+
+🌰 携带 sign
+
+通过命令行参数 -t/--token 指定令牌后，你就必须在请求时携带签名，即 \x1b[3;36msign\x1b[0m 参数
+计算方式为
+
+    \x1b[3;35mhashlib.sha1(bytes(f"302@115-{token}-{t}-{value}", "utf-8")).hexdigest()\x1b[0m
+
+其中
+- \x1b[3;36mtoken\x1b[0m 就是命令行所传入的令牌
+- \x1b[3;36mt\x1b[0m 为过期时间点（默认值为 0，即永不过期）
+- \x1b[3;36mvalue\x1b[0m 就是值，像这样的链接，优先级顺序为 \x1b[3;36mpickcode\x1b[0m > \x1b[3;36mid\x1b[0m > \x1b[3;36msha1\x1b[0m > \x1b[3;36mname\x1b[0m > \x1b[3;36mname2\x1b[0m
+
+    \x1b[4;34mhttp://localhost:8000/{name2}?id={id}&name={name}&sha1={sha1}&pickcode={pickcode}\x1b[0m
 
 🌰 查询示例：
 
@@ -27,6 +43,7 @@ __doc__ = """\
     1. 带（任意）名字查询 \x1b[3;36mpickcode\x1b[0m
         \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?ecjq9ichcb40lzlvx\x1b[0m
         \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?pickcode=ecjq9ichcb40lzlvx\x1b[0m
+        \x1b[4;34mhttp://localhost:8000/ecjq9ichcb40lzlvx/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv\x1b[0m
     2. 查询 \x1b[3;36mid\x1b[0m
         \x1b[4;34mhttp://localhost:8000?2691590992858971545\x1b[0m
         \x1b[4;34mhttp://localhost:8000/2691590992858971545\x1b[0m
@@ -34,6 +51,7 @@ __doc__ = """\
     3. 带（任意）名字查询 \x1b[3;36mid\x1b[0m
         \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?2691590992858971545\x1b[0m
         \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?id=2691590992858971545\x1b[0m
+        \x1b[4;34mhttp://localhost:8000/2691590992858971545/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv\x1b[0m
     4. 查询 \x1b[3;36msha1\x1b[0m
         \x1b[4;34mhttp://localhost:8000?E7FAA0BE343AF2DA8915F2B694295C8E4C91E691\x1b[0m
         \x1b[4;34mhttp://localhost:8000/E7FAA0BE343AF2DA8915F2B694295C8E4C91E691\x1b[0m
@@ -41,6 +59,7 @@ __doc__ = """\
     5. 带（任意）名字查询 \x1b[3;36msha1\x1b[0m
         \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?E7FAA0BE343AF2DA8915F2B694295C8E4C91E691\x1b[0m
         \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?sha1=E7FAA0BE343AF2DA8915F2B694295C8E4C91E691\x1b[0m
+        \x1b[4;34mhttp://localhost:8000/E7FAA0BE343AF2DA8915F2B694295C8E4C91E691/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv\x1b[0m
     6. 查询 \x1b[3;36mname\x1b[0m（直接以路径作为 \x1b[3;36mname\x1b[0m，且不要有 \x1b[3;36mpickcode\x1b[0m、\x1b[3;36mid\x1b[0m、\x1b[3;36msha1\x1b[0m 或 \x1b[3;36mname\x1b[0m）
         \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv\x1b[0m
         \x1b[4;34mhttp://localhost:8000?Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv\x1b[0m
@@ -56,6 +75,10 @@ __doc__ = """\
         \x1b[4;34mhttp://localhost:8000/Cosmos.S01E01.1080p.AMZN.WEB-DL.DD+5.1.H.264-iKA.mkv?share_code=sw68md23w8m\x1b[0m
         \x1b[4;34mhttp://localhost:8000?name=Cosmos.S01E01.1080p.AMZN.WEB-DL.DD%2B5.1.H.264-iKA.mkv&share_code=sw68md23w8m&receive_code=q353\x1b[0m
         \x1b[4;34mhttp://localhost:8000?name=Cosmos.S01E01.1080p.AMZN.WEB-DL.DD%2B5.1.H.264-iKA.mkv&share_code=sw68md23w8m\x1b[0m
+
+再推荐一个命令行使用，用于执行 HTTP 请求的工具，类似 \x1b[1;3mwget\x1b[0m
+
+    \x1b[4m\x1b[34mhttps://pypi.org/project/httpie/\x1b[0m
 """
 
 from argparse import ArgumentParser, Namespace, RawTextHelpFormatter
@@ -63,6 +86,7 @@ from argparse import ArgumentParser, Namespace, RawTextHelpFormatter
 parser = ArgumentParser(description=__doc__, formatter_class=RawTextHelpFormatter)
 parser.add_argument("-c", "--cookies", default="", help="cookies 字符串，优先级高于 -cp/--cookies-path")
 parser.add_argument("-cp", "--cookies-path", default="", help="cookies 文件保存路径，默认为当前工作目录下的 115-cookies.txt")
+parser.add_argument("-t", "--token", default="", help="签名所用的 token，如果提供，则请求必须携带签名，即 sign 查询参数")
 parser.add_argument("-H", "--host", default="0.0.0.0", help="ip 或 hostname，默认值：'0.0.0.0'")
 parser.add_argument("-P", "--port", default=8000, type=int, help="端口号，默认值：8000，如果为 0 则自动确定")
 parser.add_argument("-d", "--debug", action="store_true", help="启用调试，会输出更详细信息")
@@ -138,12 +162,13 @@ def main(argv: None | list[str] | Namespace = None, /):
     run_config.setdefault("server_header", False)
     run_config.setdefault("forwarded_allow_ips", "*")
     run_config.setdefault("timeout_graceful_shutdown", 1)
+    run_config.setdefault("access_log", False)
 
     from p115tiny302 import make_application
     from uvicorn import run
 
     print(__doc__)
-    app = make_application(client, debug=args.debug)
+    app = make_application(client, debug=args.debug, token=args.token)
     run(app, **run_config)
 
 

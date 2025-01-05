@@ -7,13 +7,11 @@ __all__ = ["updatedb_life", "updatedb_one", "updatedb_tree", "updatedb"]
 import logging
 
 from collections import deque
-from collections.abc import Collection, Iterator, Iterable, Mapping
+from collections.abc import Iterator, Iterable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
-from copy import copy
 from errno import EBUSY
-from itertools import cycle, filterfalse, takewhile
+from itertools import cycle, takewhile
 from math import inf, isnan, isinf
-from operator import itemgetter
 from posixpath import splitext
 from sqlite3 import connect, Connection, Cursor
 from string import digits
@@ -283,41 +281,58 @@ def kill_items(
     return execute(con, sql, commit=commit)
 
 
-# TODO: 下面两个函数（3. 顺便再加一个版本，用 update_desc 搭配星标列表（以前的方法））放到 p115client
-# TODO: (4. 再实现一个版本，完全不使用星标，通过 fs_file 实现（暂时试一下），需要能够进行 20 并发量)
-def iter_updated_stared_dirs(
-    client: P115Client, 
-    cids: Iterable[int], 
-) -> Iterator[dict]:
-    """
+def iter_stared_files(client: P115Client, ids: Iterable[int]) -> Iterator[dict]:
+    """通过打星标来获取一组 id 的信息（但不能是图片）
+
+    :param client: 115 网盘客户端对象
+    :param ids: 一组文件或目录的 id
+
+    :return: 迭代器，产生简略的信息
+
+        .. code:: python
+
+            {
+                "id": int, 
+                "parent_id": int, 
+                "name": str, 
+                "pickcode": str, 
+                "is_dir": 0 | 1, 
+            }
     """
     ts = int(time())
-    cids = set(cids)
-    update_star(client, cids)
-    discard = cids.discard
-    for event in filterfalse(
-        itemgetter("file_category"), 
-        iter_life_behavior_once(client, from_time=ts, type="star_file", app="android")
-    ):
+    ids = set(ids)
+    update_star(client, ids)
+    discard = ids.discard
+    for event in iter_life_behavior_once(client, from_time=ts, type="star_file", app="android"):
         fid = int(event["file_id"])
-        yield {
-            "id": fid, 
-            "parent_id": int(event["parent_id"]), 
-            "name": event["file_name"], 
-            "pickcode": event["pick_code"], 
-            "is_dir": 1, 
-        }
-        discard(fid)
-        if not cids:
+        if fid in ids:
+            yield {
+                "id": fid, 
+                "parent_id": int(event["parent_id"]), 
+                "name": event["file_name"], 
+                "pickcode": event["pick_code"], 
+                "is_dir": 1, 
+            }
+            discard(fid)
+        if not ids:
             break
 
+# TODO: 再实现几个版本
+# TODO: 1. 以前的方法：用 update_star, update_desc 搭配星标列表
+# TODO: 2. 新版本，完全不使用星标，通过 fs_file 实现，进行默认 20 线程并发
+# TODO: 3. 新版本，使用 fs_files（分流执行），获取 resp["path"]，如果某个 id 已经取得，则跳过
 
 def sort(
     data: list[dict], 
     /, 
     reverse: bool = False, 
 ) -> list[dict]:
-    """
+    """对文件信息数据进行排序，使得如果某个元素是另一个元素的父节点，则后者在前
+
+    :param data: 待排序的文件信息列表
+    :param reverse: 是否你需排列
+
+    :return: 原地排序，返回传入的列表本身
     """
     d: dict[int, int] = {a["id"]: a["parent_id"] for a in data}
     depth_d: dict[int, int] = {}
@@ -340,7 +355,15 @@ def load_ancestors(
     all_are_files: bool = False, 
     refresh: bool = False, 
 ) -> list[dict]:
-    """
+    """加载祖先节点列表
+
+    :param con: 数据库连接或游标
+    :param client: 115 网盘客户端对象
+    :param data: 文件信息列表
+    :param all_are_files: 说明所有的列表元素都是文件节点，如此可减少一次判断
+    :param refresh: 是否强制刷新，如果为 False，则数据库中已经存在的节点不会被拉取
+
+    :return: 返回所传入的文件信息列表所对应的祖先节点列表
     """
     seen = {0}
     if not all_are_files:
@@ -350,7 +373,7 @@ def load_ancestors(
         seen |= pids
         if not refresh:
             pids.difference_update(iter_existing_id(con, pids, is_alive=False))
-        data = list(iter_updated_stared_dirs(client, pids))
+        data = list(iter_stared_files(client, pids))
         ancestors.extend(data)
     if ancestors:
         sort(ancestors)
@@ -409,6 +432,9 @@ def update_stared_dirs(
 
 
 def is_timeouterror(exc: Exception) -> bool:
+    "判断一个错误类型是不是超时错误"
+    if isinstance(exc, TimeoutError):
+        return True
     exctype = type(exc)
     for exctype in exctype.mro():
         if exctype is Exception:

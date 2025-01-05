@@ -8,7 +8,7 @@ const { parse, URL, URLSearchParams } = require("url");
 
 const AUTHOR = "ChenyangGao <https://chenyanggao.github.io>"
 const LICENSE = "GPLv3 <https://www.gnu.org/licenses/gpl-3.0.txt>"
-const VERSION = "0.0.6"
+const VERSION = "0.0.7"
 const DOC = `usage: web_115_nano_302.js [-h] [-c COOKIES] [-cp COOKIES_PATH] [-H HOST] [-P PORT] [-l] [-v]
 
     ╭────────────────────── \x1b[31mWelcome to \x1b[1mweb_115_nano_302.js\x1b[0m ────────────────────────╮
@@ -25,6 +25,7 @@ const DOC = `usage: web_115_nano_302.js [-h] [-c COOKIES] [-cp COOKIES_PATH] [-H
 
 > 网盘文件支持用 \x1b[3;36mpickcode\x1b[0m、\x1b[3;36mid\x1b[0m、\x1b[3;36msha1\x1b[0m 或 \x1b[3;36mname\x1b[0m 查询
 > 分享文件支持用 \x1b[3;36mid\x1b[0m 或 \x1b[3;36mname\x1b[0m 查询
+> 支持参数 \x1b[3;36mrefresh\x1b[0m，用于搜索名字时忽略缓存（强制刷新）
 
 🌰 查询示例：
 
@@ -35,6 +36,7 @@ const DOC = `usage: web_115_nano_302.js [-h] [-c COOKIES] [-cp COOKIES_PATH] [-H
     1. 带（任意）名字查询 \x1b[3;36mpickcode\x1b[0m
         \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?ecjq9ichcb40lzlvx\x1b[0m
         \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?pickcode=ecjq9ichcb40lzlvx\x1b[0m
+        \x1b[4;34mhttp://localhost:8000/ecjq9ichcb40lzlvx/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv\x1b[0m
     2. 查询 \x1b[3;36mid\x1b[0m
         \x1b[4;34mhttp://localhost:8000?2691590992858971545\x1b[0m
         \x1b[4;34mhttp://localhost:8000/2691590992858971545\x1b[0m
@@ -42,6 +44,7 @@ const DOC = `usage: web_115_nano_302.js [-h] [-c COOKIES] [-cp COOKIES_PATH] [-H
     3. 带（任意）名字查询 \x1b[3;36mid\x1b[0m
         \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?2691590992858971545\x1b[0m
         \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?id=2691590992858971545\x1b[0m
+        \x1b[4;34mhttp://localhost:8000/2691590992858971545/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv\x1b[0m
     4. 查询 \x1b[3;36msha1\x1b[0m
         \x1b[4;34mhttp://localhost:8000?E7FAA0BE343AF2DA8915F2B694295C8E4C91E691\x1b[0m
         \x1b[4;34mhttp://localhost:8000/E7FAA0BE343AF2DA8915F2B694295C8E4C91E691\x1b[0m
@@ -49,7 +52,8 @@ const DOC = `usage: web_115_nano_302.js [-h] [-c COOKIES] [-cp COOKIES_PATH] [-H
     5. 带（任意）名字查询 \x1b[3;36msha1\x1b[0m
         \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?E7FAA0BE343AF2DA8915F2B694295C8E4C91E691\x1b[0m
         \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?sha1=E7FAA0BE343AF2DA8915F2B694295C8E4C91E691\x1b[0m
-    6. 查询 \x1b[3;36mname\x1b[0m（直接以路径作为 \x1b[3;36mname\x1b[0m，且不要有任何查询参数）
+        \x1b[4;34mhttp://localhost:8000/E7FAA0BE343AF2DA8915F2B694295C8E4C91E691/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv\x1b[0m
+    6. 查询 \x1b[3;36mname\x1b[0m（直接以路径作为 \x1b[3;36mname\x1b[0m，且不要有 \x1b[3;36mpickcode\x1b[0m、\x1b[3;36mid\x1b[0m、\x1b[3;36msha1\x1b[0m 或 \x1b[3;36mname\x1b[0m）
         \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv\x1b[0m
         \x1b[4;34mhttp://localhost:8000?Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv\x1b[0m
         \x1b[4;34mhttp://localhost:8000?name=Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv\x1b[0m
@@ -422,7 +426,7 @@ const server = createServer(async (req, res) => {
     const [start_s, start_ns] = process.hrtime();
     let statusCode = 200;
     try {
-        if (req.url === "/service-worker.js")
+        if (req.url === "/service-worker.js" || req.url === "/favicon.ico")
             throw new ErrorResponse("", 404);
         const urlp = parse(req.url, true);
         const query = (urlp.search || "").slice(1);
@@ -430,7 +434,9 @@ const server = createServer(async (req, res) => {
         const share_code = params.share_code;
         const sha1 = (params.sha1 || "").toUpperCase();
         const refresh = params.refresh || false;
-        let name = params.name || decodeURIComponent((urlp.pathname || "").slice(1));
+        const name = params.name;
+        const name2 = decodeURIComponent((urlp.pathname || "").slice(1));
+        let fileName = name || name2;
         let pickcode = (params.pickcode || "").toLowerCase();
         let id = params.id || "0";
         let url;
@@ -440,8 +446,8 @@ const server = createServer(async (req, res) => {
                 receive_code = await getReceiveCode(share_code);
             else if (receive_code.length != 4)
                 throw new ErrorResponse(`bad receive_code: ${receive_code}`);
-            if ((!id || id == "0") && name)
-                id = await shareGetIdForName(share_code, receive_code, name, refresh);
+            if ((!id || id == "0") && fileName)
+                id = await shareGetIdForName(share_code, receive_code, fileName, refresh);
             if (!id || id == "0")
                 throw new ErrorResponse(`please specify id or name: share_code="${share_code}"`);
             url = await shareGetUrl(share_code, receive_code, id);
@@ -456,19 +462,24 @@ const server = createServer(async (req, res) => {
                     throw new ErrorResponse(`bad sha1: ${sha1}`);
                 pickcode = await getPickcodeForSha1(sha1);
             } else {
-                if (query) {
-                    const find = query.match(/^([^&=]+)(?=&|$)/);
-                    if (find) name = decodeURIComponent(find[1]);
+                const find = query.match(/^([^&=]+)(?=&|$)/);
+                const idx = fileName.indexOf("/");
+                let remains = "";
+                if (find)
+                    fileName = decodeURIComponent(find[1]);
+                else if (!name && idx > 0) {
+                    remains = fileName.slice(idx);
+                    fileName = fileName.slice(0, idx);
                 }
-                if (name) {
-                    if (/^[0-9a-zA-Z]{17}$/.test(name))
-                        pickcode = name.toLowerCase();
-                    else if (/^[0-9a-fA-F]{40}$/.test(name))
-                        pickcode = await getPickcodeForSha1(name.toUpperCase());
-                    else if (/^[1-9][0-9]+$/.test(name))
-                        pickcode = await getPickcodeToId(name);
+                if (fileName) {
+                    if (/^[0-9a-zA-Z]{17}$/.test(fileName))
+                        pickcode = fileName.toLowerCase();
+                    else if (/^[0-9a-fA-F]{40}$/.test(fileName))
+                        pickcode = await getPickcodeForSha1(fileName.toUpperCase());
+                    else if (/^[1-9][0-9]+$/.test(fileName))
+                        pickcode = await getPickcodeToId(fileName);
                     else
-                        pickcode = await getPickcodeForName(name, refresh)
+                        pickcode = await getPickcodeForName(fileName + remains, refresh)
                 }
             }
             if (!pickcode)

@@ -11,7 +11,7 @@ __doc__ = """\
     │                                                                              │
     │                      \x1b[32mlicense     \x1b[4;34mhttps://www.gnu.org/licenses/gpl-3.0.txt\x1b[0m    │
     │                                                                              │
-    │                      \x1b[32mversion     \x1b[1;36m0.0.7\x1b[0m                                       │
+    │                      \x1b[32mversion     \x1b[1;36m0.0.8\x1b[0m                                       │
     │                                                                              │
     ╰──────────────────────────────────────────────────────────────────────────────╯
 
@@ -60,6 +60,7 @@ __doc__ = """\
     1. 带（任意）名字查询 \x1b[3;36mpickcode\x1b[0m
         \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?ecjq9ichcb40lzlvx\x1b[0m
         \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?pickcode=ecjq9ichcb40lzlvx\x1b[0m
+        \x1b[4;34mhttp://localhost:8000/ecjq9ichcb40lzlvx/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv\x1b[0m
     2. 查询 \x1b[3;36mid\x1b[0m
         \x1b[4;34mhttp://localhost:8000?2691590992858971545\x1b[0m
         \x1b[4;34mhttp://localhost:8000/2691590992858971545\x1b[0m
@@ -67,6 +68,7 @@ __doc__ = """\
     3. 带（任意）名字查询 \x1b[3;36mid\x1b[0m
         \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?2691590992858971545\x1b[0m
         \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?id=2691590992858971545\x1b[0m
+        \x1b[4;34mhttp://localhost:8000/2691590992858971545/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv\x1b[0m
     4. 查询 \x1b[3;36msha1\x1b[0m
         \x1b[4;34mhttp://localhost:8000?E7FAA0BE343AF2DA8915F2B694295C8E4C91E691\x1b[0m
         \x1b[4;34mhttp://localhost:8000/E7FAA0BE343AF2DA8915F2B694295C8E4C91E691\x1b[0m
@@ -74,6 +76,7 @@ __doc__ = """\
     5. 带（任意）名字查询 \x1b[3;36msha1\x1b[0m
         \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?E7FAA0BE343AF2DA8915F2B694295C8E4C91E691\x1b[0m
         \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv?sha1=E7FAA0BE343AF2DA8915F2B694295C8E4C91E691\x1b[0m
+        \x1b[4;34mhttp://localhost:8000/E7FAA0BE343AF2DA8915F2B694295C8E4C91E691/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv\x1b[0m
     6. 查询 \x1b[3;36mname\x1b[0m（直接以路径作为 \x1b[3;36mname\x1b[0m，且不要有 \x1b[3;36mpickcode\x1b[0m、\x1b[3;36mid\x1b[0m、\x1b[3;36msha1\x1b[0m 或 \x1b[3;36mname\x1b[0m）
         \x1b[4;34mhttp://localhost:8000/Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv\x1b[0m
         \x1b[4;34mhttp://localhost:8000?Novembre.2022.FRENCH.2160p.BluRay.DV.HEVC.DTS-HD.MA.5.1.mkv\x1b[0m
@@ -99,9 +102,9 @@ from argparse import ArgumentParser, Namespace, RawTextHelpFormatter
 
 parser = ArgumentParser(description=__doc__, formatter_class=RawTextHelpFormatter)
 parser.add_argument("-c", "--cookies", default="", help="cookies 字符串，优先级高于 -cp/--cookies-path，如果有多个则一行写一个")
+parser.add_argument("-cp", "--cookies-path", default="", help="cookies 文件保存路径，默认为当前工作目录下的 115-cookies.txt，如果有多个则一行写一个")
 parser.add_argument("-p", "--password", default="", help="执行后台信息操作请求所需密码，仅当提供时，才会启用一组后台信息操作接口")
 parser.add_argument("-t", "--token", default="", help="签名所用的 token，如果提供，则请求必须携带签名，即 sign 查询参数")
-parser.add_argument("-cp", "--cookies-path", default="", help="cookies 文件保存路径，默认为当前工作目录下的 115-cookies.txt，如果有多个则一行写一个")
 parser.add_argument("-H", "--host", default="0.0.0.0", help="ip 或 hostname，默认值：'0.0.0.0'")
 parser.add_argument("-P", "--port", default=8000, type=int, help="端口号，默认值：8000，如果为 0 则自动确定")
 parser.add_argument("-d", "--debug", action="store_true", help="启用调试，会输出更详细信息")
@@ -174,6 +177,7 @@ def main(argv: None | list[str] | Namespace = None, /):
     run_config.setdefault("server_header", False)
     run_config.setdefault("forwarded_allow_ips", "*")
     run_config.setdefault("timeout_graceful_shutdown", 1)
+    run_config.setdefault("access_log", False)
 
     from p115nano302 import make_application
     from uvicorn import run
