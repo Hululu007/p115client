@@ -201,7 +201,7 @@ def get_path_to_cid(
 
     :return: 目录对应的绝对路径或相对路径
     """
-    if isinstance(client, str):
+    if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
@@ -291,7 +291,7 @@ def get_ancestors_to_cid(
                 "name": str, # 名字
             }
     """
-    if isinstance(client, str):
+    if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
@@ -387,7 +387,7 @@ def get_id_to_path(
 
     :return: 文件或目录的 id
     """
-    if isinstance(client, str):
+    if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
@@ -588,7 +588,7 @@ def get_id_to_pickcode(
 ) -> P115ID | Coroutine[Any, Any, P115ID]:
     if not 17 <= len(pickcode) <= 18 or not pickcode.isalnum():
         raise ValueError(f"bad pickcode: {pickcode!r}")
-    if isinstance(client, str):
+    if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     def gen_step():
         resp = yield client.download_url_web(pickcode, base_url=True, async_=async_, **request_kwargs)
@@ -627,7 +627,7 @@ def get_id_to_sha1(
 ) -> P115ID | Coroutine[Any, Any, P115ID]:
     if len(sha1) != 40 or sha1.strip(hexdigits):
         raise ValueError(f"bad sha1: {sha1!r}")
-    if isinstance(client, str):
+    if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     def gen_step():
         resp = yield client.fs_shasearch(sha1, base_url=True, async_=async_, **request_kwargs)
@@ -675,7 +675,7 @@ def filter_na_ids(
 
     :return: 迭代器，筛选出所有无效的 id
     """
-    if isinstance(client, str):
+    if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     file_skim = client.fs_file_skim
     def gen_step():
@@ -701,7 +701,7 @@ def filter_na_ids(
 def _iter_fs_files(
     client: str | P115Client, 
     payload: int | str | dict = 0, 
-    first_page_size: None | int = None, 
+    first_page_size: int = 0, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
     ensure_file: None | bool = None, 
@@ -715,7 +715,7 @@ def _iter_fs_files(
 def _iter_fs_files(
     client: str | P115Client, 
     payload: int | str | dict = 0, 
-    first_page_size: None | int = None, 
+    first_page_size: int = 0, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
     ensure_file: None | bool = None, 
@@ -728,7 +728,7 @@ def _iter_fs_files(
 def _iter_fs_files(
     client: str | P115Client, 
     payload: int | str | dict = 0, 
-    first_page_size: None | int = None, 
+    first_page_size: int = 0, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
     ensure_file: None | bool = None, 
@@ -741,7 +741,7 @@ def _iter_fs_files(
 
     :param client: 115 客户端或 cookies
     :param payload: 请求参数，如果是 int 或 str，则视为 cid
-    :param first_page_size: 第一次拉取时的分页大小，如果为 None 或 <= 0，则自动确定
+    :param first_page_size: 首次拉取的分页大小
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param ensure_file: 是否确保为文件
@@ -756,7 +756,7 @@ def _iter_fs_files(
 
     :return: 迭代器，返回此目录内的文件信息（文件和目录）
     """
-    if isinstance(client, str):
+    if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     if isinstance(payload, (str, int)):
         cid = int(payload)
@@ -780,7 +780,6 @@ def _iter_fs_files(
         key_of_count = "folder_count"
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
-    ans: list[tuple[int, str]] = []
     if app in ("", "web", "desktop", "harmony"):
         fs_files: Callable = client.fs_files
     else:
@@ -789,11 +788,11 @@ def _iter_fs_files(
         payload.pop("type", None)
         payload.setdefault("show_dir", 0)
     def gen_step():
-        nonlocal ans
         offset = int(payload.setdefault("offset", 0))
         if offset < 0:
             offset = payload["offset"] = 0
         count = 0
+        ans: list[tuple[int, str]] = []
         while True:
             try:
                 resp = yield fs_files(payload, async_=async_, **request_kwargs)
@@ -857,7 +856,7 @@ def _iter_fs_files(
 def iter_stared_dirs_raw(
     client: str | P115Client, 
     page_size: int = 10_000, 
-    first_page_size: None | int = None, 
+    first_page_size: int = 0, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
@@ -872,7 +871,7 @@ def iter_stared_dirs_raw(
 def iter_stared_dirs_raw(
     client: str | P115Client, 
     page_size: int = 10_000, 
-    first_page_size: None | int = None, 
+    first_page_size: int = 0, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
@@ -886,7 +885,7 @@ def iter_stared_dirs_raw(
 def iter_stared_dirs_raw(
     client: str | P115Client, 
     page_size: int = 10_000, 
-    first_page_size: None | int = None, 
+    first_page_size: int = 0, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
@@ -900,7 +899,7 @@ def iter_stared_dirs_raw(
 
     :param client: 115 客户端或 cookies
     :param page_size: 分页大小
-    :param first_page_size: 第一次拉取时的分页大小，如果为 None 或 <= 0，则自动确定
+    :param first_page_size: 首次拉取的分页大小
     :param order: 排序
 
         - "file_name": 文件名
@@ -944,7 +943,7 @@ def iter_stared_dirs_raw(
 def iter_stared_dirs(
     client: str | P115Client, 
     page_size: int = 10_000, 
-    first_page_size: None | int = None, 
+    first_page_size: int = 0, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
@@ -960,7 +959,7 @@ def iter_stared_dirs(
 def iter_stared_dirs(
     client: str | P115Client, 
     page_size: int = 10_000, 
-    first_page_size: None | int = None, 
+    first_page_size: int = 0, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
@@ -975,7 +974,7 @@ def iter_stared_dirs(
 def iter_stared_dirs(
     client: str | P115Client, 
     page_size: int = 10_000, 
-    first_page_size: None | int = None, 
+    first_page_size: int = 0, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
@@ -990,7 +989,7 @@ def iter_stared_dirs(
 
     :param client: 115 客户端或 cookies
     :param page_size: 分页大小
-    :param first_page_size: 第一次拉取时的分页大小，如果为 None 或 <= 0，则自动确定
+    :param first_page_size: 首次拉取的分页大小
     :param order: 排序
 
         - "file_name": 文件名
@@ -1092,7 +1091,7 @@ def ensure_attr_path(
 
     :return: 返回这一组文件信息
     """
-    if isinstance(client, str):
+    if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     if page_size <= 0:
         page_size = 10_000
@@ -1266,7 +1265,7 @@ def iterdir_raw(
     client: str | P115Client, 
     cid: int = 0, 
     page_size: int = 10_000, 
-    first_page_size: None | int = None, 
+    first_page_size: int = 0, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     show_dir: Literal[0, 1] = 1, 
@@ -1285,7 +1284,7 @@ def iterdir_raw(
     client: str | P115Client, 
     cid: int = 0, 
     page_size: int = 10_000, 
-    first_page_size: None | int = None, 
+    first_page_size: int = 0, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     show_dir: Literal[0, 1] = 1, 
@@ -1303,7 +1302,7 @@ def iterdir_raw(
     client: str | P115Client, 
     cid: int = 0, 
     page_size: int = 10_000, 
-    first_page_size: None | int = None, 
+    first_page_size: int = 0, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     show_dir: Literal[0, 1] = 1, 
@@ -1321,7 +1320,7 @@ def iterdir_raw(
     :param client: 115 客户端或 cookies
     :param cid: 目录 id
     :param page_size: 分页大小
-    :param first_page_size: 第一次拉取时的分页大小，如果为 None 或 <= 0，则自动确定
+    :param first_page_size: 首次拉取的分页大小
     :param order: 排序
 
         - "file_name": 文件名
@@ -1371,7 +1370,7 @@ def iterdir(
     client: str | P115Client, 
     cid: int = 0, 
     page_size: int = 10_000, 
-    first_page_size: None | int = None, 
+    first_page_size: int = 0, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     show_dir: Literal[0, 1] = 1, 
@@ -1394,7 +1393,7 @@ def iterdir(
     client: str | P115Client, 
     cid: int = 0, 
     page_size: int = 10_000, 
-    first_page_size: None | int = None, 
+    first_page_size: int = 0, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     show_dir: Literal[0, 1] = 1, 
@@ -1416,7 +1415,7 @@ def iterdir(
     client: str | P115Client, 
     cid: int = 0, 
     page_size: int = 10_000, 
-    first_page_size: None | int = None, 
+    first_page_size: int = 0, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     show_dir: Literal[0, 1] = 1, 
@@ -1438,7 +1437,7 @@ def iterdir(
     :param client: 115 客户端或 cookies
     :param cid: 目录 id
     :param page_size: 分页大小
-    :param first_page_size: 第一次拉取时的分页大小，如果为 None 或 <= 0，则自动确定
+    :param first_page_size: 首次拉取的分页大小
     :param order: 排序
 
         - "file_name": 文件名
@@ -1469,7 +1468,7 @@ def iterdir(
 
     :return: 迭代器，返回此目录内的文件信息（文件和目录）
     """
-    if isinstance(client, str):
+    if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
@@ -1533,7 +1532,7 @@ def iter_files_raw(
     client: str | P115Client, 
     cid: int = 0, 
     page_size: int = 10_000, 
-    first_page_size: None | int = None, 
+    first_page_size: int = 0, 
     suffix: str = "", 
     type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
@@ -1552,7 +1551,7 @@ def iter_files_raw(
     client: str | P115Client, 
     cid: int = 0, 
     page_size: int = 10_000, 
-    first_page_size: None | int = None, 
+    first_page_size: int = 0, 
     suffix: str = "", 
     type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
@@ -1570,7 +1569,7 @@ def iter_files_raw(
     client: str | P115Client, 
     cid: int = 0, 
     page_size: int = 10_000, 
-    first_page_size: None | int = None, 
+    first_page_size: int = 0, 
     suffix: str = "", 
     type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
@@ -1588,7 +1587,7 @@ def iter_files_raw(
     :param client: 115 客户端或 cookies
     :param cid: 目录 id
     :param page_size: 分页大小
-    :param first_page_size: 第一次拉取时的分页大小，如果为 None 或 <= 0，则自动确定
+    :param first_page_size: 首次拉取的分页大小
     :param suffix: 后缀名（优先级高于 type）
     :param type: 文件类型
 
@@ -1654,7 +1653,7 @@ def iter_files(
     client: str | P115Client, 
     cid: int = 0, 
     page_size: int = 10_000, 
-    first_page_size: None | int = None, 
+    first_page_size: int = 0, 
     suffix: str = "", 
     type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
@@ -1677,7 +1676,7 @@ def iter_files(
     client: str | P115Client, 
     cid: int = 0, 
     page_size: int = 10_000, 
-    first_page_size: None | int = None, 
+    first_page_size: int = 0, 
     suffix: str = "", 
     type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
@@ -1699,7 +1698,7 @@ def iter_files(
     client: str | P115Client, 
     cid: int = 0, 
     page_size: int = 10_000, 
-    first_page_size: None | int = None, 
+    first_page_size: int = 0, 
     suffix: str = "", 
     type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
@@ -1721,7 +1720,7 @@ def iter_files(
     :param client: 115 客户端或 cookies
     :param cid: 目录 id
     :param page_size: 分页大小
-    :param first_page_size: 第一次拉取时的分页大小，如果为 None 或 <= 0，则自动确定
+    :param first_page_size: 首次拉取的分页大小
     :param suffix: 后缀名（优先级高于 type）
     :param type: 文件类型
 
@@ -1757,7 +1756,7 @@ def iter_files(
 
     :return: 迭代器，返回此目录内的（仅文件）文件信息
     """
-    if isinstance(client, str):
+    if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
@@ -1953,7 +1952,7 @@ def dict_files(
 
     :return: 字典，key 是 id，value 是 文件信息
     """
-    if isinstance(client, str):
+    if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     def gen_step():
         it = iter_files(
@@ -2115,7 +2114,7 @@ def traverse_files(
         raise ValueError("please set the non-zero value of suffix or type")
     if suffix:
         suffix = "." + suffix.lower()
-    if isinstance(client, str):
+    if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     if page_size <= 0:
         page_size = 10_000
@@ -2579,7 +2578,7 @@ def iter_image_files(
         attr["id"] = attr["file_id"]
         attr["name"] = attr["file_name"]
         return attr
-    if isinstance(client, str):
+    if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     if page_size <= 0:
         page_size = 8192
@@ -2693,7 +2692,7 @@ def dict_image_files(
 
     :return: 字典，key 是 id，value 是 图片文件信息
     """
-    if isinstance(client, str):
+    if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     def gen_step():
         it = iter_image_files(
@@ -2802,7 +2801,7 @@ def iter_dangling_files(
 
     :return: 迭代器，返回此目录内的（仅文件）文件信息
     """
-    if isinstance(client, str):
+    if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     if page_size <= 0:
         page_size = 10_000
@@ -2930,7 +2929,7 @@ def share_iterdir(
 
     :return: 迭代器，被打上星标的目录信息
     """
-    if isinstance(client, str):
+    if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     if page_size < 0:
         page_size = 10_000
@@ -3027,7 +3026,7 @@ def share_iter_files(
             }
 
     """
-    if isinstance(client, str):
+    if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     def gen_step():
         payload: dict = cast(dict, share_extract_payload(share_link))

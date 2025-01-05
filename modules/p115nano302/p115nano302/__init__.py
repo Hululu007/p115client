@@ -12,12 +12,12 @@ from itertools import cycle
 from re import compile as re_compile
 from string import digits, hexdigits
 from time import time
-from typing import Final
-from urllib.parse import parse_qsl, urlencode, unquote, urlsplit
+from typing import Any, Final, Self
+from urllib.parse import quote, parse_qsl, urlencode, unquote, urlsplit
 
-from blacksheep import json, redirect, text, Application, FromJSON, Request, Router
+from blacksheep import json, text, Application, FromJSON, Request, Response, Router
 from blacksheep.client import ClientSession
-from blacksheep.contents import FormContent
+from blacksheep.contents import Content, FormContent
 from blacksheep.server.remotes.forwarding import ForwardedHeadersMiddleware
 from cachedict import LRUDict, TTLDict
 from orjson import dumps, loads
@@ -43,6 +43,55 @@ def get_user_id_from_cookies(cookies: str, /) -> int:
     return int(match[0].partition("_")[0])
 
 
+class Url(str):
+
+    def __new__(cls, val: Any = "", /, *args, **kwds):
+        return super().__new__(cls, val)
+
+    def __init__(self, val: Any = "", /, *args, **kwds):
+        self.__dict__.update(*args, **kwds)
+
+    def __getattr__(self, attr: str, /):
+        try:
+            return self.__dict__[attr]
+        except KeyError as e:
+            raise AttributeError(attr) from e
+
+    def __getitem__(self, key, /):
+        try:
+            if isinstance(key, str):
+                return self.__dict__[key]
+        except KeyError:
+            return super().__getitem__(key) # type: ignore
+
+    def __repr__(self, /) -> str:
+        cls = type(self)
+        if (module := cls.__module__) == "__main__":
+            name = cls.__qualname__
+        else:
+            name = f"{module}.{cls.__qualname__}"
+        return f"{name}({super().__repr__()}, {self.__dict__!r})"
+
+    @classmethod
+    def of(cls, val: Any = "", /, ns: None | dict = None) -> Self:
+        self = cls.__new__(cls, val)
+        if ns is not None:
+            self.__dict__ = ns
+        return self
+
+    def get(self, key, /, default=None):
+        return self.__dict__.get(key, default)
+
+    def items(self, /):
+        return self.__dict__.items()
+
+    def keys(self, /):
+        return self.__dict__.keys()
+
+    def values(self, /):
+        return self.__dict__.values()
+
+
 def make_application(
     cookies: str, 
     debug: bool = False, 
@@ -54,8 +103,8 @@ def make_application(
     SHA1_TO_PICKCODE: LRUDict[tuple[int, str], str] = LRUDict(cache_size)
     NAME_TO_PICKCODE: LRUDict[tuple[int, str], str] = LRUDict(cache_size)
     SHARE_NAME_TO_ID: LRUDict[tuple[str, str], int] = LRUDict(cache_size)
-    DOWNLOAD_URL_CACHE: TTLDict[tuple[int, str] | tuple[str, int], str] = TTLDict(cache_size, 3600)
-    DOWNLOAD_URL_CACHE2: LRUDict[tuple[int, str, str], tuple[str, int]] = LRUDict(1024)
+    DOWNLOAD_URL_CACHE: TTLDict[tuple[int, str] | tuple[str, int], Url] = TTLDict(cache_size, 3600)
+    DOWNLOAD_URL_CACHE2: LRUDict[tuple[int, str, str], tuple[Url, int]] = LRUDict(1024)
     RECEIVE_CODE_MAP: dict[str, str] = {}
 
     PASSWORD = password
@@ -197,12 +246,12 @@ def make_application(
         user_agent: str = "", 
         app: str = "android", 
         user_id: int = 0, 
-    ) -> str:
+    ) -> Url:
         if user_id:
             cookies = d_cookies[user_id]
         else:
             user_id, cookies = next(iter(d_cookies.items()))
-        if url := DOWNLOAD_URL_CACHE.get((user_id, pickcode), ""):
+        if url := DOWNLOAD_URL_CACHE.get((user_id, pickcode)):
             return url
         elif pairs := DOWNLOAD_URL_CACHE2.get((user_id, pickcode, user_agent)):
             url, expire_ts = pairs
@@ -225,14 +274,16 @@ def make_application(
         json = loads(text)
         if not json["state"]:
             raise OSError(text)
+        data = loads(decrypt(json["data"]))
         if app == "chrome":
-            data = json["data"] = loads(decrypt(json["data"]))
-            url_info = next(iter(data.values()))["url"]
+            info = next(iter(data.values()))
+            url_info = info["url"]
             if not url_info:
                 raise FileNotFoundError(dumps(json).decode("utf-8"))
-            url = url_info["url"]
+            url = Url.of(url_info["url"], info)
         else:
-            url = loads(decrypt(json["data"]))["url"]
+            data["file_name"] = unquote(urlsplit(data["url"]).path.rpartition("/")[-1])
+            url = Url.of(data["url"], data)
         if "&c=0&f=&" in url:
             DOWNLOAD_URL_CACHE[(user_id, pickcode)] = url
         elif "&c=0&f=1&" in url:
@@ -246,12 +297,12 @@ def make_application(
         file_id: int, 
         app: str = "android", 
         user_id: int = 0, 
-    ):
+    ) -> Url:
         if user_id:
             cookies = d_cookies[user_id]
         else:
             user_id, cookies = next(iter(d_cookies.items()))
-        if url := DOWNLOAD_URL_CACHE.get((share_code, file_id), ""):
+        if url := DOWNLOAD_URL_CACHE.get((share_code, file_id)):
             return url
         payload = {"share_code": share_code, "receive_code": receive_code, "file_id": file_id}
         if app:
@@ -278,7 +329,10 @@ def make_application(
             data = loads(decrypt(json["data"]))
         if not (data and (url_info := data["url"])):
             raise FileNotFoundError(text)
-        url = url_info["url"]
+        data["file_id"] = data.pop("fid")
+        data["file_name"] = data.pop("fn")
+        data["file_size"] = int(data.pop("fs"))
+        url = Url.of(url_info["url"], data)
         if "&c=0&f=&" in url:
             DOWNLOAD_URL_CACHE[(share_code, file_id)] = url
         return url
@@ -376,12 +430,25 @@ def make_application(
             user_agent = (request.get_first_header(b"User-agent") or b"").decode("latin-1")
             url = await get_downurl(pickcode.lower(), user_agent, app=app, user_id=user_id)
 
-        return redirect(url)
+        return Response(302, [
+            (b"Location", bytes(url, "utf-8")), 
+            (b"Content-Disposition", b'attachment; filename="%s"' % bytes(quote(url["file_name"], safe=""), "latin-1")), 
+        ], Content(b"application/json; charset=utf-8", dumps(url.__dict__)))
 
     if PASSWORD:
+        @app.router.route("/%3Ccookies", methods=["GET"])
+        async def get_cookies(request: Request, password: str = ""):
+            """获取一组 cookies
+
+            :param password: 口令
+            """
+            if PASSWORD != password:
+                return json({"state": False, "message": "password does not match"}, 401)
+            return json({"state": True, "cookies": "\n".join(d_cookies.values())})
+
         @app.router.route("/%3Ccookies", methods=["POST"])
         async def set_cookies(request: Request, password: str = "", body: None | FromJSON[dict] = None):
-            """更新 cookies
+            """更新一组 cookies
 
             :param password: 口令
             :param body: 请求体为 json 格式 <code>{"cookies"&colon; "新的 cookies"}</code>
@@ -400,9 +467,16 @@ def make_application(
 
 
 if __name__ == "__main__":
-    from uvicorn import run
+    import uvicorn
 
     cookies = open("115-cookies.txt", encoding="latin-1").read().strip()
-    app = make_application(cookies, debug=True)
-    run(app, host="0.0.0.0", port=8000, proxy_headers=True, forwarded_allow_ips="*")
+    uvicorn.run(
+        make_application(cookies, debug=True), 
+        host="0.0.0.0", 
+        port=8000, 
+        proxy_headers=True, 
+        server_header=False, 
+        forwarded_allow_ips="*", 
+        timeout_graceful_shutdown=1, 
+    )
 

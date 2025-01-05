@@ -150,7 +150,7 @@ def batch_get_url(
 
     :return: 字典，key 是文件 id，value 是下载链接，自动忽略所有无效项目
     """
-    if isinstance(client, str):
+    if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     if headers := request_kwargs.get("headers"):
         request_kwargs["headers"] = dict(headers, **{"User-Agent": user_agent})
@@ -260,7 +260,7 @@ def iter_url_batches(
 
     :return: 字典，key 是文件 id，value 是下载链接，自动忽略所有无效项目
     """
-    if isinstance(client, str):
+    if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     if headers := request_kwargs.get("headers"):
         request_kwargs["headers"] = dict(headers, **{"User-Agent": user_agent})
@@ -385,7 +385,7 @@ def iter_files_with_url(
 
     :return: 迭代器，产生文件信息，并增加一个 "url" 作为下载链接
     """
-    if isinstance(client, str):
+    if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     params = dict(
         cur=cur, 
@@ -511,7 +511,7 @@ def iter_images_with_url(
 
     :return: 迭代器，产生文件信息，并增加一个 "url" 作为下载链接
     """
-    if isinstance(client, str):
+    if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     params = dict(
         cur=cur, 
@@ -643,7 +643,7 @@ def iter_subtitles_with_url(
 
     :return: 迭代器，产生文件信息，并增加一个 "url" 作为下载链接
     """
-    if isinstance(client, str):
+    if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     def gen_step():
         nonlocal suffixes
@@ -785,7 +785,7 @@ def iter_subtitle_batches(
 
     :return: 迭代器，产生文件信息，并增加一个 "url" 作为下载链接，文件信息中的 file_id 是复制所得的文件信息，不是原来文件的 id
     """
-    if isinstance(client, str):
+    if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     if batch_size <= 0:
         batch_size = 1_000
@@ -919,7 +919,7 @@ def make_strm(
     origin = origin.rstrip("/")
     savedir = fsdecode(save_dir)
     makedirs(savedir, exist_ok=True)
-    if isinstance(client, str):
+    if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
     mode = "w" if update else "x"
@@ -1272,7 +1272,7 @@ def make_strm_by_export_dir(
     origin = origin.rstrip("/")
     savedir = fsdecode(save_dir)
     makedirs(savedir, exist_ok=True)
-    if isinstance(client, str):
+    if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     mode = "w" if update else "x"
     if discard:

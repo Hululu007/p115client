@@ -24,8 +24,10 @@ reference/type
 reference/tool/download
 reference/tool/edit
 reference/tool/export_dir
+reference/tool/fs_file
 reference/tool/iterdir
 reference/tool/life
+reference/tool/pool
 reference/tool/request
 reference/tool/xys
 ```

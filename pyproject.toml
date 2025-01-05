@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "p115client"
-version = "0.0.3.17.7"
+version = "0.0.4"
 description = "Python 115 webdisk client."
 authors = ["ChenyangGao <wosiwujm@gmail.com>"]
 license = "MIT"
@@ -14,7 +14,7 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3 :: Only",
     "Operating System :: OS Independent",
     "Intended Audience :: Developers",
@@ -27,7 +27,7 @@ include = [
 ]
 
 [tool.poetry.dependencies]
-python = "^3.11"
+python = "^3.12"
 ed2k = ">=0.0.2.1"
 http_response = "*"
 httpx = "*"
@@ -37,6 +37,7 @@ multidict = "*"
 orjson = "*"
 p115cipher = ">=0.0.3"
 posixpatht = ">=0.0.3"
+python-argtools = ">=0.0.1"
 python-asynctools = ">=0.0.6.1"
 python-cookietools = ">=0.0.2.1"
 python-dictattr = ">=0.0.4"

@@ -40,12 +40,15 @@ def has_id(
     con: Connection | Cursor, 
     id: int, 
     /, 
+    is_alive: bool = True, 
 ) -> int:
     if id == 0:
         return 1
     elif id < 0:
         return 0
     sql = "SELECT 1 FROM data WHERE id=?"
+    if is_alive:
+        sql += " AND is_alive"
     return find(con, sql, id, 0)
 
 
@@ -53,8 +56,11 @@ def iter_existing_id(
     con: Connection | Cursor, 
     ids: Iterable[int], 
     /, 
+    is_alive: bool = True, 
 ) -> Iterator[int]:
     sql = "SELECT id FROM data WHERE id IN (%s)" % (",".join(map("%d".__mod__, ids)) or "NULL")
+    if is_alive:
+        sql += " AND is_alive"
     return (id for id, in query(con, sql))
 
 
@@ -166,6 +172,7 @@ def get_id(
     pickcode: str = "", 
     sha1: str = "", 
     path: str = "", 
+    is_alive: bool = True, 
 ) -> int:
     """查询匹配某个字段的文件或目录的 id
 
@@ -176,17 +183,18 @@ def get_id(
 
     :return: 当前节点的 id
     """
+    insertion = " AND is_alive" if is_alive else ""
     if pickcode:
         return find(
             con, 
-            "SELECT id FROM data WHERE pickcode=? LIMIT 1", 
+            f"SELECT id FROM data WHERE pickcode=?{insertion} LIMIT 1", 
             pickcode, 
             default=FileNotFoundError(pickcode), 
         )
     elif sha1:
         return find(
             con, 
-            "SELECT id FROM data WHERE sha1=? LIMIT 1", 
+            f"SELECT id FROM data WHERE sha1=?{insertion} LIMIT 1", 
             sha1, 
             default=FileNotFoundError(sha1), 
         )
@@ -201,6 +209,7 @@ def get_pickcode(
     id: int = -1, 
     sha1: str = "", 
     path: str = "", 
+    is_alive: bool = True, 
 ) -> str:
     """查询匹配某个字段的文件或目录的提取码
 
@@ -211,19 +220,20 @@ def get_pickcode(
 
     :return: 当前节点的提取码
     """
+    insertion = " AND is_alive" if is_alive else ""
     if id >= 0:
         if not id:
             return ""
         return find(
             con, 
-            "SELECT pickcode FROM data WHERE id=? LIMIT 1;", 
+            f"SELECT pickcode FROM data WHERE id=?{insertion} LIMIT 1;", 
             id, 
             default=FileNotFoundError(id), 
         )
     elif sha1:
         return find(
             con, 
-            "SELECT pickcode FROM data WHERE sha1=? LIMIT 1;", 
+            f"SELECT pickcode FROM data WHERE sha1=?{insertion} LIMIT 1;", 
             sha1, 
             default=FileNotFoundError(sha1), 
         )
@@ -239,6 +249,7 @@ def get_sha1(
     id: int = -1, 
     pickcode: str = "", 
     path: str = "", 
+    is_alive: bool = True, 
 ) -> str:
     """查询匹配某个字段的文件的 sha1
 
@@ -249,19 +260,20 @@ def get_sha1(
 
     :return: 当前节点的 sha1 校验散列值
     """
+    insertion = " AND is_alive" if is_alive else ""
     if id >= 0:
         if not id:
             return ""
         return find(
             con, 
-            "SELECT sha1 FROM data WHERE id=? LIMIT 1;", 
+            f"SELECT sha1 FROM data WHERE id=?{insertion} LIMIT 1;", 
             id, 
             default=FileNotFoundError(id), 
         )
     elif pickcode:
         return find(
             con, 
-            "SELECT sha1 FROM data WHERE pickcode=? LIMIT 1;", 
+            f"SELECT sha1 FROM data WHERE pickcode=?{insertion} LIMIT 1;", 
             pickcode, 
             default=FileNotFoundError(pickcode), 
         )

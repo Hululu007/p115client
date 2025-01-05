@@ -3,10 +3,10 @@
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __all__ = [
-    "BEHAVIOR_TYPE_TO_NAME", "BEHAVIOR_NAME_TO_TYPE", "life_show", 
-    "iter_life_list", "iter_life_behavior", 
+    "BEHAVIOR_TYPE_TO_NAME", "BEHAVIOR_NAME_TO_TYPE", "life_show", "iter_life_list", 
+    "iter_life_behavior_once", "iter_life_behavior", "iter_life_behavior_list", 
 ]
-__doc__ = "这个模块提供了一些和 115 生活事件有关的函数"
+__doc__ = "这个模块提供了一些和 115 生活操作事件有关的函数"
 
 from asyncio import sleep as async_sleep
 from collections.abc import AsyncIterator, Container, Coroutine, Iterator
@@ -20,7 +20,7 @@ from p115client import check_response, P115Client
 
 
 IGNORE_BEHAVIOR_TYPES: Final = frozenset((3, 4, 7, 8, 9, 10, 19))
-#: 115 生活事件名称到类型的映射
+#: 115 生活操作事件名称到类型的映射
 BEHAVIOR_NAME_TO_TYPE: Final = {
     "upload_image_file": 1, 
     "upload_file": 2, 
@@ -39,7 +39,7 @@ BEHAVIOR_NAME_TO_TYPE: Final = {
     "folder_rename": 20, 
     "delete_file": 22, 
 }
-#: 115 生活事件类型到名称的映射
+#: 115 生活操作事件类型到名称的映射
 BEHAVIOR_TYPE_TO_NAME: Final = {v: k for k, v in BEHAVIOR_NAME_TO_TYPE.items()}
 
 
@@ -73,7 +73,7 @@ def life_show(
 
     :return: 接口返回值
     """
-    if isinstance(client, str):
+    if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     return client.life_calendar_setoption(async_=async_, **request_kwargs)
 
@@ -103,7 +103,7 @@ def iter_life_list(
     async_: Literal[False, True] = False, 
     **request_kwargs, 
 ) -> AsyncIterator[dict] | Iterator[dict]:
-    """持续拉取 115 生活事件列表
+    """持续拉取 115 生活操作事件列表
 
     .. caution::
         115 并没有收集 复制文件 和 文件改名 的事件，以及第三方上传可能会没有 上传事件 ("upload_image_file" 和 "upload_file")
@@ -113,9 +113,9 @@ def iter_life_list(
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
-    :return: 迭代器，产生 115 生活事件日志数据字典
+    :return: 迭代器，产生 115 生活操作事件日志数据字典
     """
-    if isinstance(client, str):
+    if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     life_list = partial(client.life_list, **request_kwargs)
     life_behavior_detail = partial(client.life_behavior_detail_app, **request_kwargs)
@@ -170,11 +170,96 @@ def iter_life_list(
 
 
 @overload
+def iter_life_behavior_once(
+    client: str | P115Client, 
+    from_time: int | float = 0, 
+    from_id: int = 0, 
+    type: str = "", 
+    date: str = "", 
+    app: str = "web", 
+    *, 
+    async_: Literal[False] = False, 
+    **request_kwargs, 
+) -> Iterator[dict]:
+    ...
+@overload
+def iter_life_behavior_once(
+    client: str | P115Client, 
+    from_time: int | float = 0, 
+    from_id: int = 0, 
+    type: str = "", 
+    date: str = "", 
+    app: str = "web", 
+    *, 
+    async_: Literal[True], 
+    **request_kwargs, 
+) -> AsyncIterator[dict]:
+    ...
+def iter_life_behavior_once(
+    client: str | P115Client, 
+    from_time: int | float = 0, 
+    from_id: int = 0, 
+    type: str = "", 
+    date: str = "", 
+    app: str = "web", 
+    *, 
+    async_: Literal[False, True] = False, 
+    **request_kwargs, 
+) -> AsyncIterator[dict] | Iterator[dict]:
+    """拉取一组 115 生活操作事件
+
+    .. caution::
+        115 并没有收集 复制文件 和 文件改名 的事件，以及第三方上传可能会没有 上传事件 ("upload_image_file" 和 "upload_file")
+
+    :param client: 115 客户端或 cookies
+    :param from_time: 开始时间（含），若为 0 则从当前时间开始，若小于 0 则从最早开始
+    :param from_id: 开始的事件 id （不含）
+    :param type: 指定拉取的操作事件名称，若不指定则是全部
+    :param date: 日期，格式为 YYYY-MM-DD，若指定则只拉取这一天的数据
+    :param app: 使用某个 app （设备）的接口
+    :param async_: 是否异步
+    :param request_kwargs: 其它请求参数
+
+    :return: 迭代器，产生 115 生活操作事件日志数据字典
+    """
+    if not isinstance(client, P115Client):
+        client = P115Client(client, check_for_relogin=True)
+    if app in ("web", "desktop", "harmony"):
+        life_behavior_detail = partial(client.life_behavior_detail, **request_kwargs)
+    else:
+        life_behavior_detail = partial(client.life_behavior_detail_app, app=app, **request_kwargs)
+    def gen_step():
+        payload = {"type": type, "date": date, "limit": 64 if from_time or from_id else 1000, "offset": 0}
+        seen: set[str] = set()
+        seen_add = seen.add
+        resp = yield life_behavior_detail(payload, async_=async_)
+        events = check_response(resp)["data"]["list"]
+        payload["limit"] = 1000
+        offset = 0
+        while events:
+            for event in events:
+                if from_id and int(event["id"]) == from_id or from_time and int(event["update_time"]) < from_time:
+                    return
+                fid = event["file_id"]
+                if fid not in seen:
+                    yield Yield(event, identity=True)
+                    seen_add(fid)
+            offset += len(events)
+            if offset >= int(resp["data"]["count"]):
+                return
+            payload["offset"] = offset
+            resp = yield life_behavior_detail(payload, async_=async_)
+            events = check_response(resp)["data"]["list"]
+    return run_gen_step_iter(gen_step, async_=async_)
+
+
+@overload
 def iter_life_behavior(
     client: str | P115Client, 
     from_time: int | float = 0, 
     from_id: int = 0, 
     interval: int | float = 0, 
+    type: str = "", 
     ignore_types: None | Container[int] = IGNORE_BEHAVIOR_TYPES, 
     app: str = "web", 
     *, 
@@ -188,6 +273,7 @@ def iter_life_behavior(
     from_time: int | float = 0, 
     from_id: int = 0, 
     interval: int | float = 0, 
+    type: str = "", 
     ignore_types: None | Container[int] = IGNORE_BEHAVIOR_TYPES, 
     app: str = "web", 
     *, 
@@ -200,13 +286,14 @@ def iter_life_behavior(
     from_time: int | float = 0, 
     from_id: int = 0, 
     interval: int | float = 0, 
+    type: str = "", 
     ignore_types: None | Container[int] = IGNORE_BEHAVIOR_TYPES, 
     app: str = "web", 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
 ) -> AsyncIterator[dict] | Iterator[dict]:
-    """持续拉取 115 生活事件
+    """持续拉取 115 生活操作事件
 
     .. caution::
         115 并没有收集 复制文件 和 文件改名 的事件，以及第三方上传可能会没有 上传事件 ("upload_image_file" 和 "upload_file")
@@ -215,60 +302,122 @@ def iter_life_behavior(
     :param from_time: 开始时间（含），若为 0 则从当前时间开始，若小于 0 则从最早开始
     :param from_id: 开始的事件 id （不含）
     :param interval: 睡眠时间间隔，如果小于等于 0，则不睡眠
-    :param ignore_types: 忽略的事件类型
+    :param type: 指定拉取的操作事件名称
+    :param ignore_types: 一组要被忽略的操作事件类型代码，仅当 `type` 为空时生效
     :param app: 使用某个 app （设备）的接口
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
-    :return: 迭代器，产生 115 生活事件日志数据字典
+    :return: 迭代器，产生 115 生活操作事件日志数据字典
     """
-    if isinstance(client, str):
+    if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
-    if app in ("web", "desktop", "harmony"):
-        life_behavior_detail = partial(client.life_behavior_detail, **request_kwargs)
-    else:
-        life_behavior_detail = partial(client.life_behavior_detail_app, app=app, **request_kwargs)
-    first_limit = 64
     def gen_step():
         nonlocal from_time, from_id
         if from_time == 0:
             from_time = time()
-        seen: set[str] = set()
-        seen_add = seen.add
+        first_loop = True
         while True:
-            seen.clear()
-            offset = 0
-            resp = yield life_behavior_detail({"limit": first_limit}, async_=async_)
-            events = check_response(resp)["data"]["list"]
-            if not events:
-                continue
-            new_from_id = int(events[0]["id"])
-            if from_id == new_from_id:
-                continue
-            new_from_time = int(events[0]["update_time"])
-            offset = first_limit
-            while True:
-                for event in events:
-                    if ignore_types and event["type"] in ignore_types:
-                        continue
-                    if int(event["id"]) == from_id or int(event["update_time"]) < from_time:
-                        break
-                    fid = event["file_id"]
-                    if fid not in seen:
-                        yield Yield(event, identity=True)
-                        seen_add(fid)
+            if first_loop:
+                first_loop = False
+            elif interval > 0:
+                if async_:
+                    yield async_sleep(interval)
                 else:
-                    if interval > 0:
-                        if async_:
-                            yield async_sleep(interval)
-                        else:
-                            sleep(interval)
-                    resp = yield life_behavior_detail({"limit": 1000, "offset": offset}, async_=async_)
-                    events = check_response(resp)["data"]["list"]
-                    offset += 1000
-                    continue
-                from_id = new_from_id
-                from_time = new_from_time
-                break
+                    sleep(interval)
+            it = iter_life_behavior_once(client, from_time, from_id, type, app=app, async_=async_, **request_kwargs)
+            try:
+                sub_first_loop = True
+                while True:
+                    event = (yield anext(it)) if async_ else next(it) # type: ignore
+                    if sub_first_loop:
+                        from_id = int(event["id"])
+                        from_time = int(event["update_time"])
+                        sub_first_loop = False
+                    if not type and ignore_types and event["type"] in ignore_types:
+                        continue
+                    yield Yield(event, identity=True)
+            except (StopIteration, StopAsyncIteration):
+                pass
+    return run_gen_step_iter(gen_step, async_=async_)
+
+
+@overload
+def iter_life_behavior_list(
+    client: str | P115Client, 
+    from_time: int | float = 0, 
+    from_id: int = 0, 
+    type: str = "", 
+    ignore_types: None | Container[int] = IGNORE_BEHAVIOR_TYPES, 
+    app: str = "web", 
+    *, 
+    async_: Literal[False] = False, 
+    **request_kwargs, 
+) -> Iterator[list[dict]]:
+    ...
+@overload
+def iter_life_behavior_list(
+    client: str | P115Client, 
+    from_time: int | float = 0, 
+    from_id: int = 0, 
+    type: str = "", 
+    ignore_types: None | Container[int] = IGNORE_BEHAVIOR_TYPES, 
+    app: str = "web", 
+    *, 
+    async_: Literal[True], 
+    **request_kwargs, 
+) -> AsyncIterator[list[dict]]:
+    ...
+def iter_life_behavior_list(
+    client: str | P115Client, 
+    from_time: int | float = 0, 
+    from_id: int = 0, 
+    type: str = "", 
+    ignore_types: None | Container[int] = IGNORE_BEHAVIOR_TYPES, 
+    app: str = "web", 
+    *, 
+    async_: Literal[False, True] = False, 
+    **request_kwargs, 
+) -> AsyncIterator[list[dict]] | Iterator[list[dict]]:
+    """持续拉取 115 生活操作事件列表
+
+    .. caution::
+        115 并没有收集 复制文件 和 文件改名 的事件，以及第三方上传可能会没有 上传事件 ("upload_image_file" 和 "upload_file")
+
+    :param client: 115 客户端或 cookies
+    :param from_time: 开始时间（含），若为 0 则从当前时间开始，若小于 0 则从最早开始
+    :param from_id: 开始的事件 id （不含）
+    :param type: 指定拉取的操作事件名称
+    :param ignore_types: 一组要被忽略的操作事件类型代码，仅当 `type` 为空时生效
+    :param app: 使用某个 app （设备）的接口
+    :param async_: 是否异步
+    :param request_kwargs: 其它请求参数
+
+    :return: 迭代器，产生 115 生活操作事件日志数据字典
+    """
+    if not isinstance(client, P115Client):
+        client = P115Client(client, check_for_relogin=True)
+    def gen_step():
+        nonlocal from_time, from_id
+        if from_time == 0:
+            from_time = time()
+        while True:
+            ls: list[dict] = []
+            push = ls.append
+            it = iter_life_behavior_once(client, from_time, from_id, type, app=app, async_=async_, **request_kwargs)
+            try:
+                first_loop = True
+                while True:
+                    event = (yield anext(it)) if async_ else next(it) # type: ignore
+                    if first_loop:
+                        from_id = int(event["id"])
+                        from_time = int(event["update_time"])
+                        first_loop = False
+                    if not type and ignore_types and event["type"] in ignore_types:
+                        continue
+                    push(event)
+            except (StopIteration, StopAsyncIteration):
+                pass
+            yield Yield(ls, identity=True)
     return run_gen_step_iter(gen_step, async_=async_)
 

@@ -47,6 +47,10 @@ __doc__ = """\
 
     \x1b[3;35m{"cookies": "一行写一个 cookies"}\x1b[0m
 
+如果要查询目前所有的 cookies，使用接口（请求时需携带和命令行传入的相同的密码）
+
+    \x1b[1mGET\x1b[0m \x1b[4;34mhttp://localhost:8000/<cookies?password={password}\x1b[0m
+
 🌰 查询示例：
 
     0. 查询 \x1b[3;36mpickcode\x1b[0m
@@ -95,7 +99,7 @@ from argparse import ArgumentParser, Namespace, RawTextHelpFormatter
 
 parser = ArgumentParser(description=__doc__, formatter_class=RawTextHelpFormatter)
 parser.add_argument("-c", "--cookies", default="", help="cookies 字符串，优先级高于 -cp/--cookies-path，如果有多个则一行写一个")
-parser.add_argument("-p", "--password", default="", help="执行 POST 请求所需密码，仅当提供时，才会启用一组 POST 接口")
+parser.add_argument("-p", "--password", default="", help="执行后台信息操作请求所需密码，仅当提供时，才会启用一组后台信息操作接口")
 parser.add_argument("-t", "--token", default="", help="签名所用的 token，如果提供，则请求必须携带签名，即 sign 查询参数")
 parser.add_argument("-cp", "--cookies-path", default="", help="cookies 文件保存路径，默认为当前工作目录下的 115-cookies.txt，如果有多个则一行写一个")
 parser.add_argument("-H", "--host", default="0.0.0.0", help="ip 或 hostname，默认值：'0.0.0.0'")

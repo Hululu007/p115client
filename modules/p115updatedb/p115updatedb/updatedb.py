@@ -9,13 +9,15 @@ import logging
 from collections import deque
 from collections.abc import Collection, Iterator, Iterable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
+from copy import copy
 from errno import EBUSY
-from itertools import cycle, takewhile
+from itertools import cycle, filterfalse, takewhile
 from math import inf, isnan, isinf
+from operator import itemgetter
 from posixpath import splitext
 from sqlite3 import connect, Connection, Cursor
 from string import digits
-from time import perf_counter
+from time import time
 from typing import cast, Final, NoReturn
 
 from concurrenttools import run_as_thread
@@ -24,8 +26,9 @@ from p115client import check_response, P115Client
 from p115client.const import CLASS_TO_TYPE, SUFFIX_TO_TYPE
 from p115client.exception import BusyOSError, DataError
 from p115client.tool.edit import update_desc, update_star
+from p115client.tool.fs_files import iter_fs_files_threaded
 from p115client.tool.iterdir import filter_na_ids, get_id_to_path, iter_stared_dirs
-from p115client.tool.life import iter_life_behavior, IGNORE_BEHAVIOR_TYPES
+from p115client.tool.life import iter_life_behavior, iter_life_behavior_once, IGNORE_BEHAVIOR_TYPES
 from sqlitetools import execute, find, query, transact, upsert_items, AutoCloseConnection
 
 from .query import (
@@ -48,7 +51,7 @@ handler.setFormatter(logging.Formatter(
 ))
 logger.addHandler(handler)
 # NOTE: 轮流获取 proapi 的 origin
-get_proapi = cycle(("http://proapi.115.com", "http://pro.api.115.com")).__next__
+get_proapi_origin = cycle(("https://proapi.115.com", "http://pro.api.115.com")).__next__
 
 
 def initdb(con: Connection | Cursor, /, disable_event: bool = False) -> Cursor:
@@ -79,14 +82,6 @@ CREATE TABLE IF NOT EXISTS data (
     updated_at DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+08:00', 'now', '+8 hours')) -- 最近一次更新时间
 );
 
--- dir 表，用来存储所有看到的目录数据
-CREATE TABLE IF NOT EXISTS dir (
-    id INTEGER NOT NULL PRIMARY KEY,   -- 目录的 id
-    parent_id INTEGER NOT NULL,        -- 上级目录的 id
-    name TEXT NOT NULL,                -- 名字
-    mtime INTEGER NOT NULL DEFAULT 0   -- 更新时间戳，如果名字、备注被设置（即使值没变），或者进出回收站，或者增删直接子节点，或者设置封面，会更新此值，但移动并不更新
-);
-
 -- 创建 life 表，用来收集 115 生活事件
 CREATE TABLE IF NOT EXISTS life (
     id INTEGER NOT NULL PRIMARY KEY, -- 事件 id
@@ -100,7 +95,7 @@ CREATE TABLE IF NOT EXISTS event (
     id INTEGER NOT NULL,   -- 文件或目录的 id
     old JSON DEFAULT NULL, -- 更新前的值
     diff JSON NOT NULL,    -- 将更新的值
-    fs JSON NOT NULL,      -- 发生的文件系统事件列表：add:新增，remove:移除，revert:还原，move:移动，rename:重名
+    fs JSON DEFAULT NULL,  -- 发生的文件系统事件：add:新增，remove:移除，revert:还原，move:移动，rename:重名
     created_at DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+08:00', 'now', '+8 hours')) -- 创建时间
 );
 
@@ -120,7 +115,6 @@ CREATE INDEX IF NOT EXISTS idx_data_pc ON data(pickcode);
 CREATE INDEX IF NOT EXISTS idx_data_sha1 ON data(sha1);
 CREATE INDEX IF NOT EXISTS idx_data_name ON data(name);
 CREATE INDEX IF NOT EXISTS idx_data_utime ON data(updated_at);
-CREATE INDEX IF NOT EXISTS idx_dir_mtime ON dir(mtime);
 CREATE INDEX IF NOT EXISTS idx_life_create ON life(create_time);
 CREATE INDEX IF NOT EXISTS idx_event_create ON event(created_at);
 """
@@ -150,22 +144,29 @@ AFTER INSERT ON data
 FOR EACH ROW
 BEGIN
     INSERT INTO event(id, diff, fs) VALUES (
-        new.id, 
-        json_object(
-            'id', new.id, 
-            'parent_id', new.parent_id, 
-            'pickcode', new.pickcode, 
-            'sha1', new.sha1, 
-            'name', new.name, 
-            'size', new.size, 
-            'is_dir', new.is_dir, 
-            'type', new.type, 
-            'ctime', new.ctime, 
-            'mtime', new.mtime, 
-            'is_collect', new.is_collect, 
-            'is_alive', new.is_alive
+        NEW.id, 
+        JSON_OBJECT(
+            'id', NEW.id, 
+            'parent_id', NEW.parent_id, 
+            'pickcode', NEW.pickcode, 
+            'sha1', NEW.sha1, 
+            'name', NEW.name, 
+            'size', NEW.size, 
+            'is_dir', NEW.is_dir, 
+            'type', NEW.type, 
+            'ctime', NEW.ctime, 
+            'mtime', NEW.mtime, 
+            'is_collect', NEW.is_collect, 
+            'is_alive', NEW.is_alive
         ), 
-        JSON_ARRAY('add')
+        JSON_OBJECT('type', 'insert', 'is_dir', NEW.is_dir, 'path', (
+            WITH ancestors AS (
+                SELECT parent_id, '/' || REPLACE(name, '/', '|') AS path FROM data WHERE id=NEW.id
+                UNION ALL
+                SELECT data.parent_id, '/' || REPLACE(data.name, '/', '|') || ancestors.path FROM ancestors JOIN data ON (ancestors.parent_id = data.id) WHERE ancestors.parent_id
+            )
+            SELECT path FROM ancestors WHERE parent_id = 0
+        ), 'op', JSON_ARRAY('add'))
     );
 END;
 
@@ -184,8 +185,34 @@ BEGIN
                 (CASE WHEN diff->>'is_alive' = 0 THEN 'remove' END), 
                 (CASE WHEN diff->>'name' IS NOT NULL THEN 'rename' END), 
                 (CASE WHEN diff->>'parent_id' IS NOT NULL THEN 'move' END)
+        ), op(op) AS (
+            SELECT JSON_GROUP_ARRAY(event) FROM t WHERE event IS NOT NULL
         )
-        SELECT JSON_GROUP_ARRAY(event) FROM t WHERE event IS NOT NULL
+        SELECT JSON_OBJECT('type', 'update', 'is_dir', NEW.is_dir, 'path0', (
+            CASE 
+                WHEN OLD.parent_id = 0 THEN '/' || REPLACE(OLD.name, '/', '|') 
+                ELSE (
+                    WITH ancestors AS (
+                        SELECT parent_id, '/' || REPLACE(name, '/', '|') AS path FROM data WHERE id=OLD.parent_id
+                        UNION ALL
+                        SELECT data.parent_id, '/' || REPLACE(data.name, '/', '|') || ancestors.path FROM ancestors JOIN data ON (ancestors.parent_id = data.id) WHERE ancestors.parent_id
+                    )
+                    SELECT path || '/' || REPLACE(OLD.name, '/', '|') FROM ancestors WHERE parent_id = 0
+                ) 
+            END
+        ), 'path', (
+            CASE 
+                WHEN NEW.parent_id = 0 THEN '/' || REPLACE(NEW.name, '/', '|')
+                ELSE (
+                    WITH ancestors AS (
+                        SELECT parent_id, '/' || REPLACE(name, '/', '|') AS path FROM data WHERE id=NEW.parent_id
+                        UNION ALL
+                        SELECT data.parent_id, '/' || REPLACE(data.name, '/', '|') || ancestors.path FROM ancestors JOIN data ON (ancestors.parent_id = data.id) WHERE ancestors.parent_id
+                    )
+                    SELECT path || '/' || REPLACE(NEW.name, '/', '|') FROM ancestors WHERE parent_id = 0
+                )
+            END
+        ), 'op', JSON(op.op)) FROM op WHERE JSON_ARRAY_LENGTH(op.op)
     )
     FROM (
         WITH data(id, old, new) AS (
@@ -234,16 +261,6 @@ END;"""
     return con.executescript(sql)
 
 
-def insert_dir_items(con, items, commit: bool = False):
-    upsert_items(
-        con, 
-        items, 
-        table="dir", 
-        fields=("id", "parent_id", "name", "mtime"), 
-        commit=commit, 
-    )
-
-
 def kill_items(
     con: Connection | Cursor, 
     ids: int | Iterable[int], 
@@ -266,6 +283,80 @@ def kill_items(
     return execute(con, sql, commit=commit)
 
 
+# TODO: 下面两个函数（3. 顺便再加一个版本，用 update_desc 搭配星标列表（以前的方法））放到 p115client
+# TODO: (4. 再实现一个版本，完全不使用星标，通过 fs_file 实现（暂时试一下），需要能够进行 20 并发量)
+def iter_updated_stared_dirs(
+    client: P115Client, 
+    cids: Iterable[int], 
+) -> Iterator[dict]:
+    """
+    """
+    ts = int(time())
+    cids = set(cids)
+    update_star(client, cids)
+    discard = cids.discard
+    for event in filterfalse(
+        itemgetter("file_category"), 
+        iter_life_behavior_once(client, from_time=ts, type="star_file", app="android")
+    ):
+        fid = int(event["file_id"])
+        yield {
+            "id": fid, 
+            "parent_id": int(event["parent_id"]), 
+            "name": event["file_name"], 
+            "pickcode": event["pick_code"], 
+            "is_dir": 1, 
+        }
+        discard(fid)
+        if not cids:
+            break
+
+
+def sort(
+    data: list[dict], 
+    /, 
+    reverse: bool = False, 
+) -> list[dict]:
+    """
+    """
+    d: dict[int, int] = {a["id"]: a["parent_id"] for a in data}
+    depth_d: dict[int, int] = {}
+    def depth(id: int, /) -> int:
+        try:
+            return depth_d[id]
+        except KeyError:
+            if id in d:
+                return 1 + depth(d[id])
+            return 0
+    data.sort(key=lambda a: depth(a["id"]), reverse=reverse)
+    return data
+
+
+def load_ancestors(
+    con: Connection | Cursor, 
+    /, 
+    client: P115Client, 
+    data: list[dict], 
+    all_are_files: bool = False, 
+    refresh: bool = False, 
+) -> list[dict]:
+    """
+    """
+    seen = {0}
+    if not all_are_files:
+        seen.update(a["id"] for a in data if a["is_dir"])
+    ancestors: list[dict] = []
+    while pids := {pid for a in data if (pid := a["parent_id"]) not in seen}:
+        seen |= pids
+        if not refresh:
+            pids.difference_update(iter_existing_id(con, pids, is_alive=False))
+        data = list(iter_updated_stared_dirs(client, pids))
+        ancestors.extend(data)
+    if ancestors:
+        sort(ancestors)
+    return ancestors
+
+
 def update_stared_dirs(
     con: Connection | Cursor, 
     /, 
@@ -280,24 +371,40 @@ def update_stared_dirs(
 
     :return: 拉取下来的新增或更新的目录的信息字典列表
     """
-    mtime = find(con, "SELECT COALESCE(MAX(mtime), 0) FROM dir")
-    data: list[dict] = list(takewhile(
-        lambda attr: attr["mtime"] > mtime or has_id(con, attr["id"]), 
-        iter_stared_dirs(
+    mtime = find(con, "SELECT COALESCE(MAX(mtime), 0) FROM data WHERE is_dir")
+    data: list[dict] = []
+    if mtime:
+        data.extend(takewhile(
+            lambda attr: attr["mtime"] > mtime or not has_id(con, attr["id"]), 
+            iter_stared_dirs(
+                client, 
+                order="user_utime", 
+                asc=0, 
+                first_page_size=64, 
+                id_to_dirnode=ZERO_DICT, 
+                normalize_attr=normalize_attr, 
+                app="android", 
+                **request_kwargs, 
+            ), 
+        ))
+    else:
+        data_add = data.append
+        for resp in iter_fs_files_threaded(
             client, 
-            order="user_utime", 
-            asc=0, 
-            first_page_size=64, 
-            id_to_dirnode=ZERO_DICT, 
-            normalize_attr=normalize_attr, 
+            {"show_dir": 1, "star": 1, "fc_mix": 0}, 
             app="android", 
+            cooldown=0.5, 
+            max_workers=64, 
             **request_kwargs, 
-        ), 
-    ))
+        ):
+            for attr in map(normalize_attr, resp["data"]):
+                if not attr["is_dir"]:
+                    break
+                data_add(attr)
     if data:
-        with transact(con) as cur:
-            insert_dir_items(cur, data)
-            upsert_items(cur, data)
+        ancestors = load_ancestors(con, client, data)
+        upsert_items(con, ancestors, commit=True)
+        upsert_items(con, sort(data), commit=True)
     return data
 
 
@@ -311,6 +418,8 @@ def is_timeouterror(exc: Exception) -> bool:
     return False
 
 
+# TODO: 这个函数可以被删除，或者被优化，使用 p115client.tool.iter_fs_files 进行优化
+# TODO: 增加一个新的函数，使用 fs_files 和 cookies 池，当且仅当总文件数小于一定值（比如 11500），则进行采用
 def iterdir(
     client: P115Client, 
     cid: int = 0, 
@@ -344,11 +453,11 @@ def iterdir(
         "asc": 0, "cid": cid, "custom_order": 1, "fc_mix": 1, "o": "user_utime", "offset": 0, 
         "limit": first_page_size, "show_dir": 1, **payload, 
     }
+    request_kwargs.setdefault("base_url", get_proapi_origin)
     fs_files = client.fs_files_app
     def get_files(payload, /):
         while True:
             try:
-                request_kwargs["base_url"] = get_proapi()
                 return check_response(fs_files(payload, **request_kwargs))
             except DataError:
                 if payload["limit"] <= 1150:
@@ -408,6 +517,8 @@ def iterdir(
     return count, ancestors, seen, iterate()
 
 
+# TODO: 增加一个参数，用来说明总文件数，以决定是否并发拉取
+# TODO: 可以支持全量拉取，不做任何的比较
 def diff_dir(
     con: Connection | Cursor, 
     client: P115Client, 
@@ -469,13 +580,10 @@ def diff_dir(
                 remove_extend(his_ids - seen)
         return result
     finally:
-        with transact(con) as cur:
-            if ancestors:
-                upsert_items(cur, ancestors, extras={"is_alive": 1, "is_dir": 1})
-                upsert_items(cur, ancestors, table="dir")
-            if dirs:
-                upsert_items(cur, dirs, extras={"is_alive": 1})
-                insert_dir_items(cur, dirs)
+        if ancestors:
+            upsert_items(con, ancestors, extras={"is_alive": 1, "is_dir": 1}, commit=True)
+        if dirs:
+            upsert_items(con, dirs, extras={"is_alive": 1}, commit=True)
 
 
 def normalize_attr(info: Mapping, /) -> dict:
@@ -559,6 +667,8 @@ def _init_client(
     return client, con
 
 
+# TODO: 增加一个参数，用来输出日志
+# TODO: 增加一个变种，作为迭代器使用，每迭代因此，就执行一次处理
 def updatedb_life(
     client: str | P115Client, 
     dbfile: None | str | Connection | Cursor = None, 
@@ -618,13 +728,13 @@ def updatedb_life(
                 attr["type"] = 2
             else:
                 attr["type"] = SUFFIX_TO_TYPE.get(splitext(attr["name"])[-1].lower(), 99)
-            if not has_id(con, parent_id):
+            if not has_id(con, parent_id, is_alive=False):
                 ancestors: list[dict] = []
+                request_kwargs.setdefault("base_url", get_proapi_origin)
                 try:
                     if parent_id == 0:
                         pass
                     elif is_dir:
-                        request_kwargs["base_url"] = get_proapi()
                         resp = check_response(client.fs_files_app({"cid": id, "hide_data": 1}, **request_kwargs))
                         if int(resp["path"][-1]["cid"]) == id:
                             ancestors.extend(
@@ -632,7 +742,6 @@ def updatedb_life(
                                 for a in resp["path"][1:]
                             )
                     else:
-                        request_kwargs["base_url"] = get_proapi()
                         resp = client.fs_category_get_app(id, **request_kwargs)
                         if resp:
                             check_response(resp)
@@ -644,13 +753,8 @@ def updatedb_life(
                 except FileNotFoundError:
                     pass
                 if ancestors:
-                    with transact(con) as cur:
-                        upsert_items(cur, ancestors, extras={"is_alive": 1, "is_dir": 1})
-                        upsert_items(cur, ancestors, table="dir")
-            with transact(con) as cur:
-                if is_dir:
-                    insert_dir_items(cur, attr)
-                upsert_items(cur, attr)
+                    upsert_items(con, ancestors, extras={"is_alive": 1, "is_dir": 1}, commit=True)
+            upsert_items(con, attr, commit=True)
         execute(
             con, 
             "INSERT OR IGNORE INTO life(id, data, create_time) VALUES (?,?,?)", 
@@ -686,6 +790,7 @@ def updatedb_one(
     return to_upsert, to_remove
 
 
+# TODO: 返回值为更新数量，而不是具体值，以便用来输出日志
 def updatedb_tree(
     client: str | P115Client, 
     dbfile: None | str | Connection | Cursor = None, 
@@ -705,19 +810,32 @@ def updatedb_tree(
     :return: 2 元组，1) 已更替的数据列表，2) 已移除的 id 列表
     """
     client, con = _init_client(client, dbfile)
-    to_upsert, to_remove = diff_dir(con, client, id, tree=True, **request_kwargs)
-    custom_no_dir_moved = no_dir_moved
-    if id and to_remove:
+    # TODO: 需要特别实现一下，多个版本
+    # TODO: 如果强制进行刷新，则也可能有 to_remove，首先获取此目录树下的 id 列表，然后重新拉取，如果有 id 找不到，才是删除，这样可以避免过多删除
+    #to_upsert, to_remove = diff_dir(con, client, id, tree=True, **request_kwargs)
+    to_upsert, to_remove = [], []
+    for resp in iter_fs_files_threaded(client, {"cid": id, "show_dir": 0}, app="android", cooldown=0.5):
+        to_upsert.extend(map(normalize_attr, resp["data"]))
+        ancestors = [
+            {"id": a["cid"], "parent_id": a["pid"], "name": a["name"]} 
+            for a in resp["path"][1:]
+        ]
+        if ancestors:
+            upsert_items(con, ancestors, extras={"is_alive": 1, "is_dir": 1}, commit=True)
+    if to_remove:
+        # TODO: 下面的部分还需要进行一定程度优化
         all_pids: set[int] = set()
         sql = "SELECT id, parent_id FROM data WHERE id IN (%s)" % (",".join(map(str, to_remove)) or "NULL")
         pairs = dict(query(con, sql))
         pids = set(pairs.values())
         while pids:
             all_pids.update(pids)
-            if not custom_no_dir_moved:
+            if not no_dir_moved:
+                # TODO: 星标目录太多时，容易有问题，因此需要用事件法，这样可以只拉取此次被打上星标的目录，也可以避免使用 update_desc
+                # TODO: 需要进行优化，通过星标法打上星标然后拉取事件，如果有 id 没被更新，则说明被删了，因此不需要使用 filter_na_ids
+                # TODO: 只要其中某一级的上级 id 不存在，则整个子树都被删除
                 update_desc(client, pids, **request_kwargs)
                 update_stared_dirs(con, client, **request_kwargs)
-                no_dir_moved = True
             pids = {pid for pid in iter_parent_id(con, pids) if pid and pid != id and pid not in all_pids}
         if all_pids:
             na_ids = set(filter_na_ids(client, all_pids, **request_kwargs))
@@ -737,31 +855,13 @@ def updatedb_tree(
             to_remove = list(na_ids)
         else:
             to_remove = []
-    if id and to_upsert:
-        all_pids = set()
-        pids = {ppid for attr in to_upsert if (ppid := attr["parent_id"])}
-        while pids:
-            all_pids.update(pids)
-            if find_ids := pids - set(iter_existing_id(con, pids)):
-                update_star(client, find_ids)
-                if custom_no_dir_moved:
-                    update_desc(client, find_ids, **request_kwargs)
-                else:
-                    update_desc(client, pids, **request_kwargs)
-                update_stared_dirs(con, client, **request_kwargs)
-                no_dir_moved = True
-            elif not custom_no_dir_moved:
-                update_desc(client, pids, **request_kwargs)
-                no_dir_moved = False
-            pids = {pid for pid in iter_parent_id(con, pids) if pid and pid != id and pid not in all_pids}
-    if not no_dir_moved:
-        update_stared_dirs(con, client, **request_kwargs)
-    with transact(con) as cur:
-        if to_remove:
-            kill_items(cur, to_remove)
-        if to_upsert:
-            upsert_items(cur, to_upsert)
-    return to_upsert, to_remove
+    if to_remove:
+        kill_items(con, to_remove, commit=True)
+    if to_upsert:
+        ancestors = load_ancestors(con, client, to_upsert, all_are_files=True, refresh=not no_dir_moved)
+        upsert_items(con, ancestors, commit=True)
+        upsert_items(con, to_upsert, commit=True)
+    return to_upsert + ancestors, to_remove
 
 
 def updatedb(
@@ -833,7 +933,6 @@ def updatedb(
         def get_dir_size(cid: int = 0, /) -> int | float:
             try:
                 if cid:
-                    kwargs["base_url"] = get_proapi()
                     resp = client.fs_category_get_app(cid, **kwargs)
                     if not resp:
                         return 0
@@ -880,7 +979,7 @@ def updatedb(
             else:
                 need_to_split_tasks = True
             try:
-                start = perf_counter()
+                start = time()
                 if need_to_split_tasks or not recursive:
                     to_upsert, to_remove = updatedb_one(client, con, id, **request_kwargs)
                 else:
@@ -910,7 +1009,7 @@ def updatedb(
                         id, 
                         len(to_upsert), 
                         len(to_remove), 
-                        perf_counter() - start, 
+                        time() - start, 
                     )
                 seen_add(id)
                 if recursive and need_to_split_tasks:
@@ -922,7 +1021,9 @@ def updatedb(
         if need_calc_size:
             executor.shutdown(wait=False, cancel_futures=True)
 
+# TODO: 如果提供的是一个 web、harmony、desktop 的 cookies，则自动扫码获得一个 tv 版的 cookies
+# TODO: 为全量获取星标目录进行一些优化，并发拉取
+# TODO: 允许全量拉取并发执行，冷却时间为 1 秒（仅当文件总数小于等于 6900 时）
 # TODO: 增加一个选项，允许对数据进行全量而不是增量更新，这样可以避免一些问题
-# TODO: 为数据库插入弄单独一个线程，就不需要等待数据库插入完成，就可以开始下一批数据拉取
 # TODO: 再实现一个拉取数据的函数，只拉取文件数据，不拉取目录，只看更新时间，只要更新时间较新的，就写入数据库，只增改不删，如果是全新的，就用多线程（20线程），如果不是则从日期最新开始拉，如果一个目录太大，则临时找出所有子目录，再分拆，如果目标是文件，则直接把数据保存到数据库，然后停工（通过category_get获取）
 # TODO: 为 115 生活单独做一个命令行命令

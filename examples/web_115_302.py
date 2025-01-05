@@ -345,7 +345,7 @@ def make_application(
     ) -> dict:
         """获取 id 对应的文件的 信息
         """
-        resp = await client.fs_file(id, base_url=True, async_=True, request=request)
+        resp = await client.fs_file(id, async_=True, request=request)
         if not resp["state"]:
             resp["file_id"] = id
             raise FileNotFoundError(errno.ENOENT, resp)

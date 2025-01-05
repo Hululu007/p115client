@@ -1315,6 +1315,8 @@ END;
         :param image: 是否为图片
         :param web: 是否使用 web 接口
         """
+        if path2 == "service-worker.js" and str(request.url) == "/service-worker.js":
+            return text("not found 'service-worker.js'", 404)
         if file is None:
             attr = await get_attr(
                 id=id, 
@@ -1628,6 +1630,8 @@ END;
         image: bool = False, 
         web: bool = False, 
     ):
+        if path2 == "service-worker.js" and str(request.url) == "/service-worker.js":
+            return text("not found 'service-worker.js'", 404)
         if file is None:
             attr = await get_share_attr(
                 share_code, 
@@ -2044,7 +2048,10 @@ if __name__ == "__main__":
         with suppress(OSError):
             remove("p115dav-test.db-wal")
 
+# TODO: 数据库结构要和 p115updatedb 进行适配，要有个文件是否被删除的标记
+
 # TODO: 更完整信息的支持，类似 xattr
+# TODO: 支持 fuse 挂载
 # TODO: 虽然115分享的图片也能获去cdn图片，但是并不能单独获取某个文件的属性，因此并不能给图片更新，除非这张图片被转存了，然后缓存转存后的pickcode，以后就可以反复更新了
 # TODO: 加上搜索框和分页，加上图库浏览功能
 # TODO: 播放器实现，播放列表，字幕或歌词绑定，弹幕、封面、元数据等功能

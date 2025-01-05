@@ -61,7 +61,7 @@ def generate_cookies_factory(
 
     :return: 函数，调用以返回一个 cookies
     """
-    if isinstance(client, str):
+    if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     if app:
         if APP_TO_SSOENT.get(app) == client.login_ssoent:
@@ -96,7 +96,7 @@ def generate_client_factory(
 
     :return: 函数，调用以返回一个 client
     """
-    if isinstance(client, str):
+    if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     if app:
         if APP_TO_SSOENT.get(app) == client.login_ssoent:

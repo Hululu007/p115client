@@ -10,7 +10,7 @@ import errno
 
 from asyncio import create_task, get_running_loop, run_coroutine_threadsafe, to_thread, Lock as AsyncLock
 from collections.abc import (
-    AsyncGenerator, AsyncIterable, Awaitable, Callable, Coroutine, Generator, 
+    AsyncGenerator, AsyncIterable, Awaitable, Buffer, Callable, Coroutine, Generator, 
     ItemsView, Iterable, Iterator, Mapping, MutableMapping, Sequence, 
 )
 from datetime import date, datetime, timedelta
@@ -35,14 +35,14 @@ from urllib.parse import quote, unquote, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 from warnings import warn
 
+from argtools import argcount
 from asynctools import ensure_async
 from cookietools import cookies_str_to_dict, create_cookie
 from dictattr import AttrDict
 from filewrap import (
-    Buffer, SupportsRead, 
     bytes_iter_to_reader, bytes_iter_to_async_reader, 
     progress_bytes_iter, progress_bytes_async_iter, 
-    copyfileobj, copyfileobj_async, 
+    copyfileobj, copyfileobj_async, SupportsRead, 
 )
 from ed2k import ed2k_hash, ed2k_hash_async, Ed2kHash
 from hashtools import HashObj, file_digest, file_mdigest, file_digest_async, file_mdigest_async
@@ -110,9 +110,15 @@ def make_prefix_generator(
     return loop().__next__
 
 
-def complete_api(path: str, /, base: str = "", base_url: bool | str = False) -> str:
+def complete_api(
+    path: str, /, 
+    base: str = "", 
+    base_url: bool | str | Callable[[], str] = False, 
+) -> str:
     if path and not path.startswith("/"):
         path = "/" + path
+    if callable(base_url):
+        base_url = base_url()
     if base_url:
         if base_url is True:
             base_url = get_anxia_origin()
@@ -132,13 +138,15 @@ def complete_api(path: str, /, base: str = "", base_url: bool | str = False) -> 
 def complete_webapi(
     path: str, 
     /, 
-    base_url: bool | str = False, 
+    base_url: bool | str | Callable[[], str] = False, 
     get_prefix: None | Callable[[], str] = None, #make_prefix_generator(4), 
 ) -> str:
     if get_prefix is not None:
         if path and not path.startswith("/"):
             path = "/" + path
         path = get_prefix() + path
+    if callable(base_url):
+        base_url = base_url()
     if isinstance(base_url, str) and base_url:
         base = ""
     else:
@@ -149,13 +157,15 @@ def complete_webapi(
 def complete_proapi(
     path: str, 
     /, 
-    base_url: str = "", 
+    base_url: str | Callable[[], str] = "", 
     app: str = "", 
 ) -> str:
     if path and not path.startswith("/"):
         path = "/" + path
     if app and not app.startswith("/"):
         app = "/" + app
+    if callable(base_url):
+        base_url = base_url()
     if not base_url:
         base_url = f"http://proapi.115.com"
     return f"{base_url}{app}{path}"
@@ -164,7 +174,7 @@ def complete_proapi(
 def complete_lixian_api(
     path: str | Mapping | Sequence[tuple], 
     /, 
-    base_url: None | bool | str = None, 
+    base_url: None | bool | str | Callable[[], str] = None, 
 ) -> str:
     if isinstance(path, str):
         path = path.lstrip("/")
@@ -173,6 +183,8 @@ def complete_lixian_api(
             path = "?" + path
     if not path.startswith(("lixian", "web/lixian")):
         path = "/lixian/" + path
+    if callable(base_url):
+        base_url = base_url()
     if base_url is None:
         base = "lixian"
         base_url = False
@@ -204,16 +216,19 @@ def default_parse(resp, content: Buffer, /):
     return json_loads(memoryview(content))
 
 
+def get_status_code(e: BaseException, /) -> int:
+    for attr in ("status", "code", "status_code"):
+        if isinstance(status := getattr(e, attr, None), int):
+            return status
+    if response := getattr(e, "response", None):
+        for attr in ("status", "code", "status_code"):
+            if isinstance(status := getattr(response, attr, None), int):
+                return status
+    return 0
+
+
 def default_check_for_relogin(e: BaseException, /) -> bool:
-    status = getattr(e, "status", None) or getattr(e, "code", None) or getattr(e, "status_code", None)
-    if status is None and hasattr(e, "response"):
-        response = e.response
-        status = (
-            getattr(response, "status", None) or 
-            getattr(response, "code", None) or 
-            getattr(response, "status_code", None)
-        )
-    return status == 405
+    return get_status_code(e) == 405
 
 
 def get_default_request():
@@ -369,7 +384,8 @@ def check_response(resp: dict | Awaitable[dict], /) -> dict | Coroutine[Any, Any
                 case 20009:
                     raise FileNotFoundError(errno.ENOENT, resp)
                 # {"state": false, "errno": 20018, "error": "文件不存在或已删除。"}
-                case 20018:
+                # {"state": false, "errno": 50015, "error": "文件不存在或已删除。"}
+                case 20018 | 50015:
                     raise FileNotFoundError(errno.ENOENT, resp)
                 # {"state": false, "errno": 20020, "error": "后缀名不正确，请重新输入"}
                 case 20020:
@@ -1980,8 +1996,10 @@ class P115Client:
         method: str = "GET", 
         params = None, 
         *, 
-        async_: Literal[False, True] = False, 
         ecdh_encrypt: bool = False, 
+        get_cookies: None | Callable[..., None | str] = None, 
+        revert_cookies: None | Callable[[str], Any] = None, 
+        async_: Literal[False, True] = False, 
         request: None | Callable[[Unpack[RequestKeywords]], Any] = None, 
         **request_kwargs, 
     ):
@@ -1989,8 +2007,11 @@ class P115Client:
 
         :param url: HTTP 的请求链接
         :param method: HTTP 的请求方法
-        :param async_: 说明 `request` 是同步调用还是异步调用
+        :param params: 查询参数
         :param ecdh_encrypt: 使用 ecdh 算法进行加密（返回值也要解密）
+        :param get_cookies: 调用以获取 cookies
+        :param revert_cookies: 调用以退还 cookies
+        :param async_: 说明 `request` 是同步调用还是异步调用
         :param request: HTTP 请求调用，如果为 None，则默认用 httpx 执行请求
             如果传入调用，则必须至少能接受以下几个关键词参数：
 
@@ -2085,91 +2106,86 @@ class P115Client:
                 request_kwargs["data"] = ecdh_aes_encode(urlencode(request_kwargs["data"]).encode("latin-1") + b"&")
             headers["Content-Type"] = "application/x-www-form-urlencoded"
         request_kwargs.setdefault("parse", default_parse)
-        if callable(check_for_relogin := self.check_for_relogin):
-            if async_:
-                async def wrap():
-                    cookies_new: None | str
-                    for i in count(0):
-                        try:
-                            cookies_old = self.cookies_str
-                            if need_set_cookies:
-                                headers["Cookie"] = cookies_old
-                            return await request(url=url, method=method, **request_kwargs)
-                        except BaseException as e:
-                            if isinstance(e, (AuthenticationError, LoginError)):
-                                if cookies_old != self.cookies_str or cookies_old != self._read_cookies():
-                                    continue
-                                raise
-                            res = check_for_relogin(e)
-                            if isawaitable(res):
-                                res = await res
-                            if not res if isinstance(res, bool) else res != 405:
-                                raise
-                            if (not i and 
-                                "login_uid" in self.__dict__ and 
-                                not all(map(self.cookies.__contains__, ("UID", "CID", "SEID")))
-                            ):
-                                app = await self.login_app(async_=True)
-                                await self.login_another_app(app or "alipaymini", replace=True, async_=True)
-                                continue
-                            cookies = self.cookies_str
-                            if not cookies_equal(cookies, cookies_old):
-                                continue
-                            cookies_mtime = getattr(self, "cookies_mtime", 0)
-                            async with self.request_alock:
-                                cookies_new = self.cookies_str
-                                cookies_mtime_new = getattr(self, "cookies_mtime", 0)
-                                if cookies_equal(cookies, cookies_new):
-                                    warn("relogin to refresh cookies", category=P115Warning)
-                                    need_read_cookies = cookies_mtime_new > cookies_mtime
-                                    if need_read_cookies:
-                                        cookies_new = self._read_cookies()
-                                    if i and cookies_equal(cookies_old, cookies_new):
-                                        raise
-                                    if not (need_read_cookies and cookies_new):
-                                        await self.login_another_app(replace=True, async_=True)
-                return wrap()
-            else:
-                cookies_new: None | str
-                for i in count(0):
-                    try:
+        def gen_step():
+            check_for_relogin = self.check_for_relogin
+            cant_relogin = not callable(check_for_relogin)
+            if get_cookies is not None:
+                get_cookies_need_arg = argcount(get_cookies) >= 1
+            cookies_new: None | str
+            cookies_: None | str = None
+            req = partial(request, url=url, method=method, **request_kwargs)
+            for i in count(0):
+                exc = None
+                try:
+                    if get_cookies is None:
                         cookies_old = self.cookies_str
-                        if i and need_set_cookies:
+                        if need_set_cookies:
                             headers["Cookie"] = cookies_old
-                        return request(url=url, method=method, **request_kwargs)
-                    except BaseException as e:
-                        if isinstance(e, (AuthenticationError, LoginError)):
-                            if cookies_old != self.cookies_str or cookies_old != self._read_cookies():
-                                continue
-                            raise
-                        res = check_for_relogin(e)
-                        if not res if isinstance(res, bool) else res != 405:
-                            raise
-                        if (not i and 
-                            "login_uid" in self.__dict__ and 
-                            not all(map(self.cookies.__contains__, ("UID", "CID", "SEID")))
-                        ):
-                            app = self.login_app()
-                            self.login_another_app(app or "alipaymini", replace=True)
+                    else:
+                        if get_cookies_need_arg:
+                            cookies_ = yield get_cookies(async_)
+                        else:
+                            cookies_ = yield get_cookies()
+                        if not cookies_:
+                            raise ValueError("can't get new cookies")
+                        headers["Cookie"] = cookies_
+                    return (yield req)
+                except BaseException as e:
+                    exc = e
+                    if cant_relogin:
+                        raise
+                    if isinstance(e, (AuthenticationError, LoginError)):
+                        if get_cookies is not None or cookies_old != self.cookies_str or cookies_old != self._read_cookies():
                             continue
-                        cookies = self.cookies_str
-                        if not cookies_equal(cookies, cookies_old):
-                            continue
-                        cookies_mtime = getattr(self, "cookies_mtime", 0)
-                        with self.request_lock:
-                            cookies_new = self.cookies_str
-                            cookies_mtime_new = getattr(self, "cookies_mtime", 0)
-                            if cookies_equal(cookies, cookies_new):
-                                warn("relogin to refresh cookies", category=P115Warning)
-                                need_read_cookies = cookies_mtime_new > cookies_mtime
-                                if need_read_cookies:
-                                    cookies_new = self._read_cookies()
-                                if i and cookies_equal(cookies_old, cookies_new):
-                                    raise
-                                if not (need_read_cookies and cookies_new):
-                                    self.login_another_app(replace=True)
-        else:
-            return request(url=url, method=method, **request_kwargs)
+                        raise
+                    res = yield partial(cast(Callable, check_for_relogin), e)
+                    if not res if isinstance(res, bool) else res != 405:
+                        raise
+                    if get_cookies is not None:
+                        continue
+                    if (not i and 
+                        "login_uid" in self.__dict__ and 
+                        not all(map(self.cookies.__contains__, ("UID", "CID", "SEID")))
+                    ):
+                        app = yield self.login_app(async_=async_)
+                        yield self.login_another_app(app or "alipaymini", replace=True, async_=async_)
+                        continue
+                    cookies = self.cookies_str
+                    if not cookies_equal(cookies, cookies_old):
+                        continue
+                    cookies_mtime = getattr(self, "cookies_mtime", 0)
+                    if async_:
+                        lock: Lock | AsyncLock = self.request_alock
+                        yield lock.acquire()
+                    else:
+                        lock = self.request_lock
+                        lock.acquire()
+                    try:
+                        cookies_new = self.cookies_str
+                        cookies_mtime_new = getattr(self, "cookies_mtime", 0)
+                        if cookies_equal(cookies, cookies_new):
+                            warn("relogin to refresh cookies", category=P115Warning)
+                            need_read_cookies = cookies_mtime_new > cookies_mtime
+                            if need_read_cookies:
+                                cookies_new = self._read_cookies()
+                            if i and cookies_equal(cookies_old, cookies_new):
+                                raise
+                            if not (need_read_cookies and cookies_new):
+                                yield self.login_another_app(replace=True, async_=async_) # type: ignore
+                    finally:
+                        lock.release()
+                finally:
+                    if (cookies_ and 
+                        get_cookies is not None and 
+                        revert_cookies is not None and (
+                            not exc or not (
+                                isinstance(exc, (AuthenticationError, LoginError)) or 
+                                get_status_code(exc) == 405
+                            )
+                        )
+                    ):
+                        yield partial(revert_cookies, cookies_)
+        return run_gen_step(gen_step, async_=async_)
 
     ########## Activity API ##########
 
@@ -2178,6 +2194,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2187,6 +2205,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2195,6 +2215,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -2207,7 +2229,7 @@ class P115Client:
             - aid: int | str 💡 助愿的 id
             - to_cid: int = <default> 💡 助愿中的分享链接转存到你的网盘中目录的 id
         """
-        api = "https://act.115.com/api/1.0/web/1.0/act2024xys/adopt"
+        api = complete_api("/api/1.0/web/1.0/act2024xys/adopt", "act", base_url=base_url)
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -2215,6 +2237,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2224,6 +2248,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2232,6 +2258,8 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -2245,7 +2273,7 @@ class P115Client:
             - images: int | str = <default> 💡 图片文件在你的网盘的 id，多个用逗号 "," 隔开
             - file_ids: int | str = <default> 💡 文件在你的网盘的 id，多个用逗号 "," 隔开
         """
-        api = "https://act.115.com/api/1.0/web/1.0/act2024xys/aid_desire"
+        api = complete_api("/api/1.0/web/1.0/act2024xys/aid_desire", "act", base_url=base_url)
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -2253,6 +2281,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2262,6 +2292,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2270,6 +2302,8 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -2280,7 +2314,7 @@ class P115Client:
         :payload:
             - ids: int | str 💡 助愿的 id，多个用逗号 "," 隔开
         """
-        api = "https://act.115.com/api/1.0/web/1.0/act2024xys/del_aid_desire"
+        api = complete_api("/api/1.0/web/1.0/act2024xys/del_aid_desire", "act", base_url=base_url)
         if isinstance(payload, (int, str)):
             payload = {"ids": payload}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
@@ -2290,6 +2324,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2299,6 +2335,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2307,6 +2345,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -2321,7 +2361,7 @@ class P115Client:
             - limit: int = 10 💡 分页大小
             - sort: int | str = <default> 💡 排序
         """
-        api = "https://act.115.com/api/1.0/web/1.0/act2024xys/desire_aid_list"
+        api = complete_api("/api/1.0/web/1.0/act2024xys/desire_aid_list", "act", base_url=base_url)
         if isinstance(payload, str):
             payload = {"start": 0, "page": 1, "limit": 10, "id": payload}
         else:
@@ -2332,6 +2372,8 @@ class P115Client:
     def act_xys_get_act_info(
         self, 
         /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2340,6 +2382,8 @@ class P115Client:
     def act_xys_get_act_info(
         self, 
         /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2347,6 +2391,8 @@ class P115Client:
     def act_xys_get_act_info(
         self, 
         /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -2354,7 +2400,7 @@ class P115Client:
 
         GET https://act.115.com/api/1.0/web/1.0/act2024xys/get_act_info
         """
-        api = "https://act.115.com/api/1.0/web/1.0/act2024xys/get_act_info"
+        api = complete_api("/api/1.0/web/1.0/act2024xys/get_act_info", "act", base_url=base_url)
         return self.request(url=api, async_=async_, **request_kwargs)
 
     @overload
@@ -2362,6 +2408,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2371,6 +2419,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2379,6 +2429,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -2389,7 +2441,7 @@ class P115Client:
         :payload:
             - id: str 💡 许愿的 id
         """
-        api = "https://act.115.com/api/1.0/web/1.0/act2024xys/get_desire_info"
+        api = complete_api("/api/1.0/web/1.0/act2024xys/get_desire_info", "act", base_url=base_url)
         if isinstance(payload, str):
             payload = {"id": payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
@@ -2398,6 +2450,8 @@ class P115Client:
     def act_xys_home_list(
         self, 
         /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2406,6 +2460,8 @@ class P115Client:
     def act_xys_home_list(
         self, 
         /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2413,6 +2469,8 @@ class P115Client:
     def act_xys_home_list(
         self, 
         /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -2420,7 +2478,7 @@ class P115Client:
 
         GET https://act.115.com/api/1.0/web/1.0/act2024xys/home_list
         """
-        api = "https://act.115.com/api/1.0/web/1.0/act2024xys/home_list"
+        api = complete_api("/api/1.0/web/1.0/act2024xys/home_list", "act", base_url=base_url)
         return self.request(url=api, async_=async_, **request_kwargs)
 
     @overload
@@ -2428,6 +2486,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -2438,6 +2497,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -2447,6 +2507,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -2466,7 +2527,7 @@ class P115Client:
             - page: int = 1   💡 第几页
             - limit: int = 10 💡 分页大小
         """
-        api = "https://act.115.com/api/1.0/web/1.0/act2024xys/my_aid_desire"
+        api = complete_api("/api/1.0/web/1.0/act2024xys/my_aid_desire", "act", base_url=base_url)
         if isinstance(payload, (int, str)):
             payload = {"start": 0, "page": 1, "limit": 10, "type": payload}
         else:
@@ -2478,6 +2539,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -2488,6 +2550,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -2497,6 +2560,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -2516,7 +2580,7 @@ class P115Client:
             - page: int = 1   💡 第几页
             - limit: int = 10 💡 分页大小
         """
-        api = "https://act.115.com/api/1.0/web/1.0/act2024xys/my_desire"
+        api = complete_api("/api/1.0/web/1.0/act2024xys/my_desire", "act", base_url=base_url)
         if isinstance(payload, (int, str)):
             payload = {"start": 0, "page": 1, "limit": 10, "type": payload}
         else:
@@ -2528,6 +2592,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2537,6 +2603,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2545,6 +2613,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -2557,7 +2627,7 @@ class P115Client:
             - rewardSpace: int = 5 💡 奖励容量，单位是 GB
             - images: int | str = <default> 💡 图片文件在你的网盘的 id，多个用逗号 "," 隔开
         """
-        api = "https://act.115.com/api/1.0/web/1.0/act2024xys/wish"
+        api = complete_api("/api/1.0/web/1.0/act2024xys/wish", "act", base_url=base_url)
         if isinstance(payload, str):
             payload = {"rewardSpace": 5, "content": payload}
         else:
@@ -2569,6 +2639,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -2578,6 +2650,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -2586,6 +2660,8 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -2596,7 +2672,7 @@ class P115Client:
         :payload:
             - ids: str 💡 许愿的 id，多个用逗号 "," 隔开
         """
-        api = "https://act.115.com/api/1.0/web/1.0/act2024xys/del_wish"
+        api = complete_api("/api/1.0/web/1.0/act2024xys/del_wish", "act", base_url=base_url)
         if isinstance(payload, str):
             payload = {"ids": payload}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
@@ -2645,7 +2721,7 @@ class P115Client:
     def captcha_all(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -2655,7 +2731,7 @@ class P115Client:
     def captcha_all(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -2664,7 +2740,7 @@ class P115Client:
     def captcha_all(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -2681,7 +2757,7 @@ class P115Client:
     def captcha_code(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -2691,7 +2767,7 @@ class P115Client:
     def captcha_code(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -2700,7 +2776,7 @@ class P115Client:
     def captcha_code(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -2717,7 +2793,7 @@ class P115Client:
     def captcha_sign(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -2727,7 +2803,7 @@ class P115Client:
     def captcha_sign(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -2736,7 +2812,7 @@ class P115Client:
     def captcha_sign(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -2753,7 +2829,7 @@ class P115Client:
         self, 
         id: int, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -2764,7 +2840,7 @@ class P115Client:
         self, 
         id: int, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -2774,7 +2850,7 @@ class P115Client:
         self, 
         id: int, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -2794,7 +2870,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -2805,7 +2881,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -2815,7 +2891,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -3061,7 +3137,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -3072,7 +3148,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -3082,7 +3158,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -3129,7 +3205,7 @@ class P115Client:
         self, 
         payload: list | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -3140,7 +3216,7 @@ class P115Client:
         self, 
         payload: list | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -3150,7 +3226,7 @@ class P115Client:
         self, 
         payload: list | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -3161,6 +3237,8 @@ class P115Client:
 
         :payload:
             - pick_code: str
+            - extract_file: str = ""
+            - extract_dir: str = ""
             - extract_file[]: str
             - extract_file[]: str
             - ...
@@ -3246,7 +3324,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -3257,7 +3335,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -3267,7 +3345,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -3412,7 +3490,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -3423,7 +3501,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -3433,7 +3511,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -3508,7 +3586,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -3519,7 +3597,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -3529,7 +3607,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -3551,7 +3629,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -3562,7 +3640,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -3572,7 +3650,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -3598,7 +3676,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -3609,7 +3687,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -3619,7 +3697,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -3643,7 +3721,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -3654,7 +3732,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -3664,7 +3742,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -3690,7 +3768,7 @@ class P115Client:
         self, 
         payload: list | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -3701,7 +3779,7 @@ class P115Client:
         self, 
         payload: list | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -3711,7 +3789,7 @@ class P115Client:
         self, 
         payload: list | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -3742,7 +3820,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -3753,7 +3831,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -3763,7 +3841,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -3833,7 +3911,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -3844,7 +3922,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -3854,7 +3932,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -3877,9 +3955,10 @@ class P115Client:
     @overload
     def fs_category_shortcut_set(
         self, 
-        payload: int | str | dict, 
+        payload: int | str | Iterable[int | str] | dict, 
         /, 
-        base_url: bool | str = False, 
+        set: bool = True, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -3888,9 +3967,10 @@ class P115Client:
     @overload
     def fs_category_shortcut_set(
         self, 
-        payload: int | str | dict, 
+        payload: int | str | Iterable[int | str] | dict, 
         /, 
-        base_url: bool | str = False, 
+        set: bool = True, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -3898,9 +3978,10 @@ class P115Client:
         ...
     def fs_category_shortcut_set(
         self, 
-        payload: int | str | dict, 
+        payload: int | str | Iterable[int | str] | dict, 
         /, 
-        base_url: bool | str = False, 
+        set: bool = True, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -3919,7 +4000,11 @@ class P115Client:
         """
         api = complete_webapi("/category/shortcut", base_url=base_url)
         if isinstance(payload, (int, str)):
-            payload = {"file_id": payload}
+            payload = {"file_id": payload, "op": ("delete", "add")[set]}
+        elif not isinstance(payload, dict):
+            payload = {"file_id": ",".join(map(str, payload)), "op": ("delete", "add")[set]}
+        else:
+            payload = {"op": ("delete", "add")[set], **payload}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -3928,7 +4013,7 @@ class P115Client:
         payload: int | str | dict | Iterable[int | str], 
         /, 
         pid: int = 0, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -3940,7 +4025,7 @@ class P115Client:
         payload: int | str | dict | Iterable[int | str], 
         /, 
         pid: int = 0, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -3951,7 +4036,7 @@ class P115Client:
         payload: int | str | dict | Iterable[int | str], 
         /, 
         pid: int = 0, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -4038,7 +4123,7 @@ class P115Client:
     @overload
     def fs_cover_set(
         self, 
-        fids: int | str | Iterable[int | str], 
+        payload: int | str | Iterable[int | str] | list[tuple] | dict, 
         /, 
         fid_cover: int | str,
         async_: Literal[False] = False, 
@@ -4048,7 +4133,7 @@ class P115Client:
     @overload
     def fs_cover_set(
         self, 
-        fids: int | str | Iterable[int | str], 
+        payload: int | str | Iterable[int | str] | list[tuple] | dict, 
         /, 
         fid_cover: int | str,
         async_: Literal[True], 
@@ -4057,32 +4142,22 @@ class P115Client:
         ...
     def fs_cover_set(
         self, 
-        fids: int | str | Iterable[int | str], 
+        payload: int | str | Iterable[int | str] | list[tuple] | dict, 
         /, 
         fid_cover: int | str = 0,
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
         """修改封面，可以设置目录的封面，此接口是对 `fs_edit` 的封装
-
-        :param fids: 单个或多个文件或目录 id
-        :param file_label: 图片的 id，如果为 0 则是删除封面
         """
-        if isinstance(fids, (int, str)):
-            payload = [("fid", fids)]
-        else:
-            payload = [("fid[]", fid) for fid in fids]
-            if not payload:
-                return {"state": False, "message": "no op"}
-        payload.append(("fid_cover", fid_cover))
-        return self.fs_edit(payload, async_=async_, **request_kwargs)
+        return self._fs_edit_set(payload, "fid_cover", fid_cover, async_=async_, **request_kwargs)
 
     @overload
     def fs_delete(
         self, 
         payload: int | str | dict | Iterable[int | str], 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -4093,7 +4168,7 @@ class P115Client:
         self, 
         payload: int | str | dict | Iterable[int | str], 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -4103,7 +4178,7 @@ class P115Client:
         self, 
         payload: int | str | dict | Iterable[int | str], 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -4180,7 +4255,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -4191,7 +4266,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -4201,7 +4276,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -4212,6 +4287,7 @@ class P115Client:
 
         :payload:
             - file_id: int | str
+            - field: str = <default> 💡 可取示例值："pass"
             - format: str = "json"
             - compat: 0 | 1 = 1
             - new_html: 0 | 1 = <default>
@@ -4226,9 +4302,9 @@ class P115Client:
     @overload
     def fs_desc_set(
         self, 
-        fids: int | str | Iterable[int | str], 
+        payload: int | str | Iterable[int | str] | list[tuple] | dict, 
         /, 
-        file_desc: str = "", 
+        desc: str = "", 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -4237,9 +4313,9 @@ class P115Client:
     @overload
     def fs_desc_set(
         self, 
-        fids: int | str | Iterable[int | str], 
+        payload: int | str | Iterable[int | str] | list[tuple] | dict, 
         /, 
-        file_desc: str = "", 
+        desc: str = "", 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -4247,9 +4323,9 @@ class P115Client:
         ...
     def fs_desc_set(
         self, 
-        fids: int | str | Iterable[int | str], 
+        payload: int | str | Iterable[int | str] | list[tuple] | dict, 
         /, 
-        file_desc: str = "", 
+        desc: str = "", 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -4257,26 +4333,16 @@ class P115Client:
         """为文件或目录设置备注，最多允许 65535 个字节 (64 KB 以内)，此接口是对 `fs_edit` 的封装
 
         .. hint::
-            修改文件备注会更新文件的更新时间，即使什么也没改
-
-        :param fids: 单个或多个文件或目录 id
-        :param file_desc: 备注信息，可以用 html
+            修改文件备注会更新文件的更新时间，即使什么也没改或者改为空字符串
         """
-        if isinstance(fids, (int, str)):
-            payload = [("fid", fids)]
-        else:
-            payload = [("fid[]", fid) for fid in fids]
-            if not payload:
-                return {"state": False, "message": "no op"}
-        payload.append(("file_desc", file_desc))
-        return self.fs_edit(payload, async_=async_, **request_kwargs)
+        return self._fs_edit_set(payload, "file_desc", desc, async_=async_, **request_kwargs)
 
     @overload
     def fs_dir_getid(
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -4287,7 +4353,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -4297,7 +4363,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -4365,7 +4431,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -4376,7 +4442,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -4386,7 +4452,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -4454,7 +4520,7 @@ class P115Client:
         self, 
         payload: list | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -4465,7 +4531,7 @@ class P115Client:
         self, 
         payload: list | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -4475,7 +4541,7 @@ class P115Client:
         self, 
         payload: list | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -4485,7 +4551,7 @@ class P115Client:
         POST https://webapi.115.com/files/edit
 
         :payload:
-            - fid: int | str 💡 也可以是多个用逗号 "," 隔开，这样就不需要 "fid[]" 了
+            - fid: int | str
             - fid[]: int | str
             - fid[]: int | str
             - ...
@@ -4509,11 +4575,61 @@ class P115Client:
         )
 
     @overload
+    def _fs_edit_set(
+        self, 
+        payload: int | str | Iterable[int | str] | list[tuple] | dict, 
+        /, 
+        attr: str, 
+        default: Any = "", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def _fs_edit_set(
+        self, 
+        payload: int | str | Iterable[int | str] | list[tuple] | dict, 
+        /, 
+        attr: str, 
+        default: Any = "", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def _fs_edit_set(
+        self, 
+        payload: int | str | Iterable[int | str] | list[tuple] | dict, 
+        /, 
+        attr: str, 
+        default: Any = "", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """批量设置文件或目录（备注、标签等），此接口是对 `fs_edit` 的封装
+        """
+        if isinstance(payload, (int, str)):
+            payload = [("fid", payload), (attr, default)]
+        elif isinstance(payload, list):
+            if not any(a[0] == attr for a in payload):
+                payload.append((attr, default))
+        elif isinstance(payload, dict):
+            payload.setdefault(attr, default)
+        else:
+            payload = [("fid[]", fid) for fid in payload]
+            if not payload:
+                return {"state": False, "message": "no op"}
+            payload.append((attr, default))
+        return self.fs_edit(payload, async_=async_, **request_kwargs)
+
+    @overload
     def fs_export_dir(
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -4524,7 +4640,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -4534,7 +4650,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -4558,9 +4674,9 @@ class P115Client:
     @overload
     def fs_export_dir_status(
         self, 
-        payload: int | str | dict, 
+        payload: int | str | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -4569,9 +4685,9 @@ class P115Client:
     @overload
     def fs_export_dir_status(
         self, 
-        payload: int | str | dict, 
+        payload: int | str | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -4579,9 +4695,9 @@ class P115Client:
         ...
     def fs_export_dir_status(
         self, 
-        payload: int | str | dict, 
+        payload: int | str | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -4591,7 +4707,7 @@ class P115Client:
         GET https://webapi.115.com/files/export_dir
 
         :payload:
-            - export_id: int | str
+            - export_id: int | str = 0 💡 任务 id
         """
         api = complete_webapi("/files/export_dir", base_url=base_url)
         if isinstance(payload, (int, str)):
@@ -4603,7 +4719,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -4614,7 +4730,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -4624,7 +4740,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -4646,7 +4762,7 @@ class P115Client:
         self, 
         payload: int | str | Iterable[int | str] | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -4657,7 +4773,7 @@ class P115Client:
         self, 
         payload: int | str | Iterable[int | str] | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -4667,7 +4783,7 @@ class P115Client:
         self, 
         payload: int | str | Iterable[int | str] | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -4698,7 +4814,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -4709,7 +4825,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -4719,7 +4835,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -4773,6 +4889,7 @@ class P115Client:
             - min_size: int = 0 💡 最小的文件大小
             - max_size: int = 0 💡 最大的文件大小
             - natsort: 0 | 1 = <default> 💡 是否执行自然排序(natural sorting) 💡 natural sorting
+            - nf: str = <default> 💡 (未知)
             - o: str = <default> 💡 用某字段排序
 
               - "file_name": 文件名
@@ -4782,6 +4899,8 @@ class P115Client:
               - "user_ptime": 创建时间
               - "user_otime": 上一次打开时间
 
+            - oof_token: str = <default>
+            - qid: int | str = <default>
             - r_all: 0 | 1 = <default>
             - record_open_time: 0 | 1 = 1 💡 是否要记录目录的打开时间
             - scid: int | str = <default>
@@ -5073,7 +5192,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -5084,7 +5203,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -5094,7 +5213,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -5193,7 +5312,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -5204,7 +5323,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -5214,7 +5333,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -5241,7 +5360,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -5252,7 +5371,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -5262,7 +5381,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -5292,7 +5411,7 @@ class P115Client:
         self, 
         payload: Literal[1,2,3,4,5,6,7] | dict = 1, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -5303,7 +5422,7 @@ class P115Client:
         self, 
         payload: Literal[1,2,3,4,5,6,7] | dict = 1, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -5313,7 +5432,7 @@ class P115Client:
         self, 
         payload: Literal[1,2,3,4,5,6,7] | dict = 1, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -5344,32 +5463,35 @@ class P115Client:
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
-    def fs_files_top(
+    def fs_top_set(
         self, 
-        payload: int | str | dict, 
+        payload: int | str | Iterable[int | str] | dict, 
         /, 
-        base_url: bool | str = False, 
+        top: bool = True, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
         ...
     @overload
-    def fs_files_top(
+    def fs_top_set(
         self, 
-        payload: int | str | dict, 
+        payload: int | str | Iterable[int | str] | dict, 
         /, 
-        base_url: bool | str = False, 
+        top: bool = True, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
         ...
-    def fs_files_top(
+    def fs_top_set(
         self, 
-        payload: int | str | dict, 
+        payload: int | str | Iterable[int | str] | dict, 
         /, 
-        base_url: bool | str = False, 
+        top: bool = True, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -5384,9 +5506,11 @@ class P115Client:
         """
         api = complete_webapi("/files/top", base_url=base_url)
         if isinstance(payload, (int, str)):
-            payload = {"top": 1, "file_id": payload}
+            payload = {"file_id": payload, "top": int(top)}
+        elif not isinstance(payload, dict):
+            payload = {"file_id": ",".join(map(str, payload)), "top": int(top)}
         else:
-            payload = {"top": 1, **payload}
+            payload = {"top": int(top), **payload}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -5394,7 +5518,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -5405,7 +5529,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -5415,7 +5539,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -5481,7 +5605,7 @@ class P115Client:
         self, 
         payload: int | str | Iterable[int | str] | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -5492,7 +5616,7 @@ class P115Client:
         self, 
         payload: int | str | Iterable[int | str] | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -5502,7 +5626,7 @@ class P115Client:
         self, 
         payload: int | str | Iterable[int | str] | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -5534,7 +5658,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -5545,7 +5669,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -5555,7 +5679,7 @@ class P115Client:
         self, 
         payload: str | dict = "", 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -5581,7 +5705,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -5592,7 +5716,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -5602,7 +5726,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -5682,7 +5806,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -5693,7 +5817,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -5703,7 +5827,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -5739,7 +5863,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -5750,7 +5874,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -5760,7 +5884,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -5858,7 +5982,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -5869,7 +5993,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -5879,7 +6003,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -5904,7 +6028,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -5915,7 +6039,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -5925,7 +6049,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -5999,7 +6123,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -6010,7 +6134,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -6020,7 +6144,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -6079,7 +6203,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -6090,7 +6214,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -6100,7 +6224,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -6200,7 +6324,7 @@ class P115Client:
         self, 
         payload: Literal[0, 1] | bool | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -6211,7 +6335,7 @@ class P115Client:
         self, 
         payload: Literal[0, 1] | bool | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -6221,7 +6345,7 @@ class P115Client:
         self, 
         payload: Literal[0, 1] | bool | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -6243,7 +6367,7 @@ class P115Client:
         self, 
         /, 
         *lables: str, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -6253,7 +6377,7 @@ class P115Client:
         self, 
         /, 
         *lables: str, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
@@ -6262,7 +6386,7 @@ class P115Client:
         self, 
         /, 
         *lables: str, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -6294,7 +6418,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -6305,7 +6429,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -6315,7 +6439,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -6337,7 +6461,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -6348,7 +6472,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -6358,7 +6482,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -6381,7 +6505,7 @@ class P115Client:
         self, 
         payload: str | dict = "", 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -6392,7 +6516,7 @@ class P115Client:
         self, 
         payload: str | dict = "", 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -6402,7 +6526,7 @@ class P115Client:
         self, 
         payload: str | dict = "", 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -6490,9 +6614,10 @@ class P115Client:
     @overload
     def fs_label_set(
         self, 
-        fids: int | str | Iterable[int | str], 
+        payload: int | str | Iterable[int | str] | list[tuple] | dict, 
         /, 
-        file_label: int | str,
+        label: int | str = "", 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -6500,44 +6625,36 @@ class P115Client:
     @overload
     def fs_label_set(
         self, 
-        fids: int | str | Iterable[int | str], 
+        payload: int | str | Iterable[int | str] | list[tuple] | dict, 
         /, 
-        file_label: int | str,
+        label: int | str = "", 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
         ...
     def fs_label_set(
         self, 
-        fids: int | str | Iterable[int | str], 
+        payload: int | str | Iterable[int | str] | list[tuple] | dict, 
         /, 
-        file_label: int | str = "",
+        label: int | str = "", 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
         """为文件或目录设置标签，此接口是对 `fs_edit` 的封装
-        
+
         .. attention::
             这个接口会把标签列表进行替换，而不是追加
-
-        :param fids: 单个或多个文件或目录 id
-        :param file_label: 标签 id，多个用逗号 "," 隔开
         """
-        if isinstance(fids, (int, str)):
-            payload = [("fid", fids)]
-        else:
-            payload = [("fid[]", fid) for fid in fids]
-            if not payload:
-                return {"state": False, "message": "no op"}
-        payload.append(("file_label", file_label))
-        return self.fs_edit(payload, async_=async_, **request_kwargs)
+        return self._fs_edit_set(payload, "file_label", label, async_=async_, **request_kwargs)
 
     @overload
     def fs_label_batch(
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -6548,7 +6665,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -6558,7 +6675,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -6588,7 +6705,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         pid: int = 0, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -6600,7 +6717,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         pid: int = 0, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -6611,7 +6728,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         pid: int = 0, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -6682,7 +6799,7 @@ class P115Client:
         payload: int | str | dict | Iterable[int | str], 
         /, 
         pid: int = 0, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -6694,7 +6811,7 @@ class P115Client:
         payload: int | str | dict | Iterable[int | str], 
         /, 
         pid: int = 0, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -6705,7 +6822,7 @@ class P115Client:
         payload: int | str | dict | Iterable[int | str], 
         /, 
         pid: int = 0, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -6784,7 +6901,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -6795,7 +6912,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -6805,7 +6922,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -6828,7 +6945,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -6839,7 +6956,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -6849,7 +6966,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -6922,7 +7039,7 @@ class P115Client:
         self, 
         payload: int | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -6933,7 +7050,7 @@ class P115Client:
         self, 
         payload: int | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -6943,7 +7060,7 @@ class P115Client:
         self, 
         payload: int | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -6968,7 +7085,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -6979,7 +7096,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -6989,7 +7106,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -7088,7 +7205,7 @@ class P115Client:
         self, 
         payload: tuple[int | str, str] | dict | Iterable[tuple[int | str, str]], 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -7099,7 +7216,7 @@ class P115Client:
         self, 
         payload: tuple[int | str, str] | dict | Iterable[tuple[int | str, str]], 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -7109,7 +7226,7 @@ class P115Client:
         self, 
         payload: tuple[int | str, str] | dict | Iterable[tuple[int | str, str]], 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -7185,7 +7302,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -7196,7 +7313,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -7206,7 +7323,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -7284,10 +7401,10 @@ class P115Client:
     @overload
     def fs_score_set(
         self, 
-        file_id: int | str, 
+        file_id: int | str | Iterable[int | str], 
         /, 
         score: int = 0, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -7296,10 +7413,10 @@ class P115Client:
     @overload
     def fs_score_set(
         self, 
-        file_id: int | str, 
+        file_id: int | str | Iterable[int | str], 
         /, 
         score: int = 0, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -7307,10 +7424,10 @@ class P115Client:
         ...
     def fs_score_set(
         self, 
-        file_id: int | str, 
+        file_id: int | str | Iterable[int | str], 
         /, 
         score: int = 0, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -7324,6 +7441,8 @@ class P115Client:
             - score: int = 0     💡 0 为删除评分
         """
         api = complete_webapi("/files/score", base_url=base_url)
+        if not isinstance(file_id, (int, str)):
+            file_id = ",".join(map(str, file_id))
         payload = {"file_id": file_id, "score": score}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
@@ -7332,7 +7451,7 @@ class P115Client:
         self, 
         payload: str | dict = ".", 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -7343,7 +7462,7 @@ class P115Client:
         self, 
         payload: str | dict = ".", 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -7353,7 +7472,7 @@ class P115Client:
         self, 
         payload: str | dict = ".", 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -7523,7 +7642,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -7534,7 +7653,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -7544,7 +7663,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -7560,6 +7679,41 @@ class P115Client:
         if isinstance(payload, str):
             payload = {"sha1": payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_show_play_long_set(
+        self, 
+        payload: int | str | Iterable[int | str] | list[tuple] | dict, 
+        /, 
+        show: bool = True, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_show_play_long_set(
+        self, 
+        payload: int | str | Iterable[int | str] | list[tuple] | dict, 
+        /, 
+        show: bool = True, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_show_play_long_set(
+        self, 
+        payload: int | str | Iterable[int | str] | list[tuple] | dict, 
+        /, 
+        show: bool = True, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """为目录设置显示时长，此接口是对 `fs_edit` 的封装
+        """
+        return self._fs_edit_set(payload, "show_play_long", int(show), async_=async_, **request_kwargs)
 
     @overload
     def fs_space_info(
@@ -7604,7 +7758,7 @@ class P115Client:
         self, 
         payload: str | dict = "", 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -7615,7 +7769,7 @@ class P115Client:
         self, 
         payload: str | dict = "", 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -7625,7 +7779,7 @@ class P115Client:
         self, 
         payload: str | dict = "", 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -7654,7 +7808,7 @@ class P115Client:
     def fs_space_summury(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -7664,7 +7818,7 @@ class P115Client:
     def fs_space_summury(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -7673,7 +7827,7 @@ class P115Client:
     def fs_space_summury(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -7688,10 +7842,10 @@ class P115Client:
     @overload
     def fs_star_set(
         self, 
-        file_id: int | str | Iterable[int | str], 
+        payload: int | str | Iterable[int | str] | dict, 
         /, 
         star: bool = True, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -7700,10 +7854,10 @@ class P115Client:
     @overload
     def fs_star_set(
         self, 
-        file_id: int | str | Iterable[int | str], 
+        payload: int | str | Iterable[int | str] | dict, 
         /, 
         star: bool = True, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -7711,10 +7865,10 @@ class P115Client:
         ...
     def fs_star_set(
         self, 
-        file_id: int | str | Iterable[int | str], 
+        payload: int | str | Iterable[int | str] | dict, 
         /, 
         star: bool = True, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -7728,16 +7882,19 @@ class P115Client:
             - star: 0 | 1 = 1
         """
         api = complete_webapi("/files/star", base_url=base_url)
-        if not isinstance(file_id, (int, str)):
-            file_id = ",".join(map(str, file_id))
-        payload = {"file_id": file_id, "star": int(star)}
+        if isinstance(payload, (int, str)):
+            payload = {"file_id": payload, "star": int(star)}
+        elif not isinstance(payload, dict):
+            payload = {"file_id": ",".join(map(str, payload)), "star": int(star)}
+        else:
+            payload = {"star": int(star), **payload}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
     def fs_storage_info(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -7747,7 +7904,7 @@ class P115Client:
     def fs_storage_info(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -7756,7 +7913,7 @@ class P115Client:
     def fs_storage_info(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -7773,7 +7930,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -7784,7 +7941,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -7794,7 +7951,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -7891,7 +8048,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -7902,7 +8059,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -7912,7 +8069,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -7938,7 +8095,7 @@ class P115Client:
         /, 
         pickcode: str, 
         definition: int = 0, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -7950,7 +8107,7 @@ class P115Client:
         /, 
         pickcode: str, 
         definition: int = 0, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -7961,7 +8118,7 @@ class P115Client:
         /, 
         pickcode: str, 
         definition: int = 0, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -7995,7 +8152,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -8006,7 +8163,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -8016,7 +8173,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -8129,7 +8286,7 @@ class P115Client:
         self, 
         payload: str | dict = "", 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -8140,7 +8297,7 @@ class P115Client:
         self, 
         payload: str | dict = "", 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -8150,7 +8307,7 @@ class P115Client:
         self, 
         payload: str | dict = "", 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *,
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -8163,7 +8320,7 @@ class P115Client:
             这个接口最多能拉取前 10_000 条数据，且响应速度也较差，请优先使用 `P115Client.life_behavior_detail_app`
 
         :payload:
-            - type: str = "" 💡 操作类型
+            - type: str = "" 💡 操作类型，若不指定则是全部
 
               - "upload_image_file": 1 💡 上传图片
               - "upload_file":       2 💡 上传文件
@@ -8186,7 +8343,7 @@ class P115Client:
 
             - limit: int = 32          💡 最大值为 1_000
             - offset: int = 0
-            - date: str = <default>    💡 日期，格式为 YYYY-MM-DD，若指定则只拉取这一天的数据
+            - date: str = <default>    💡 日期，格式为 'YYYY-MM-DD'，若指定则只拉取这一天的数据
         """
         api = complete_webapi("/behavior/detail", base_url=base_url)
         if isinstance(payload, str):
@@ -9140,7 +9297,7 @@ class P115Client:
     def login_status(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -9150,7 +9307,7 @@ class P115Client:
     def login_status(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -9159,7 +9316,7 @@ class P115Client:
     def login_status(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -9830,7 +9987,7 @@ class P115Client:
         self, 
         payload: int | dict, 
         /, 
-        base_url: None | bool | str = None, 
+        base_url: None | bool | str | Callable[[], str] = None, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -9841,7 +9998,7 @@ class P115Client:
         self, 
         payload: int | dict, 
         /, 
-        base_url: None | bool | str = None, 
+        base_url: None | bool | str | Callable[[], str] = None, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -9851,7 +10008,7 @@ class P115Client:
         self, 
         payload: int | dict = {"flag": 0}, 
         /, 
-        base_url: None | bool | str = None, 
+        base_url: None | bool | str | Callable[[], str] = None, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -9884,7 +10041,7 @@ class P115Client:
     def offline_download_path(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -9894,7 +10051,7 @@ class P115Client:
     def offline_download_path(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -9903,7 +10060,7 @@ class P115Client:
     def offline_download_path(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -9919,7 +10076,7 @@ class P115Client:
     def offline_info(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -9929,7 +10086,7 @@ class P115Client:
     def offline_info(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -9938,7 +10095,7 @@ class P115Client:
     def offline_info(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -9955,7 +10112,7 @@ class P115Client:
         self, 
         payload: int | dict = 1, 
         /, 
-        base_url: None | bool | str = None, 
+        base_url: None | bool | str | Callable[[], str] = None, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -9966,7 +10123,7 @@ class P115Client:
         self, 
         payload: int | dict, 
         /, 
-        base_url: None | bool | str = None, 
+        base_url: None | bool | str | Callable[[], str] = None, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -9976,7 +10133,7 @@ class P115Client:
         self, 
         payload: int | dict = 1, 
         /, 
-        base_url: None | bool | str = None, 
+        base_url: None | bool | str | Callable[[], str] = None, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -9997,7 +10154,7 @@ class P115Client:
     def offline_quota_info(
         self, 
         /, 
-        base_url: None | bool | str = None, 
+        base_url: None | bool | str | Callable[[], str] = None, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -10007,7 +10164,7 @@ class P115Client:
     def offline_quota_info(
         self, 
         /, 
-        base_url: None | bool | str = None, 
+        base_url: None | bool | str | Callable[[], str] = None, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -10016,7 +10173,7 @@ class P115Client:
     def offline_quota_info(
         self, 
         /, 
-        base_url: None | bool | str = None, 
+        base_url: None | bool | str | Callable[[], str] = None, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -10032,7 +10189,7 @@ class P115Client:
     def offline_quota_package_info(
         self, 
         /, 
-        base_url: None | bool | str = None, 
+        base_url: None | bool | str | Callable[[], str] = None, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -10042,7 +10199,7 @@ class P115Client:
     def offline_quota_package_info(
         self, 
         /, 
-        base_url: None | bool | str = None, 
+        base_url: None | bool | str | Callable[[], str] = None, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -10051,7 +10208,7 @@ class P115Client:
     def offline_quota_package_info(
         self, 
         /, 
-        base_url: None | bool | str = None, 
+        base_url: None | bool | str | Callable[[], str] = None, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -10068,7 +10225,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: None | bool | str = None, 
+        base_url: None | bool | str | Callable[[], str] = None, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -10079,7 +10236,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: None | bool | str = None, 
+        base_url: None | bool | str | Callable[[], str] = None, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -10089,7 +10246,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: None | bool | str = None, 
+        base_url: None | bool | str | Callable[[], str] = None, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -10117,7 +10274,7 @@ class P115Client:
     def offline_task_count(
         self, 
         /, 
-        base_url: None | bool | str = None, 
+        base_url: None | bool | str | Callable[[], str] = None, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -10127,7 +10284,7 @@ class P115Client:
     def offline_task_count(
         self, 
         /, 
-        base_url: None | bool | str = None, 
+        base_url: None | bool | str | Callable[[], str] = None, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -10136,7 +10293,7 @@ class P115Client:
     def offline_task_count(
         self, 
         /, 
-        base_url: None | bool | str = None, 
+        base_url: None | bool | str | Callable[[], str] = None, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -10153,7 +10310,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: None | bool | str = None, 
+        base_url: None | bool | str | Callable[[], str] = None, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -10164,7 +10321,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: None | bool | str = None, 
+        base_url: None | bool | str | Callable[[], str] = None, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -10174,7 +10331,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: None | bool | str = None, 
+        base_url: None | bool | str | Callable[[], str] = None, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -10195,7 +10352,7 @@ class P115Client:
     def offline_upload_torrent_path(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -10205,7 +10362,7 @@ class P115Client:
     def offline_upload_torrent_path(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -10214,7 +10371,7 @@ class P115Client:
     def offline_upload_torrent_path(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -10233,7 +10390,8 @@ class P115Client:
         self, 
         payload: int | str | Iterable[int | str] | dict, 
         /, 
-        base_url: bool | str = False, 
+        password: str = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -10244,7 +10402,8 @@ class P115Client:
         self, 
         payload: int | str | Iterable[int | str] | dict, 
         /, 
-        base_url: bool | str = False, 
+        password: str = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -10254,7 +10413,8 @@ class P115Client:
         self, 
         payload: int | str | Iterable[int | str] | dict = {}, 
         /, 
-        base_url: bool | str = False, 
+        password: str = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -10274,6 +10434,8 @@ class P115Client:
             payload = {"rid[0]": payload}
         elif not isinstance(payload, dict):
             payload = {f"rid[{i}]": rid for i, rid in enumerate(payload)}
+        if password:
+            payload["password"] = password
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -10281,7 +10443,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -10292,7 +10454,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -10302,7 +10464,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -10324,7 +10486,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -10335,7 +10497,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -10345,7 +10507,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -10374,7 +10536,7 @@ class P115Client:
         self, 
         payload: int | str | Iterable[int | str] | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -10385,7 +10547,7 @@ class P115Client:
         self, 
         payload: int | str | Iterable[int | str] | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -10395,7 +10557,7 @@ class P115Client:
         self, 
         payload: int | str | Iterable[int | str] | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -10423,7 +10585,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -10434,7 +10596,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -10444,7 +10606,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -10466,7 +10628,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -10477,7 +10639,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -10487,7 +10649,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -10720,7 +10882,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -10731,7 +10893,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -10741,7 +10903,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -10763,7 +10925,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -10774,7 +10936,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -10784,7 +10946,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -10852,7 +11014,7 @@ class P115Client:
         self, 
         payload: int | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -10863,7 +11025,7 @@ class P115Client:
         self, 
         payload: int | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -10873,7 +11035,7 @@ class P115Client:
         self, 
         payload: int | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -10947,7 +11109,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -10958,7 +11120,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -10968,7 +11130,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -11040,7 +11202,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -11051,7 +11213,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -11061,7 +11223,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -11155,7 +11317,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -11166,7 +11328,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -11176,7 +11338,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -11217,7 +11379,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -11228,7 +11390,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -11238,7 +11400,7 @@ class P115Client:
         self, 
         payload: str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -11263,7 +11425,7 @@ class P115Client:
         self, 
         payload: str | dict = "", 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -11274,7 +11436,7 @@ class P115Client:
         self, 
         payload: str | dict = "", 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -11284,7 +11446,7 @@ class P115Client:
         self, 
         payload: str | dict = "", 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -11316,7 +11478,7 @@ class P115Client:
         payload: dict, 
         /, 
         request: None | Callable = None, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -11328,7 +11490,7 @@ class P115Client:
         payload: dict, 
         /, 
         request: None | Callable = None, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -11339,7 +11501,7 @@ class P115Client:
         payload: dict, 
         /, 
         request: None | Callable = None, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -11436,7 +11598,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -11447,7 +11609,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -11457,7 +11619,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -11538,7 +11700,7 @@ class P115Client:
     def tool_clear_empty_folder(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -11548,7 +11710,7 @@ class P115Client:
     def tool_clear_empty_folder(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -11557,7 +11719,7 @@ class P115Client:
     def tool_clear_empty_folder(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -11574,7 +11736,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -11585,7 +11747,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -11595,7 +11757,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -11617,7 +11779,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -11628,7 +11790,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -11638,7 +11800,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -11670,7 +11832,7 @@ class P115Client:
     def tool_repeat_delete_status(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -11680,7 +11842,7 @@ class P115Client:
     def tool_repeat_delete_status(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -11689,7 +11851,7 @@ class P115Client:
     def tool_repeat_delete_status(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -11706,7 +11868,7 @@ class P115Client:
         self, 
         payload: int | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -11717,7 +11879,7 @@ class P115Client:
         self, 
         payload: int | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -11727,7 +11889,7 @@ class P115Client:
         self, 
         payload: int | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -11751,7 +11913,7 @@ class P115Client:
     def tool_repeat_status(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -11761,7 +11923,7 @@ class P115Client:
     def tool_repeat_status(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -11770,7 +11932,7 @@ class P115Client:
     def tool_repeat_status(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -11786,7 +11948,7 @@ class P115Client:
     def tool_space(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -11796,7 +11958,7 @@ class P115Client:
     def tool_space(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -11805,7 +11967,7 @@ class P115Client:
     def tool_space(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -11886,7 +12048,7 @@ class P115Client:
     def upload_init(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -11896,7 +12058,7 @@ class P115Client:
     def upload_init(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -11905,7 +12067,7 @@ class P115Client:
     def upload_init(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -11966,7 +12128,7 @@ class P115Client:
         /, 
         filename: str, 
         pid: int = 0, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -11978,7 +12140,7 @@ class P115Client:
         /, 
         filename: str, 
         pid: int = 0, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -11989,7 +12151,7 @@ class P115Client:
         /, 
         filename: str, 
         pid: int = 0, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -12006,7 +12168,7 @@ class P115Client:
     @staticmethod
     def upload_gettoken(
         request: None | Callable = None, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -12016,7 +12178,7 @@ class P115Client:
     @staticmethod
     def upload_gettoken(
         request: None | Callable = None, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -12025,7 +12187,7 @@ class P115Client:
     @staticmethod
     def upload_gettoken(
         request: None | Callable = None, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -12055,7 +12217,7 @@ class P115Client:
     @staticmethod
     def upload_url(
         request: None | Callable = None, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -12065,7 +12227,7 @@ class P115Client:
     @staticmethod
     def upload_url(
         request: None | Callable = None, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -12074,7 +12236,7 @@ class P115Client:
     @staticmethod
     def upload_url(
         request: None | Callable = None, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -12617,25 +12779,25 @@ class P115Client:
                 if need_calc_filesha1:
                     if not seekable:
                         fsrc = file
-                        with TemporaryFile() as file:
-                            if async_:
-                                yield copyfileobj_async(fsrc, file)
-                            else:
-                                copyfileobj(fsrc, file)
-                            file.seek(0)
-                            return (yield self.upload_file(
-                                file=file, 
-                                filename=filename, 
-                                pid=pid, 
-                                filesize=filesize, 
-                                filesha1=filesha1, 
-                                partsize=partsize, 
-                                upload_directly=upload_directly, 
-                                make_reporthook=make_reporthook, 
-                                close_file=close_file, 
-                                async_=async_, # type: ignore
-                                **request_kwargs, 
-                            ))
+                        file = TemporaryFile()
+                        if async_:
+                            yield copyfileobj_async(fsrc, file)
+                        else:
+                            copyfileobj(fsrc, file)
+                        file.seek(0)
+                        return (yield self.upload_file(
+                            file=file, 
+                            filename=filename, 
+                            pid=pid, 
+                            filesize=filesize, 
+                            filesha1=filesha1, 
+                            partsize=partsize, 
+                            upload_directly=upload_directly, 
+                            make_reporthook=make_reporthook, 
+                            close_file=False, 
+                            async_=async_, # type: ignore
+                            **request_kwargs, 
+                        ))
                     try:
                         if async_:
                             filesize, filesha1_obj = yield file_digest_async(file, "sha1")
@@ -12898,7 +13060,7 @@ class P115Client:
     def user_fingerprint(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -12908,7 +13070,7 @@ class P115Client:
     def user_fingerprint(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -12917,7 +13079,7 @@ class P115Client:
     def user_fingerprint(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -12933,7 +13095,7 @@ class P115Client:
     def user_my(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -12943,7 +13105,7 @@ class P115Client:
     def user_my(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -12952,7 +13114,7 @@ class P115Client:
     def user_my(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -12968,7 +13130,7 @@ class P115Client:
     def user_my_info(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -12978,7 +13140,7 @@ class P115Client:
     def user_my_info(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -12987,7 +13149,7 @@ class P115Client:
     def user_my_info(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -13166,7 +13328,7 @@ class P115Client:
     def user_setting(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -13176,7 +13338,7 @@ class P115Client:
     def user_setting(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -13185,7 +13347,7 @@ class P115Client:
     def user_setting(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -13202,7 +13364,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -13213,7 +13375,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -13223,7 +13385,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -13239,7 +13401,7 @@ class P115Client:
     def user_setting_web(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -13249,7 +13411,7 @@ class P115Client:
     def user_setting_web(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -13258,7 +13420,7 @@ class P115Client:
     def user_setting_web(
         self, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -13275,7 +13437,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -13286,7 +13448,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -13296,7 +13458,7 @@ class P115Client:
         self, 
         payload: dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -13432,7 +13594,7 @@ class P115Client:
         self, 
         payload: int | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -13443,7 +13605,7 @@ class P115Client:
         self, 
         payload: int | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -13453,7 +13615,7 @@ class P115Client:
         self, 
         payload: int | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -13479,7 +13641,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -13490,7 +13652,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -13500,7 +13662,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -13522,7 +13684,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -13533,7 +13695,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -13543,7 +13705,7 @@ class P115Client:
         self, 
         payload: int | str | dict = 0, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -13569,7 +13731,7 @@ class P115Client:
         self, 
         payload: int | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -13580,7 +13742,7 @@ class P115Client:
         self, 
         payload: int | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -13590,7 +13752,7 @@ class P115Client:
         self, 
         payload: int | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -13616,7 +13778,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -13627,7 +13789,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -13637,7 +13799,7 @@ class P115Client:
         self, 
         payload: int | str | dict, 
         /, 
-        base_url: bool | str = False, 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 

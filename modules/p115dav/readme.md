@@ -152,13 +152,13 @@ options:
 
 6. 支持的查询参数
 
-      参数       |  类型   | 必填 | 说明
----------------- | ------- | ---- | ----------
-?pickcode={path} | string  | 否   | 文件或文件夹的 pickcode，优先级高于 id
-?id={id}         | integer | 否   | 文件或文件夹的 id，优先级高于 sha1
-?sha1={sha1}     | string  | 否   | 文件或文件夹的 id，优先级高于 path
-?path={path}     | string  | 否   | 文件或文件夹的路径，优先级高于 url 中的路径部分
-/{path}          | string  | 否   | 文件或文件夹的路径，位于 url 中的路径部分
+        参数         |  类型   | 必填 | 说明
+-------------------- | ------- | ---- | ----------
+?pickcode={pickcode} | string  | 否   | 文件或文件夹的 pickcode，优先级高于 id
+?id={id}             | integer | 否   | 文件或文件夹的 id，优先级高于 sha1
+?sha1={sha1}         | string  | 否   | 文件或文件夹的 id，优先级高于 path
+?path={path}         | string  | 否   | 文件或文件夹的路径，优先级高于 url 中的路径部分
+/{path}              | string  | 否   | 文件或文件夹的路径，位于 url 中的路径部分
 
 💡 如果是分享 （路由路径以 /<share 开始），则支持的参数会少一些
 

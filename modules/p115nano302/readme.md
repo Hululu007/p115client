@@ -14,7 +14,8 @@ pip install -U p115nano302
 
 ```console
 $ p115nano302 -h
-usage: nano302 [-h] [-c COOKIES] [-p PASSWORD] [-t TOKEN] [-cp COOKIES_PATH] [-H HOST] [-P PORT] [-d] [-uc UVICORN_RUN_CONFIG_PATH] [-v] [-l]
+usage: p115nano302 [-h] [-c COOKIES] [-p PASSWORD] [-t TOKEN] [-cp COOKIES_PATH] [-H HOST] [-P PORT] [-d] [-uc UVICORN_RUN_CONFIG_PATH]
+                   [-v] [-l]
 
     ╭───────────────────────── Welcome to 115 nano 302 ────────────────────────────╮
     │                                                                              │
@@ -59,6 +60,10 @@ usage: nano302 [-h] [-c COOKIES] [-p PASSWORD] [-t TOKEN] [-cp COOKIES_PATH] [-H
 请求体为 json 数据
 
     {"cookies": "一行写一个 cookies"}
+
+如果要查询目前所有的 cookies，使用接口（请求时需携带和命令行传入的相同的密码）
+
+    GET http://localhost:8000/<cookies?password={password}
 
 🌰 查询示例：
 
@@ -108,7 +113,7 @@ options:
   -c COOKIES, --cookies COOKIES
                         cookies 字符串，优先级高于 -cp/--cookies-path，如果有多个则一行写一个
   -p PASSWORD, --password PASSWORD
-                        执行 POST 请求所需密码，仅当提供时，才会启用一组 POST 接口
+                        执行后台信息操作请求所需密码，仅当提供时，才会启用一组后台信息操作接口
   -t TOKEN, --token TOKEN
                         签名所用的 token，如果提供，则请求必须携带签名，即 sign 查询参数
   -cp COOKIES_PATH, --cookies-path COOKIES_PATH

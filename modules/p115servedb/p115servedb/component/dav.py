@@ -425,6 +425,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_sha1_size ON data(sha1, size);""")
         :param file: 是否为文件，如果为 None，则需要进一步确定
         :param web: 是否使用 web 接口
         """
+        if path2 == "service-worker.js" and str(request.url) == "/service-worker.js":
+            return text("not found 'service-worker.js'", 404)
         if file is None:
             attr = await get_attr(
                 id=id, 
