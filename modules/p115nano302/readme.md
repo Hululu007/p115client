@@ -32,8 +32,7 @@ run(
 
 ```console
 $ p115nano302 -h
-usage: p115nano302 [-h] [-c COOKIES] [-p PASSWORD] [-t TOKEN] [-cp COOKIES_PATH] [-H HOST] [-P PORT] [-d] [-uc UVICORN_RUN_CONFIG_PATH] [-v]
-                   [-l]
+usage: p115nano302 [-h] [-c COOKIES] [-cp COOKIES_PATH] [-p PASSWORD] [-t TOKEN] [-H HOST] [-P PORT] [-cu] [-d] [-uc UVICORN_RUN_CONFIG_PATH] [-v] [-l]
 
     ╭───────────────────────── Welcome to 115 nano 302 ────────────────────────────╮
     │                                                                              │
@@ -43,7 +42,7 @@ usage: p115nano302 [-h] [-c COOKIES] [-p PASSWORD] [-t TOKEN] [-cp COOKIES_PATH]
     │                                                                              │
     │                      license     https://www.gnu.org/licenses/gpl-3.0.txt    │
     │                                                                              │
-    │                      version     0.0.8                                       │
+    │                      version     0.0.9                                       │
     │                                                                              │
     ╰──────────────────────────────────────────────────────────────────────────────╯
 
@@ -133,14 +132,15 @@ options:
   -h, --help            show this help message and exit
   -c COOKIES, --cookies COOKIES
                         cookies 字符串，优先级高于 -cp/--cookies-path，如果有多个则一行写一个
+  -cp COOKIES_PATH, --cookies-path COOKIES_PATH
+                        cookies 文件保存路径，默认为当前工作目录下的 115-cookies.txt，如果有多个则一行写一个
   -p PASSWORD, --password PASSWORD
                         执行后台信息操作请求所需密码，仅当提供时，才会启用一组后台信息操作接口
   -t TOKEN, --token TOKEN
                         签名所用的 token，如果提供，则请求必须携带签名，即 sign 查询参数
-  -cp COOKIES_PATH, --cookies-path COOKIES_PATH
-                        cookies 文件保存路径，默认为当前工作目录下的 115-cookies.txt，如果有多个则一行写一个
   -H HOST, --host HOST  ip 或 hostname，默认值：'0.0.0.0'
   -P PORT, --port PORT  端口号，默认值：8000，如果为 0 则自动确定
+  -cu, --cache-url      缓存下载链接
   -d, --debug           启用调试，会输出更详细信息
   -uc UVICORN_RUN_CONFIG_PATH, --uvicorn-run-config-path UVICORN_RUN_CONFIG_PATH
                         uvicorn 启动时的配置文件路径，会作为关键字参数传给 `uvicorn.run`，支持 JSON、YAML 或 TOML 格式，会根据扩展名确定，不能确定时视为 JSON

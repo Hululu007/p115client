@@ -2,7 +2,7 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 0, 8)
+__version__ = (0, 0, 9)
 __all__ = ["make_application"]
 __license__ = "GPLv3 <https://www.gnu.org/licenses/gpl-3.0.txt>"
 
@@ -21,7 +21,7 @@ from blacksheep import json, text, Application, FromJSON, Request, Response, Rou
 from blacksheep.client import ClientSession
 from blacksheep.contents import Content, FormContent
 from blacksheep.server.remotes.forwarding import ForwardedHeadersMiddleware
-from cachedict import LRUDict, TTLDict
+from cachedict import LRUDict, TLRUDict
 from orjson import dumps, loads
 from p115rsacipher import encrypt, decrypt
 from uvicorn.config import LOGGING_CONFIG
@@ -127,14 +127,17 @@ def make_application(
     debug: bool = False, 
     password: str = "", 
     token: str = "", 
+    cache_url: bool = False, 
     cache_size: int = 65536, 
 ) -> Application:
     ID_TO_PICKCODE:   LRUDict[tuple[int, int], str] = LRUDict(cache_size)
     SHA1_TO_PICKCODE: LRUDict[tuple[int, str], str] = LRUDict(cache_size)
     NAME_TO_PICKCODE: LRUDict[tuple[int, str], str] = LRUDict(cache_size)
     SHARE_NAME_TO_ID: LRUDict[tuple[str, str], int] = LRUDict(cache_size)
-    DOWNLOAD_URL_CACHE: TTLDict[tuple[int, str] | tuple[str, int], Url] = TTLDict(cache_size, 3600)
-    DOWNLOAD_URL_CACHE2: LRUDict[tuple[int, str, str], tuple[Url, int]] = LRUDict(1024)
+    if cache_url:
+        DOWNLOAD_URL_CACHE: TLRUDict[tuple[int, str, str], Url] = TLRUDict(cache_size)
+    DOWNLOAD_URL_CACHE1: TLRUDict[tuple[int, str] | tuple[str, int], Url] = TLRUDict(cache_size)
+    DOWNLOAD_URL_CACHE2: TLRUDict[tuple[int, str, str], Url] = TLRUDict(1024)
     RECEIVE_CODE_MAP: dict[str, str] = {}
 
     PASSWORD = password
@@ -308,13 +311,11 @@ def make_application(
             cookies = d_cookies[user_id]
         else:
             user_id, cookies = next(iter(d_cookies.items()))
-        if url := DOWNLOAD_URL_CACHE.get((user_id, pickcode)):
-            return url
-        elif pairs := DOWNLOAD_URL_CACHE2.get((user_id, pickcode, user_agent)):
-            url, expire_ts = pairs
-            if expire_ts >= time():
-                return url
-            DOWNLOAD_URL_CACHE2.pop((user_id, pickcode, user_agent))
+        if (cache_url and (r := DOWNLOAD_URL_CACHE.get((user_id, pickcode, user_agent)))
+            or (r := DOWNLOAD_URL_CACHE1.get((user_id, pickcode)))
+            or (r := DOWNLOAD_URL_CACHE2.get((user_id, pickcode, user_agent)))
+        ):
+            return r[1]
         if app == "chrome":
             resp = await client.post(
                 "http://pro.api.115.com/app/chrome/downurl", 
@@ -341,11 +342,13 @@ def make_application(
         else:
             data["file_name"] = unquote(urlsplit(data["url"]).path.rpartition("/")[-1])
             url = Url.of(data["url"], data)
+        expire_ts = int(next(v for k, v in parse_qsl(urlsplit(url).query) if k == "t")) - 60 * 5
         if "&c=0&f=&" in url:
-            DOWNLOAD_URL_CACHE[(user_id, pickcode)] = url
+            DOWNLOAD_URL_CACHE1[(user_id, pickcode)] = (expire_ts, url)
         elif "&c=0&f=1&" in url:
-            expire_ts = int(next(v for k, v in parse_qsl(urlsplit(url).query) if k == "t"))
-            DOWNLOAD_URL_CACHE2[(user_id, pickcode, user_agent)] = (url, expire_ts - 60)
+            DOWNLOAD_URL_CACHE2[(user_id, pickcode, user_agent)] = (expire_ts, url)
+        elif cache_url:
+            DOWNLOAD_URL_CACHE[(user_id, pickcode, user_agent)] = (expire_ts, url)
         return url
 
     async def get_share_downurl(
@@ -359,8 +362,8 @@ def make_application(
             cookies = d_cookies[user_id]
         else:
             user_id, cookies = next(iter(d_cookies.items()))
-        if url := DOWNLOAD_URL_CACHE.get((share_code, file_id)):
-            return url
+        if r := DOWNLOAD_URL_CACHE1.get((share_code, file_id)):
+            return r[1]
         payload = {"share_code": share_code, "receive_code": receive_code, "file_id": file_id}
         if app:
             resp = await client.get(
@@ -391,7 +394,8 @@ def make_application(
         data["file_size"] = int(data.pop("fs"))
         url = Url.of(url_info["url"], data)
         if "&c=0&f=&" in url:
-            DOWNLOAD_URL_CACHE[(share_code, file_id)] = url
+            expire_ts = int(next(v for k, v in parse_qsl(urlsplit(url).query) if k == "t")) - 60 * 5
+            DOWNLOAD_URL_CACHE1[(share_code, file_id)] = (expire_ts, url)
         return url
 
     async def get_receive_code(share_code: str, user_id: int = 0) -> str:

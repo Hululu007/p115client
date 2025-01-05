@@ -320,7 +320,7 @@ def iter_stared_files(client: P115Client, ids: Iterable[int]) -> Iterator[dict]:
 # TODO: 再实现几个版本
 # TODO: 1. 以前的方法：用 update_star, update_desc 搭配星标列表
 # TODO: 2. 新版本，完全不使用星标，通过 fs_file 实现，进行默认 20 线程并发
-# TODO: 3. 新版本，使用 fs_files（分流执行），获取 resp["path"]，如果某个 id 已经取得，则跳过
+# TODO: 3. 新版本，使用 fs_files 和 fs_category_get（分流执行），获取 resp["path"]，如果某个 id 已经取得，则跳过
 
 def sort(
     data: list[dict], 

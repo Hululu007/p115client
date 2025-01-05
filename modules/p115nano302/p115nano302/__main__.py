@@ -11,7 +11,7 @@ __doc__ = """\
     │                                                                              │
     │                      \x1b[32mlicense     \x1b[4;34mhttps://www.gnu.org/licenses/gpl-3.0.txt\x1b[0m    │
     │                                                                              │
-    │                      \x1b[32mversion     \x1b[1;36m0.0.8\x1b[0m                                       │
+    │                      \x1b[32mversion     \x1b[1;36m0.0.9\x1b[0m                                       │
     │                                                                              │
     ╰──────────────────────────────────────────────────────────────────────────────╯
 
@@ -107,6 +107,7 @@ parser.add_argument("-p", "--password", default="", help="执行后台信息操�
 parser.add_argument("-t", "--token", default="", help="签名所用的 token，如果提供，则请求必须携带签名，即 sign 查询参数")
 parser.add_argument("-H", "--host", default="0.0.0.0", help="ip 或 hostname，默认值：'0.0.0.0'")
 parser.add_argument("-P", "--port", default=8000, type=int, help="端口号，默认值：8000，如果为 0 则自动确定")
+parser.add_argument("-cu", "--cache-url", action="store_true", help="缓存下载链接")
 parser.add_argument("-d", "--debug", action="store_true", help="启用调试，会输出更详细信息")
 parser.add_argument("-uc", "--uvicorn-run-config-path", help="uvicorn 启动时的配置文件路径，会作为关键字参数传给 `uvicorn.run`，支持 JSON、YAML 或 TOML 格式，会根据扩展名确定，不能确定时视为 JSON")
 parser.add_argument("-v", "--version", action="store_true", help="输出版本号")
@@ -188,6 +189,7 @@ def main(argv: None | list[str] | Namespace = None, /):
         debug=args.debug, 
         password=args.password, 
         token=args.token, 
+        cache_url=args.cache_url, 
     )
     run(app, **run_config)
 

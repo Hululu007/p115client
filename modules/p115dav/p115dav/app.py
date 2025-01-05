@@ -15,6 +15,7 @@ from collections import deque
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from contextlib import closing, suppress
 from datetime import datetime
+from http import HTTPStatus
 from io import BytesIO
 from math import isinf, isnan
 from pathlib import Path
@@ -29,12 +30,37 @@ from sqlite3 import (
 )
 from _thread import start_new_thread
 from typing import cast, Any
-from urllib.parse import quote, urlsplit
+from urllib.parse import parse_qsl, quote, urlsplit
 from weakref import WeakValueDictionary
 
 
 CRE_URL_T_search = re_compile(r"(?<=(?:\?|&)t=)\d+").search
 _INITIALIZED = False
+
+
+class ColoredLevelNameFormatter(logging.Formatter):
+
+    def format(self, record):
+        match record.levelno:
+            case logging.DEBUG:
+                # blue
+                record.levelname = f"\x1b[34m{record.levelname}\x1b[0m:".ljust(18)
+            case logging.INFO:
+                # green
+                record.levelname = f"\x1b[32m{record.levelname}\x1b[0m:".ljust(18)
+            case logging.WARNING:
+                # yellow
+                record.levelname = f"\x1b[33m{record.levelname}\x1b[0m:".ljust(18)
+            case logging.ERROR:
+                # red
+                record.levelname = f"\x1b[31m{record.levelname}\x1b[0m:".ljust(18)
+            case logging.CRITICAL:
+                # magenta
+                record.levelname = f"\x1b[35m{record.levelname}\x1b[0m:".ljust(18)
+            case _:
+                # dark grey
+                record.levelname = f"\x1b[2m{record.levelname}\x1b[0m: ".ljust(18)
+        return super().format(record)
 
 
 def format_size(
@@ -133,8 +159,6 @@ def _init():
     register_adapter(dict, json_dumps)
     register_adapter(list, json_dumps)
     register_converter("JSON", json_loads)
-    logging.basicConfig(format="[\x1b[1m%(asctime)s\x1b[0m] (\x1b[1;36m%(levelname)s\x1b[0m) "
-                                "\x1b[0m\x1b[1;35mp115dav\x1b[0m \x1b[5;31m➜\x1b[0m %(message)s")
 
     environ["APP_JINJA_PACKAGE_NAME"] = "p115dav"
     html_settings.use(JinjaRenderer(enable_async=True))
@@ -147,6 +171,11 @@ def _init():
     jinja2_filters["json_dumps"] = lambda data: json_dumps(data).decode("utf-8").replace("'", "&apos;")
     jinja2_filters["format_timestamp"] = format_timestamp
     jinja2_filters["escape_name"] = lambda name, default="/": escape(name) or default
+
+    from uvicorn.config import LOGGING_CONFIG
+
+    LOGGING_CONFIG["formatters"]["default"]["fmt"] = "[\x1b[1m%(asctime)s\x1b[0m] %(levelprefix)s %(message)s"
+    LOGGING_CONFIG["formatters"]["access"]["fmt"] = '[\x1b[1m%(asctime)s\x1b[0m] %(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s'
 
     _INITIALIZED = True
 
@@ -163,6 +192,8 @@ def make_application(
     predicate = None, 
     strm_predicate = None, 
     load_libass: bool = False, 
+    cache_url: bool = False, 
+    cache_size: int = 65536, 
     debug: bool = False, 
     wsgidav_config: dict = {}, 
 ) -> Application:
@@ -174,7 +205,7 @@ def make_application(
     from blacksheep.server.compression import use_gzip_compression
     from blacksheep.server.remotes.forwarding import ForwardedHeadersMiddleware
     from blacksheep.server.responses import view_async
-    from cachedict import LRUDict, TTLDict
+    from cachedict import LRUDict, TTLDict, TLRUDict
     from dictattr import AttrDict
     from encode_uri import encode_uri, encode_uri_component_loose
     # NOTE: 其它可用模块
@@ -205,7 +236,6 @@ def make_application(
         cookies_path = Path("115-cookies.txt")
 
     app = Application(router=Router(), show_error_details=debug)
-    logger = getattr(app, "logger")
     use_gzip_compression(app)
     app.serve_files(
         Path(__file__).with_name("static"), 
@@ -213,10 +243,18 @@ def make_application(
         fallback_document="index.html", 
     )
 
+    logger = getattr(app, "logger")
+    handler = logging.StreamHandler()
+    handler.setFormatter(ColoredLevelNameFormatter("[\x1b[1m%(asctime)s\x1b[0m] %(levelname)s %(message)s"))
+    logger.addHandler(handler)
+
     # NOTE: 缓存图片的 CDN 直链，缓存 59 分钟
-    IMAGE_URL_CACHE: TTLDict[str | tuple[str, int], str] = TTLDict(65536, ttl=60*59)
+    IMAGE_URL_CACHE: TTLDict[str | tuple[str, int], str] = TTLDict(cache_size, ttl=60*59)
     # NOTE: 缓存直链（主要是音乐链接）
-    DOWNLOAD_URL_CACHE: TTLDict[str | tuple[str, int], P115URL] = TTLDict(65536, ttl=2900)
+    if cache_url:
+        DOWNLOAD_URL_CACHE: TLRUDict[tuple[str, str], P115URL] = TLRUDict(cache_size)
+    DOWNLOAD_URL_CACHE1: TLRUDict[str | tuple[str, int], P115URL] = TLRUDict(cache_size)
+    DOWNLOAD_URL_CACHE2: TLRUDict[tuple[str, str], P115URL] = TLRUDict(1024)
     # NOTE: 缓存文件列表数据
     CACHE_ID_TO_LIST: LRUDict[int | tuple[str, int], dict] = LRUDict(64)
     # NOTE: 缓存文件信息数据
@@ -230,7 +268,7 @@ def make_application(
     # NOTE: 后台任务队列
     QUEUE: SimpleQueue[None | tuple[str, Any]] = SimpleQueue()
     # NOTE: webdav 的文件对象缓存
-    DAV_FILE_CACHE: LRUDict[str, DAVNonCollection] = LRUDict(65536)
+    DAV_FILE_CACHE: LRUDict[str, DAVNonCollection] = LRUDict(cache_size)
 
     put_task = QUEUE.put_nowait
     get_task = QUEUE.get
@@ -1071,36 +1109,59 @@ END;
             )
         return text(str(exc), status_code)
 
+    async def redirect_exception_response(
+        self, 
+        request: Request, 
+        exc: Exception, 
+    ) -> Response:
+        code = get_status_code(exc)
+        if code is not None:
+            return make_response_for_exception(exc, code)
+        elif isinstance(exc, ValueError):
+            return make_response_for_exception(exc, 400) # Bad Request
+        elif isinstance(exc, AuthenticationError):
+            return make_response_for_exception(exc, 401) # Unauthorized
+        elif isinstance(exc, PermissionError):
+            return make_response_for_exception(exc, 403) # Forbidden
+        elif isinstance(exc, FileNotFoundError):
+            return make_response_for_exception(exc, 404) # Not Found
+        elif isinstance(exc, (IsADirectoryError, NotADirectoryError)):
+            return make_response_for_exception(exc, 406) # Not Acceptable
+        elif isinstance(exc, TooManyRequests):
+            return make_response_for_exception(exc, 429) # Too Many Requests
+        elif isinstance(exc, BusyOSError):
+            return make_response_for_exception(exc, 503) # Service Unavailable
+        elif isinstance(exc, OSError):
+            return make_response_for_exception(exc, 500) # Internal Server Error
+        else:
+            return make_response_for_exception(exc, 503) # Service Unavailable
+
     if debug:
-        logger.level = 10
-    else:
-        @app.exception_handler(Exception)
-        async def redirect_exception_response(
-            self, 
-            request: Request, 
-            exc: Exception, 
-        ) -> Response:
-            code = get_status_code(exc)
-            if code is not None:
-                return make_response_for_exception(exc, code)
-            elif isinstance(exc, ValueError):
-                return make_response_for_exception(exc, 400) # Bad Request
-            elif isinstance(exc, AuthenticationError):
-                return make_response_for_exception(exc, 401) # Unauthorized
-            elif isinstance(exc, PermissionError):
-                return make_response_for_exception(exc, 403) # Forbidden
-            elif isinstance(exc, FileNotFoundError):
-                return make_response_for_exception(exc, 404) # Not Found
-            elif isinstance(exc, (IsADirectoryError, NotADirectoryError)):
-                return make_response_for_exception(exc, 406) # Not Acceptable
-            elif isinstance(exc, TooManyRequests):
-                return make_response_for_exception(exc, 429) # Too Many Requests
-            elif isinstance(exc, BusyOSError):
-                return make_response_for_exception(exc, 503) # Service Unavailable
-            elif isinstance(exc, OSError):
-                return make_response_for_exception(exc, 500) # Internal Server Error
+        logger.level = logging.DEBUG
+
+    @app.middlewares.append
+    async def access_log(request: Request, handler) -> Response:
+        start_t = time()
+        def log(log, response):
+            remote_attr = request.scope["client"]
+            status = response.status
+            if status < 300:
+                status_color = 32
+            elif status < 400:
+                status_color = 33
             else:
-                return make_response_for_exception(exc, 503) # Service Unavailable
+                status_color = 31
+            log(f'\x1b[5;35m{remote_attr[0]}:{remote_attr[1]}\x1b[0m - "\x1b[1;36m{request.method}\x1b[0m \x1b[1;4;34m{request.url}\x1b[0m \x1b[1mHTTP/{request.scope["http_version"]}\x1b[0m" - \x1b[{status_color}m{status} {HTTPStatus(status).phrase}\x1b[0m - \x1b[32m{(time() - start_t) * 1000:.3f}\x1b[0m \x1b[3mms\x1b[0m')
+        try:
+            response = await handler(request)
+            log(logger.info, response)
+        except Exception as e:
+            response = await redirect_exception_response(app, request, e)
+            if debug:
+                log(logger.exception, response)
+            else:
+                log(logger.error, response)
+        return response
 
     @app.router.get("/%3Cid")
     @app.router.get("/%3Cid/*")
@@ -1283,12 +1344,20 @@ END;
         """
         if image:
             return {"type": "image", "url": await get_image_url(pickcode)}
-        if url := DOWNLOAD_URL_CACHE.get(pickcode):
-            return {"type": "file", "url": url, "headers": None}
         user_agent = (request.get_first_header(b"User-agent") or b"").decode("latin-1")
+        if (cache_url and (r := DOWNLOAD_URL_CACHE.get((pickcode, user_agent)))
+            or (r := DOWNLOAD_URL_CACHE1.get(pickcode))
+            or (r := DOWNLOAD_URL_CACHE2.get((pickcode, user_agent)))
+        ):
+            return {"type": "file", "url": (url := r[1]), "headers": url.get("headers")}
         url = await get_file_url(pickcode, user_agent=user_agent, use_web_api=web)
+        expire_ts = int(next(v for k, v in parse_qsl(urlsplit(url).query) if k == "t")) - 60 * 5
         if "&c=0&f=&" in url:
-            DOWNLOAD_URL_CACHE[pickcode] = url
+            DOWNLOAD_URL_CACHE1[pickcode] = (expire_ts, url)
+        elif "&c=0&f=1&" in url:
+            DOWNLOAD_URL_CACHE2[(pickcode, user_agent)] = (expire_ts, url)
+        elif cache_url:
+            DOWNLOAD_URL_CACHE[(pickcode, user_agent)] = (expire_ts, url)
         return {"type": "file", "url": url, "headers": url.get("headers")}
 
     @app.router.route("/", methods=["GET", "HEAD"])
@@ -1465,12 +1534,13 @@ END;
                 "type": "image", 
                 "url": await get_share_image_url(share_code, receive_code, id), 
             }
-        if url := DOWNLOAD_URL_CACHE.get((share_code, id)):
-            return {"type": "file", "url": url, "headers": None}
+        if r := DOWNLOAD_URL_CACHE1.get((share_code, id)):
+            return {"type": "file", "url": r[1], "headers": None}
         user_agent = (request.get_first_header(b"User-agent") or b"").decode("latin-1")
         url = await get_share_file_url(share_code, receive_code, id, use_web_api=web)
         if "&c=0&f=&" in url:
-            DOWNLOAD_URL_CACHE[(share_code, id)] = url
+            expire_ts = int(next(v for k, v in parse_qsl(urlsplit(url).query) if k == "t")) - 60 * 5
+            DOWNLOAD_URL_CACHE1[(share_code, id)] = (expire_ts, url)
         return {"type": "file", "url": url, "headers": url.get("headers")}
 
     @app.router.get("/%3Cshare/%3Cid")
@@ -2039,7 +2109,16 @@ if __name__ == "__main__":
 
     app = make_application(debug=True, load_libass=True, dbfile="p115dav-test.db")
     try:
-        uvicorn.run(app)
+        uvicorn.run(
+            app, 
+            host="0.0.0.0", 
+            port=8000, 
+            proxy_headers=True, 
+            server_header=False, 
+            forwarded_allow_ips="*", 
+            timeout_graceful_shutdown=1, 
+            access_log=False, 
+        )
     finally:
         with suppress(OSError):
             remove("p115dav-test.db")

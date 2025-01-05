@@ -176,6 +176,7 @@ parser.add_argument("-fs", "--fast-strm", action="store_true", help="""快速实
 """)
 parser.add_argument("-H", "--host", default="", help="ip 或 hostname，默认值：'0.0.0.0'")
 parser.add_argument("-P", "--port", default=8000, type=int, help="端口号，默认值：8000，如果为 0 则自动确定")
+parser.add_argument("-cu", "--cache-url", action="store_true", help="缓存下载链接")
 parser.add_argument("-d", "--debug", action="store_true", help="启用 debug 模式，输出详细的错误信息")
 parser.add_argument("-ass", "--load-libass", action="store_true", help="加载 libass.js，实现 ass/ssa 字幕特效")
 parser.add_argument("-uc", "--uvicorn-run-config-path", help="uvicorn 启动时的配置文件路径，会作为关键字参数传给 `uvicorn.run`，支持 JSON、YAML 或 TOML 格式，会根据扩展名确定，不能确定时视为 JSON")
@@ -283,6 +284,7 @@ def main(argv: None | list[str] | Namespace = None, /):
     run_config.setdefault("server_header", False)
     run_config.setdefault("forwarded_allow_ips", "*")
     run_config.setdefault("timeout_graceful_shutdown", 1)
+    run_config.setdefault("access_log", False)
 
     app = make_application(
         dbfile=args.dbfile, 
@@ -292,6 +294,7 @@ def main(argv: None | list[str] | Namespace = None, /):
         predicate=predicate, 
         strm_predicate=strm_predicate, 
         load_libass=args.load_libass, 
+        cache_url=args.cache_url, 
         debug=args.debug, 
         wsgidav_config=wsgidav_config, 
     )

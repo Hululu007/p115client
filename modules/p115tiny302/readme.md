@@ -34,7 +34,7 @@ run(
 
 ```console
 $ p115tiny302 -h
-usage: p115tiny302 [-h] [-c COOKIES] [-cp COOKIES_PATH] [-t TOKEN] [-H HOST] [-P PORT] [-d] [-uc UVICORN_RUN_CONFIG_PATH] [-v] [-l]
+usage: p115tiny302 [-h] [-c COOKIES] [-cp COOKIES_PATH] [-t TOKEN] [-H HOST] [-P PORT] [-cu] [-d] [-uc UVICORN_RUN_CONFIG_PATH] [-v] [-l]
 
     ╭───────────────────────── Welcome to 115 tiny 302 ────────────────────────────╮
     │                                                                              │
@@ -44,7 +44,7 @@ usage: p115tiny302 [-h] [-c COOKIES] [-cp COOKIES_PATH] [-t TOKEN] [-H HOST] [-P
     │                                                                              │
     │                      license     https://www.gnu.org/licenses/gpl-3.0.txt    │
     │                                                                              │
-    │                      version     0.0.8                                       │
+    │                      version     0.0.9                                       │
     │                                                                              │
     ╰──────────────────────────────────────────────────────────────────────────────╯
 
@@ -123,9 +123,10 @@ options:
                         签名所用的 token，如果提供，则请求必须携带签名，即 sign 查询参数
   -H HOST, --host HOST  ip 或 hostname，默认值：'0.0.0.0'
   -P PORT, --port PORT  端口号，默认值：8000，如果为 0 则自动确定
+  -cu, --cache-url      缓存下载链接
   -d, --debug           启用调试，会输出更详细信息
   -uc UVICORN_RUN_CONFIG_PATH, --uvicorn-run-config-path UVICORN_RUN_CONFIG_PATH
                         uvicorn 启动时的配置文件路径，会作为关键字参数传给 `uvicorn.run`，支持 JSON、YAML 或 TOML 格式，会根据扩展名确定，不能确定时视为 JSON
   -v, --version         输出版本号
-  -l, --license         输出授权信
+  -l, --license         输出授权信息
 ```

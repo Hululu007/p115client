@@ -2,7 +2,7 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 0, 8)
+__version__ = (0, 0, 9)
 __license__ = "GPLv3 <https://www.gnu.org/licenses/gpl-3.0.txt>"
 
 import logging
@@ -20,7 +20,7 @@ from urllib.parse import parse_qsl, quote, unquote, urlsplit
 from blacksheep import json, text, Application, Request, Response, Router
 from blacksheep.contents import Content
 from blacksheep.server.remotes.forwarding import ForwardedHeadersMiddleware
-from cachedict import LRUDict, TTLDict
+from cachedict import LRUDict, TLRUDict
 from orjson import dumps
 from p115client import check_response, P115Client, P115URL, P115OSError
 from uvicorn.config import LOGGING_CONFIG
@@ -68,14 +68,17 @@ def make_application(
     client: P115Client, 
     debug: bool = False, 
     token: str = "", 
+    cache_url: bool = False, 
     cache_size: int = 65536, 
 ) -> Application:
     ID_TO_PICKCODE: LRUDict[int, str] = LRUDict(cache_size)
     SHA1_TO_PICKCODE: LRUDict[str, str] = LRUDict(cache_size)
     NAME_TO_PICKCODE: LRUDict[str, str] = LRUDict(cache_size)
     SHARE_NAME_TO_ID: LRUDict[tuple[str, str], int] = LRUDict(cache_size)
-    DOWNLOAD_URL_CACHE: TTLDict[str | tuple[str, int], P115URL] = TTLDict(cache_size, 3600)
-    DOWNLOAD_URL_CACHE2: LRUDict[tuple[str, str], tuple[P115URL, int]] = LRUDict(1024)
+    if cache_url:
+        DOWNLOAD_URL_CACHE: TLRUDict[tuple[str, str], P115URL] = TLRUDict(cache_size)
+    DOWNLOAD_URL_CACHE1: TLRUDict[str | tuple[str, int], P115URL] = TLRUDict(cache_size)
+    DOWNLOAD_URL_CACHE2: TLRUDict[tuple[str, str], P115URL] = TLRUDict(1024)
     RECEIVE_CODE_MAP: dict[str, str] = {}
 
     app = Application(router=Router(), show_error_details=debug)
@@ -199,19 +202,19 @@ def make_application(
         user_agent: str = "", 
         app: str = "android", 
     ) -> P115URL:
-        if url := DOWNLOAD_URL_CACHE.get(pickcode):
-            return url
-        elif pairs := DOWNLOAD_URL_CACHE2.get((pickcode, user_agent)):
-            url, expire_ts = pairs
-            if expire_ts >= time():
-                return url
-            DOWNLOAD_URL_CACHE2.pop((pickcode, user_agent))
+        if (cache_url and (r := DOWNLOAD_URL_CACHE.get((pickcode, user_agent)))
+            or (r := DOWNLOAD_URL_CACHE1.get(pickcode))
+            or (r := DOWNLOAD_URL_CACHE2.get((pickcode, user_agent)))
+        ):
+            return r[1]
         url = await client.download_url(pickcode, headers={"User-Agent": user_agent}, app=app or "android", async_=True)
+        expire_ts = int(next(v for k, v in parse_qsl(urlsplit(url).query) if k == "t")) - 60 * 5
         if "&c=0&f=&" in url:
-            DOWNLOAD_URL_CACHE[pickcode] = url
+            DOWNLOAD_URL_CACHE1[pickcode] = (expire_ts, url)
         elif "&c=0&f=1&" in url:
-            expire_ts = int(next(v for k, v in parse_qsl(urlsplit(url).query) if k == "t"))
-            DOWNLOAD_URL_CACHE2[(pickcode, user_agent)] = (url, expire_ts - 60)
+            DOWNLOAD_URL_CACHE2[(pickcode, user_agent)] = (expire_ts, url)
+        elif cache_url:
+            DOWNLOAD_URL_CACHE[(pickcode, user_agent)] = (expire_ts, url)
         return url
 
     async def get_share_downurl(
@@ -220,8 +223,8 @@ def make_application(
         file_id: int, 
         app: str = "", 
     ) -> P115URL:
-        if url := DOWNLOAD_URL_CACHE.get((share_code, file_id)):
-            return url
+        if r := DOWNLOAD_URL_CACHE1.get((share_code, file_id)):
+            return r[1]
         payload = {"share_code": share_code, "receive_code": receive_code, "file_id": file_id}
         try:
             url = await client.share_download_url(payload, app=app, async_=True)
@@ -231,7 +234,8 @@ def make_application(
             receive_code = await get_receive_code(share_code)
             return await get_share_downurl(share_code, receive_code, file_id)
         if "&c=0&f=&" in url:
-            DOWNLOAD_URL_CACHE[(share_code, file_id)] = url
+            expire_ts = int(next(v for k, v in parse_qsl(urlsplit(url).query) if k == "t")) - 60 * 5
+            DOWNLOAD_URL_CACHE1[(share_code, file_id)] = (expire_ts, url)
         return url
 
     async def get_receive_code(share_code: str) -> str:
