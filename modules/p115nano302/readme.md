@@ -42,7 +42,7 @@ usage: p115nano302 [-h] [-c COOKIES] [-cp COOKIES_PATH] [-p PASSWORD] [-t TOKEN]
     │                                                                              │
     │                      license     https://www.gnu.org/licenses/gpl-3.0.txt    │
     │                                                                              │
-    │                      version     0.0.9                                       │
+    │                      version     0.1.0                                       │
     │                                                                              │
     ╰──────────────────────────────────────────────────────────────────────────────╯
 

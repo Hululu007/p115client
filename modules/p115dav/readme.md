@@ -16,8 +16,8 @@ pip install -U p115dav
 $ p115dav -h
 usage: p115dav [-h] [-cp COOKIES_PATH] [-o STRM_ORIGIN] [-t TTL] [-p1 PREDICATE]
                [-t1 {ignore,ignore-file,expr,lambda,stmt,module,file,re}] [-p2 STRM_PREDICATE]
-               [-t2 {filter,filter-file,expr,lambda,stmt,module,file,re}] [-fs] [-H HOST] [-P PORT] [-d] [-ass]
-               [-uc UVICORN_RUN_CONFIG_PATH] [-wc WSGIDAV_CONFIG_PATH] [-l] [-v]
+               [-t2 {filter,filter-file,expr,lambda,stmt,module,file,re}] [-fs] [-H HOST] [-P PORT] [-cu]
+               [-d] [-ass] [-uc UVICORN_RUN_CONFIG_PATH] [-wc WSGIDAV_CONFIG_PATH] [-l] [-v]
                [dbfile]
 
     🕸️ 115 网盘 WebDAV 和 302 直链程序 🕷️
@@ -74,6 +74,7 @@ options:
                         
                             --strm-predicate-type expr \
                             --strm-predicate '(
+                                path["type"] in (3, 4) or
                                 path.media_type.startswith(("video/", "audio/")) and
                                 path.suffix.lower() != ".ass" or
                                 path.suffix.lower() in (".divx", ".iso", ".m2ts", ".swf", ".xvid")
@@ -87,7 +88,8 @@ options:
                         
   -H HOST, --host HOST  ip 或 hostname，默认值：'0.0.0.0'
   -P PORT, --port PORT  端口号，默认值：8000，如果为 0 则自动确定
-  -d, --debug           启用 debug 模式，当文件变动时自动重启 + 输出详细的错误信息
+  -cu, --cache-url      缓存下载链接
+  -d, --debug           启用 debug 模式，输出详细的错误信息
   -ass, --load-libass   加载 libass.js，实现 ass/ssa 字幕特效
   -uc UVICORN_RUN_CONFIG_PATH, --uvicorn-run-config-path UVICORN_RUN_CONFIG_PATH
                         uvicorn 启动时的配置文件路径，会作为关键字参数传给 `uvicorn.run`，支持 JSON、YAML 或 TOML 格式，会根据扩展名确定，不能确定时视为 JSON

@@ -12,25 +12,26 @@ from asyncio import (
     get_running_loop, run_coroutine_threadsafe, to_thread, AbstractEventLoop, Lock, 
 )
 from collections import deque
-from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Buffer, Callable, Iterator, Mapping, Sequence
 from contextlib import closing, suppress
 from datetime import datetime
+from errno import ENOENT, EBUSY
 from http import HTTPStatus
 from io import BytesIO
 from math import isinf, isnan
 from pathlib import Path
 from posixpath import split as splitpath, splitext
 from queue import SimpleQueue
-from os import environ, remove
+from os import environ, get_terminal_size, remove
 from re import compile as re_compile
-from time import time
 from sqlite3 import (
     connect, register_adapter, register_converter, PARSE_COLNAMES, PARSE_DECLTYPES, 
     Connection, OperationalError
 )
+from time import time
 from _thread import start_new_thread
 from typing import cast, Any
-from urllib.parse import parse_qsl, quote, urlsplit
+from urllib.parse import parse_qsl, quote, unquote, urlsplit, urlunsplit
 from weakref import WeakValueDictionary
 
 
@@ -212,7 +213,7 @@ def make_application(
     # - https://pypi.org/project/user-agents/
     # - https://github.com/faisalman/ua-parser-js
     from httpagentparser import detect as detect_ua # type: ignore
-    from orjson import dumps as json_dumps, loads as json_loads
+    from orjson import dumps, OPT_INDENT_2, OPT_SORT_KEYS
     from p115client import check_response, CLASS_TO_TYPE, SUFFIX_TO_TYPE, P115Client, P115URL
     from p115client.exception import AuthenticationError, BusyOSError
     from p115client.tool import get_id_to_path, get_id_to_pickcode, get_id_to_sha1, share_iterdir, P115ID
@@ -224,6 +225,11 @@ def make_application(
     # - https://pypi.org/project/ass/
     # - https://pypi.org/project/srt/
     from pysubs2 import SSAFile # type: ignore
+    from rich.box import ROUNDED
+    from rich.console import Console
+    from rich.highlighter import JSONHighlighter
+    from rich.panel import Panel
+    from rich.text import Text
     from wsgidav.wsgidav_app import WsgiDAVApp # type: ignore
     from wsgidav.dav_error import DAVError # type: ignore
     from wsgidav.dav_provider import DAVCollection, DAVNonCollection, DAVProvider # type: ignore
@@ -278,6 +284,18 @@ def make_application(
     dummy_client: P115Client = P115Client("")
     con: Connection
     loop: AbstractEventLoop
+
+    def default(obj, /):
+        if isinstance(obj, Buffer):
+            return str(obj, "utf-8")
+        raise TypeError
+
+    def highlight_json(val, /, default=default, highlighter=JSONHighlighter()) -> Text:
+        if isinstance(val, Buffer):
+            val = str(val, "utf-8")
+        if not isinstance(val, str):
+            val = dumps(val, default=default, option=OPT_INDENT_2 | OPT_SORT_KEYS).decode("utf-8")
+        return highlighter(val)
 
     def normalize_attr(info: Mapping, /) -> AttrDict:
         def typeof(attr):
@@ -469,7 +487,7 @@ def make_application(
             pid = await to_thread(query, "SELECT parent_id FROM share_data WHERE share_code=? AND path=? LIMIT 1;", (share_code, path))
         if pid is None:
             if await to_thread(query, "SELECT loaded FROM share_list_loaded WHERE share_code=?", share_code, default=False):
-                raise FileNotFoundError({"share_code": share_code, "id": id, "sha1": sha1, "path": path})
+                raise FileNotFoundError(ENOENT, {"share_code": share_code, "id": id, "sha1": sha1, "path": path})
         return pid
 
     async def get_share_id_from_db(share_code: str, sha1: str = "", path: str = "") -> None | int:
@@ -480,7 +498,7 @@ def make_application(
             fid = await to_thread(query, "SELECT id FROM share_data WHERE share_code=? AND path=? LIMIT 1;", (share_code, path))
         if fid is None:
             if await to_thread(query, "SELECT loaded FROM share_list_loaded WHERE share_code=?", share_code, default=False):
-                raise FileNotFoundError({"share_code": share_code, "sha1": sha1, "path": path})
+                raise FileNotFoundError(ENOENT, {"share_code": share_code, "sha1": sha1, "path": path})
         return fid
 
     async def get_share_sha1_from_db(share_code: str, id: int = 0, path: str = "") -> str:
@@ -493,7 +511,7 @@ def make_application(
             sha1 = ""
         if sha1 is None:
             if await to_thread(query, "SELECT loaded FROM share_list_loaded WHERE share_code=?", share_code, default=False):
-                raise FileNotFoundError({"share_code": share_code, "id": id, "path": path})
+                raise FileNotFoundError(ENOENT, {"share_code": share_code, "id": id, "path": path})
         return sha1 or ""
 
     async def get_share_path_from_db(share_code: str, id: int = -1, sha1: str = "") -> str:
@@ -508,7 +526,7 @@ def make_application(
             path = ""
         if path is None:
             if await to_thread(query, "SELECT loaded FROM share_list_loaded WHERE share_code=?", share_code, default=False):
-                raise FileNotFoundError({"share_code": share_code, "id": id, "sha1": sha1})
+                raise FileNotFoundError(ENOENT, {"share_code": share_code, "id": id, "sha1": sha1})
         return path or ""
 
     async def get_ancestors_from_db(id: int = 0) -> list[dict]:
@@ -535,7 +553,7 @@ SELECT * FROM t;""", id)
         share_list = await to_thread(query, "SELECT data FROM share_list WHERE share_code=? AND id=? LIMIT 1", (share_code, id))
         if share_list is None:
             if await to_thread(query, "SELECT loaded FROM share_list_loaded WHERE share_code=?", share_code, default=False):
-                raise FileNotFoundError({"share_code": share_code, "id": id})
+                raise FileNotFoundError(ENOENT, {"share_code": share_code, "id": id})
         else:
             children = share_list["children"]
             if children:
@@ -615,7 +633,7 @@ LIMIT 1;""", (share_code, id))
                 for record in cur.execute(sql, (share_code, parent_id, name))
             ]
             if not ls and cur.execute("SELECT TRUE FROM share_list WHERE share_code=? LIMIT 1", (share_code,)).fetchone() is not None:
-                raise FileNotFoundError(f"{name!r} in share_code={share_code!r}, parent_id={parent_id}")
+                raise FileNotFoundError(ENOENT, {"share_code": share_code, "parent_id": parent_id, "name": name})
             return ls
 
     def share_info_to_path_gen(
@@ -675,7 +693,7 @@ LIMIT 1;""", (share_code, id))
         resp = await fs_files(payload, async_=True)
         check_response(resp)
         if cid and int(resp["path"][-1]["cid"]) != cid:
-            raise FileNotFoundError(cid)
+            raise FileNotFoundError(ENOENT, {"id": cid})
         count = resp["count"]
         ancestors = [{"id": "0", "parent_id": "0", "name": ""}]
         ancestors.extend(
@@ -697,13 +715,13 @@ LIMIT 1;""", (share_code, id))
                 resp = await fs_files(payload, async_=True)
                 check_response(resp)
                 if cid and int(resp["path"][-1]["cid"]) != cid:
-                    raise FileNotFoundError(cid)
+                    raise FileNotFoundError(ENOENT, {"cid": cid})
                 ancestors[1:] = (
                     {"id": a["cid"], "parent_id": a["pid"], "name": a["name"]} 
                     for a in resp["path"][1:]
                 )
                 if count != resp["count"]:
-                    raise BusyOSError(f"count changes during iteration: {cid}")
+                    raise BusyOSError(EBUSY, f"count changes during iteration: {cid}")
         return count, ancestors, iter()
 
     async def update_file_list_partial(cid: int, file_list: dict):
@@ -1105,7 +1123,7 @@ END;
             return Response(
                 status_code, 
                 None, 
-                Content(b"application/json", json_dumps(exc.args[-1])), 
+                Content(b"application/json", dumps(exc.args[-1])), 
             )
         return text(str(exc), status_code)
 
@@ -1142,7 +1160,7 @@ END;
     @app.middlewares.append
     async def access_log(request: Request, handler) -> Response:
         start_t = time()
-        def log(log, response):
+        def get_message(response: Response, /) -> str:
             remote_attr = request.scope["client"]
             status = response.status
             if status < 300:
@@ -1151,16 +1169,52 @@ END;
                 status_color = 33
             else:
                 status_color = 31
-            log(f'\x1b[5;35m{remote_attr[0]}:{remote_attr[1]}\x1b[0m - "\x1b[1;36m{request.method}\x1b[0m \x1b[1;4;34m{request.url}\x1b[0m \x1b[1mHTTP/{request.scope["http_version"]}\x1b[0m" - \x1b[{status_color}m{status} {HTTPStatus(status).phrase}\x1b[0m - \x1b[32m{(time() - start_t) * 1000:.3f}\x1b[0m \x1b[3mms\x1b[0m')
+            message = f'\x1b[5;35m{remote_attr[0]}:{remote_attr[1]}\x1b[0m - "\x1b[1;36m{request.method}\x1b[0m \x1b[1;4;34m{request.url}\x1b[0m \x1b[1mHTTP/{request.scope["http_version"]}\x1b[0m" - \x1b[{status_color}m{status} {HTTPStatus(status).phrase}\x1b[0m - \x1b[32m{(time() - start_t) * 1000:.3f}\x1b[0m \x1b[3mms\x1b[0m'
+            if debug:
+                max_width = get_terminal_size().columns
+                console = Console()
+                with console.capture() as capture:
+                    urlp = urlsplit(str(request.url))
+                    url = urlunsplit(urlp._replace(path=unquote(urlp.path), scheme=request.scheme, netloc=request.host))
+                    console.print(
+                        Panel.fit(
+                            f"[b cyan]{request.method}[/] [u blue]{url}[/] [b]HTTP/[red]{request.scope["http_version"]}",
+                            box=ROUNDED,
+                            title="[b red]URL", 
+                            border_style="cyan", 
+                            width=max_width, 
+                        ), 
+                    )
+                    headers = {str(k, 'latin-1'): str(v, 'latin-1') for k, v in request.headers}
+                    console.print(
+                        Panel.fit(
+                            highlight_json(headers), 
+                            box=ROUNDED, 
+                            title="[b red]HEADERS", 
+                            border_style="cyan", 
+                            width=max_width, 
+                        )
+                    )
+                    scope = {k: v for k, v in request.scope.items() if k != "headers"}
+                    console.print(
+                        Panel.fit(
+                            highlight_json(scope), 
+                            box=ROUNDED, 
+                            title="[b red]SCOPE", 
+                            border_style="cyan", 
+                            width=max_width, 
+                        )
+                    )
+                message += "\n" + capture.get()
+            return message
         try:
             response = await handler(request)
-            log(logger.info, response)
+            logger.info(get_message(response))
         except Exception as e:
             response = await redirect_exception_response(app, request, e)
+            logger.error(get_message(response))
             if debug:
-                log(logger.exception, response)
-            else:
-                log(logger.error, response)
+                raise
         return response
 
     @app.router.get("/%3Cid")
@@ -1384,8 +1438,8 @@ END;
         :param image: 是否为图片
         :param web: 是否使用 web 接口
         """
-        if path2 == "service-worker.js" and str(request.url) == "/service-worker.js":
-            return text("not found 'service-worker.js'", 404)
+        if str(request.url) == "/service-worker.js":
+            raise FileNotFoundError(ENOENT, {"url": f"{request.scheme}://{request.host}{request.url}"})
         if file is None:
             attr = await get_attr(
                 id=id, 
@@ -1564,7 +1618,7 @@ END;
                 if not attr["is_dir"] and attr["sha1"] == sha1:
                     return attr
             else:
-                raise FileNotFoundError({"share_code": share_code, "sha1": sha1})
+                raise FileNotFoundError(ENOENT, {"share_code": share_code, "sha1": sha1})
         else:
             if not path:
                 return 0
@@ -1593,7 +1647,7 @@ END;
                 ls = await to_thread(share_info_to_path_step, share_code, parent_id, name, ensure_file=False if path_is_dir_form(path) else None)
                 return ls[0]["id"]
             except StopIteration:
-                raise FileNotFoundError({"share_code": share_code, "path": path})
+                raise FileNotFoundError(ENOENT, {"share_code": share_code, "path": path})
         return 0
 
     @app.router.get("/%3Cshare/%3Cattr")
@@ -1638,12 +1692,12 @@ END;
                     if resp.get("errno") != 4100013:
                         check_response(resp)
                 elif not resp["data"]:
-                    raise FileNotFoundError(id)
+                    raise FileNotFoundError(ENOENT, {"id": id})
                 async for attr in get_share_file_tree(share_code, receive_code):
                     if int(attr["id"]) == id:
                         return attr
                 else:
-                    raise FileNotFoundError({"share_code": share_code, "id": id})
+                    raise FileNotFoundError(ENOENT, {"share_code": share_code, "id": id})
             _ = await get_share_file_list(share_code, receive_code, parent_id)
             attr = ID_TO_ATTR[(share_code, id)]
         else:
@@ -1700,7 +1754,7 @@ END;
         image: bool = False, 
         web: bool = False, 
     ):
-        if path2 == "service-worker.js" and str(request.url) == "/service-worker.js":
+        if str(request.url) == "/service-worker.js":
             return text("not found 'service-worker.js'", 404)
         if file is None:
             attr = await get_share_attr(

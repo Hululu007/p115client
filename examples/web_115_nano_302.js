@@ -426,8 +426,6 @@ const server = createServer(async (req, res) => {
     const [start_s, start_ns] = process.hrtime();
     let statusCode = 200;
     try {
-        if (req.url === "/service-worker.js" || req.url === "/favicon.ico")
-            throw new ErrorResponse("", 404);
         const urlp = parse(req.url, true);
         const query = (urlp.search || "").slice(1);
         const params = urlp.query;

@@ -44,7 +44,7 @@ usage: p115tiny302 [-h] [-c COOKIES] [-cp COOKIES_PATH] [-t TOKEN] [-H HOST] [-P
     │                                                                              │
     │                      license     https://www.gnu.org/licenses/gpl-3.0.txt    │
     │                                                                              │
-    │                      version     0.0.9                                       │
+    │                      version     0.1.0                                       │
     │                                                                              │
     ╰──────────────────────────────────────────────────────────────────────────────╯
 

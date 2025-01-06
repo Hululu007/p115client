@@ -2,27 +2,33 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 0, 9)
+__version__ = (0, 1, 0)
 __license__ = "GPLv3 <https://www.gnu.org/licenses/gpl-3.0.txt>"
 
 import logging
 
-from collections.abc import Mapping
+from collections.abc import Buffer, Mapping
 from errno import ENOENT
 from hashlib import sha1 as calc_sha1
 from http import HTTPStatus
+from os import get_terminal_size
 from re import compile as re_compile
 from string import digits, hexdigits
 from time import time
 from typing import Final
-from urllib.parse import parse_qsl, quote, unquote, urlsplit
+from urllib.parse import parse_qsl, quote, unquote, urlsplit, urlunsplit
 
 from blacksheep import json, text, Application, Request, Response, Router
 from blacksheep.contents import Content
 from blacksheep.server.remotes.forwarding import ForwardedHeadersMiddleware
 from cachedict import LRUDict, TLRUDict
-from orjson import dumps
+from orjson import dumps, OPT_INDENT_2, OPT_SORT_KEYS
 from p115client import check_response, P115Client, P115URL, P115OSError
+from rich.box import ROUNDED
+from rich.console import Console
+from rich.highlighter import JSONHighlighter
+from rich.panel import Panel
+from rich.text import Text
 from uvicorn.config import LOGGING_CONFIG
 
 
@@ -55,6 +61,20 @@ class ColoredLevelNameFormatter(logging.Formatter):
                 # dark grey
                 record.levelname = f"\x1b[2m{record.levelname}\x1b[0m: ".ljust(18)
         return super().format(record)
+
+
+def default(obj, /):
+    if isinstance(obj, Buffer):
+        return str(obj, "utf-8")
+    raise TypeError
+
+
+def highlight_json(val, /, default=default, highlighter=JSONHighlighter()) -> Text:
+    if isinstance(val, Buffer):
+        val = str(val, "utf-8")
+    if not isinstance(val, str):
+        val = dumps(val, default=default, option=OPT_INDENT_2 | OPT_SORT_KEYS).decode("utf-8")
+    return highlighter(val)
 
 
 def get_first(m: Mapping, *keys, default=None):
@@ -111,7 +131,7 @@ def make_application(
     @app.middlewares.append
     async def access_log(request: Request, handler) -> Response:
         start_t = time()
-        def log(log, response):
+        def get_message(response: Response, /) -> str:
             remote_attr = request.scope["client"]
             status = response.status
             if status < 300:
@@ -120,16 +140,52 @@ def make_application(
                 status_color = 33
             else:
                 status_color = 31
-            log(f'\x1b[5;35m{remote_attr[0]}:{remote_attr[1]}\x1b[0m - "\x1b[1;36m{request.method}\x1b[0m \x1b[1;4;34m{request.url}\x1b[0m \x1b[1mHTTP/{request.scope["http_version"]}\x1b[0m" - \x1b[{status_color}m{status} {HTTPStatus(status).phrase}\x1b[0m - \x1b[32m{(time() - start_t) * 1000:.3f}\x1b[0m \x1b[3mms\x1b[0m')
+            message = f'\x1b[5;35m{remote_attr[0]}:{remote_attr[1]}\x1b[0m - "\x1b[1;36m{request.method}\x1b[0m \x1b[1;4;34m{request.url}\x1b[0m \x1b[1mHTTP/{request.scope["http_version"]}\x1b[0m" - \x1b[{status_color}m{status} {HTTPStatus(status).phrase}\x1b[0m - \x1b[32m{(time() - start_t) * 1000:.3f}\x1b[0m \x1b[3mms\x1b[0m'
+            if debug:
+                max_width = get_terminal_size().columns
+                console = Console()
+                with console.capture() as capture:
+                    urlp = urlsplit(str(request.url))
+                    url = urlunsplit(urlp._replace(path=unquote(urlp.path), scheme=request.scheme, netloc=request.host))
+                    console.print(
+                        Panel.fit(
+                            f"[b cyan]{request.method}[/] [u blue]{url}[/] [b]HTTP/[red]{request.scope["http_version"]}",
+                            box=ROUNDED,
+                            title="[b red]URL", 
+                            border_style="cyan", 
+                            width=max_width, 
+                        ), 
+                    )
+                    headers = {str(k, 'latin-1'): str(v, 'latin-1') for k, v in request.headers}
+                    console.print(
+                        Panel.fit(
+                            highlight_json(headers), 
+                            box=ROUNDED, 
+                            title="[b red]HEADERS", 
+                            border_style="cyan", 
+                            width=max_width, 
+                        )
+                    )
+                    scope = {k: v for k, v in request.scope.items() if k != "headers"}
+                    console.print(
+                        Panel.fit(
+                            highlight_json(scope), 
+                            box=ROUNDED, 
+                            title="[b red]SCOPE", 
+                            border_style="cyan", 
+                            width=max_width, 
+                        )
+                    )
+                message += "\n" + capture.get()
+            return message
         try:
             response = await handler(request)
-            log(logger.info, response)
+            logger.info(get_message(response))
         except Exception as e:
             response = await redirect_exception_response(app, request, e)
+            logger.error(get_message(response))
             if debug:
-                log(logger.exception, response)
-            else:
-                log(logger.error, response)
+                raise
         return response
 
     async def get_pickcode_to_id(id: int) -> str:
@@ -270,8 +326,6 @@ def make_application(
             elif t > 0 and t <= time():
                 return json({"state": False, "message": "url was expired"}, 401)
         file_name = name or name2
-        if str(request.url) in ("/service-worker.js", "/favicon.ico"):
-            raise FileNotFoundError
         if share_code:
             if resp := check_sign(id if id else file_name):
                 return resp
@@ -283,7 +337,7 @@ def make_application(
                 if file_name:
                     id = await share_get_id_for_name(share_code, receive_code, file_name, refresh=refresh)
             if not id:
-                raise FileNotFoundError(f"please specify id or name: share_code={share_code!r}")
+                raise FileNotFoundError(ENOENT, f"please specify id or name: share_code={share_code!r}")
             url = await get_share_downurl(share_code, receive_code, id, app=app)
         else:
             if pickcode:
@@ -319,7 +373,7 @@ def make_application(
                     else:
                         pickcode = await get_pickcode_for_name(file_name + remains, refresh=refresh)
             if not pickcode:
-                raise FileNotFoundError(f"not found: {str(request.url)!r}")
+                raise FileNotFoundError(ENOENT, f"not found: {str(request.url)!r}")
             user_agent = (request.get_first_header(b"User-agent") or b"").decode("latin-1")
             url = await get_downurl(pickcode.lower(), user_agent, app=app)
 
