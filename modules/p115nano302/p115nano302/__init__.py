@@ -12,7 +12,6 @@ from collections.abc import Buffer, Mapping
 from errno import EIO, ENOENT
 from hashlib import sha1 as calc_sha1
 from http import HTTPStatus
-from os import get_terminal_size
 from re import compile as re_compile
 from string import digits, hexdigits
 from time import time
@@ -213,7 +212,6 @@ def make_application(
                 status_color = 31
             message = f'\x1b[5;35m{remote_attr[0]}:{remote_attr[1]}\x1b[0m - "\x1b[1;36m{request.method}\x1b[0m \x1b[1;4;34m{request.url}\x1b[0m \x1b[1mHTTP/{request.scope["http_version"]}\x1b[0m" - \x1b[{status_color}m{status} {HTTPStatus(status).phrase}\x1b[0m - \x1b[32m{(time() - start_t) * 1000:.3f}\x1b[0m \x1b[3mms\x1b[0m'
             if debug:
-                max_width = get_terminal_size().columns
                 console = Console()
                 with console.capture() as capture:
                     urlp = urlsplit(str(request.url))
@@ -224,7 +222,6 @@ def make_application(
                             box=ROUNDED,
                             title="[b red]URL", 
                             border_style="cyan", 
-                            width=max_width, 
                         ), 
                     )
                     headers = {str(k, 'latin-1'): str(v, 'latin-1') for k, v in request.headers}
@@ -234,7 +231,6 @@ def make_application(
                             box=ROUNDED, 
                             title="[b red]HEADERS", 
                             border_style="cyan", 
-                            width=max_width, 
                         )
                     )
                     scope = {k: v for k, v in request.scope.items() if k != "headers"}
@@ -244,7 +240,6 @@ def make_application(
                             box=ROUNDED, 
                             title="[b red]SCOPE", 
                             border_style="cyan", 
-                            width=max_width, 
                         )
                     )
                 message += "\n" + capture.get()

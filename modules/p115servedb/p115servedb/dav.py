@@ -65,7 +65,7 @@ def main(argv: None | list[str] | Namespace = None, /):
     if wsgidav_config_path := args.wsgidav_config_path:
         file = open(wsgidav_config_path, "rb")
         match suffix := Path(wsgidav_config_path).suffix.lower():
-            case ".yml" | "yaml":
+            case ".yml" | ".yaml":
                 wsgidav_config = yaml_load(file, Loader=Loader)
             case ".toml":
                 wsgidav_config = toml_load(file)
@@ -78,7 +78,7 @@ def main(argv: None | list[str] | Namespace = None, /):
     if uvicorn_run_config_path:
         file = open(uvicorn_run_config_path, "rb")
         match suffix := Path(uvicorn_run_config_path).suffix.lower():
-            case ".yml" | "yaml":
+            case ".yml" | ".yaml":
                 run_config = yaml_load(file, Loader=Loader)
             case ".toml":
                 run_config = toml_load(file)

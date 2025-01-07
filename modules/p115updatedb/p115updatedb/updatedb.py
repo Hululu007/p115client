@@ -10,6 +10,7 @@ from collections import deque
 from collections.abc import Iterator, Iterable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from errno import EBUSY
+from functools import partial
 from itertools import cycle, takewhile
 from math import inf, isnan, isinf
 from posixpath import splitext
@@ -24,8 +25,10 @@ from p115client import check_response, P115Client
 from p115client.const import CLASS_TO_TYPE, SUFFIX_TO_TYPE
 from p115client.exception import BusyOSError, DataError
 from p115client.tool.edit import update_desc, update_star
-from p115client.tool.fs_files import iter_fs_files_threaded
-from p115client.tool.iterdir import filter_na_ids, get_id_to_path, iter_stared_dirs
+from p115client.tool.fs_files import iter_fs_files, iter_fs_files_threaded
+from p115client.tool.iterdir import (
+    filter_na_ids, get_id_to_path, iter_stared_dirs, iter_selected_nodes, iter_selected_nodes_using_star_event
+)
 from p115client.tool.life import iter_life_behavior, iter_life_behavior_once, IGNORE_BEHAVIOR_TYPES
 from sqlitetools import execute, find, query, transact, upsert_items, AutoCloseConnection
 
@@ -63,7 +66,10 @@ def initdb(con: Connection | Cursor, /, disable_event: bool = False) -> Cursor:
 -- 修改日志模式为 WAL (write-ahead-log)
 PRAGMA journal_mode = WAL;
 
--- data 表
+-- 允许触发器递归触发
+PRAGMA recursive_triggers = ON;
+
+-- data 表，用来保存数据
 CREATE TABLE IF NOT EXISTS data (
     id INTEGER NOT NULL PRIMARY KEY,   -- 文件或目录的 id
     parent_id INTEGER NOT NULL,        -- 上级目录的 id
@@ -77,17 +83,18 @@ CREATE TABLE IF NOT EXISTS data (
     mtime INTEGER NOT NULL DEFAULT 0,  -- 更新时间戳，如果名字、备注被设置（即使值没变），或者（如果自己是目录）进出回收站或增删直接子节点或设置封面，会更新此值，但移动并不更新
     is_collect INTEGER NOT NULL DEFAULT 0 CHECK(is_collect IN (0, 1)), -- 是否已被标记为违规
     is_alive INTEGER NOT NULL DEFAULT 1 CHECK(is_alive IN (0, 1)),   -- 是否存在中（未被移除）
-    updated_at DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+08:00', 'now', '+8 hours')) -- 最近一次更新时间
+    updated_at DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+08:00', 'now', '+8 hours')), -- 最近一次更新时间
+    _triggered INTEGER NOT NULL DEFAULT 0 -- 是否执行过触发器
 );
 
--- 创建 life 表，用来收集 115 生活事件
+-- life 表，用来收集 115 生活事件
 CREATE TABLE IF NOT EXISTS life (
     id INTEGER NOT NULL PRIMARY KEY, -- 事件 id
     data JSON NOT NULL,              -- 事件日志数据
     create_time INTEGER NOT NULL     -- 事件时间
 );
 
--- 创建 event 表，用于记录 data 表上发生的变更事件
+-- event 表，用于记录 data 表上发生的变更事件
 CREATE TABLE IF NOT EXISTS event (
     _id INTEGER PRIMARY KEY AUTOINCREMENT, -- 主键
     id INTEGER NOT NULL,   -- 文件或目录的 id
@@ -97,7 +104,33 @@ CREATE TABLE IF NOT EXISTS event (
     created_at DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+08:00', 'now', '+8 hours')) -- 创建时间
 );
 
--- 触发器
+-- dirlen 表，用于记录 data 表中每个目录的节点数
+CREATE TABLE IF NOT EXISTS dirlen (
+    id INTEGER NOT NULL PRIMARY KEY,           -- 目录 id
+    dir_count INTEGER NOT NULL DEFAULT 0,      -- 直属目录数
+    file_count INTEGER NOT NULL DEFAULT 0,     -- 直属文件数
+    tree_dir_count INTEGER NOT NULL DEFAULT 0, -- 子目录树目录数
+    tree_file_count INTEGER NOT NULL DEFAULT 0 -- 子目录树文件数
+);
+
+-- dirlen 表插入根节点
+INSERT OR IGNORE INTO dirlen(id) VALUES (0);
+
+-- 触发器，用来更新 dirlen 表
+DROP TRIGGER IF EXISTS trg_dirlen_update;
+CREATE TRIGGER trg_dirlen_update
+AFTER UPDATE ON dirlen 
+FOR EACH ROW 
+WHEN NEW.id AND (OLD.tree_dir_count != NEW.tree_dir_count OR OLD.tree_file_count != NEW.tree_file_count)
+BEGIN
+    UPDATE dirlen SET
+        tree_dir_count = tree_dir_count + NEW.tree_dir_count - OLD.tree_dir_count, 
+        tree_file_count = tree_file_count + NEW.tree_file_count - OLD.tree_file_count
+    WHERE
+        id = (SELECT parent_id FROM data WHERE id=NEW.id);
+END;
+
+-- 触发器，用来丢弃 mtime 较早的更新
 CREATE TRIGGER IF NOT EXISTS trg_data_before_update
 BEFORE UPDATE ON data
 FOR EACH ROW
@@ -126,12 +159,45 @@ BEGIN
     SELECT NULL;
 END;
 
-DROP TRIGGER IF EXISTS trg_data_update;
-CREATE TRIGGER trg_data_update
+DROP TRIGGER IF EXISTS trg_data_insert;
+CREATE TRIGGER trg_data_insert
 AFTER UPDATE ON data 
 FOR EACH ROW
 BEGIN
-    UPDATE data SET updated_at = strftime('%Y-%m-%dT%H:%M:%f+08:00', 'now', '+8 hours') WHERE id = NEW.id;
+    INSERT OR REPLACE INTO dirlen(id) SELECT NEW.id WHERE NEW.is_dir;
+    UPDATE dirlen SET 
+        dir_count = dir_count + NEW.is_dir, 
+        file_count = file_count + 1 - NEW.is_dir, 
+        tree_dir_count = tree_dir_count + NEW.is_dir, 
+        tree_file_count = tree_file_count + 1 - NEW.is_dir
+    WHERE id=NEW.parent_id;
+END;
+
+DROP TRIGGER IF EXISTS trg_data_update;
+CREATE TRIGGER trg_data_update
+AFTER UPDATE ON data 
+WHEN NOT NEW._triggered
+FOR EACH ROW
+BEGIN
+    UPDATE data SET updated_at = strftime('%Y-%m-%dT%H:%M:%f+08:00', 'now', '+8 hours'), _triggered=1 WHERE id = NEW.id;
+    UPDATE dirlen SET
+        file_count = file_count - 1, 
+        tree_file_count = tree_file_count - 1
+    WHERE OLD.is_alive AND NOT OLD.is_dir AND NOT (NEW.is_alive AND OLD.parent_id = NEW.parent_id) AND id=OLD.parent_id;
+    UPDATE dirlen SET
+        dir_count = dir_count - 1 - (SELECT dir_count FROM dirlen WHERE id=OLD.id), 
+        tree_dir_count = tree_dir_count - 1 - (SELECT tree_dir_count FROM dirlen WHERE id=OLD.id), 
+        tree_file_count = tree_file_count - (SELECT tree_file_count FROM dirlen WHERE id=OLD.id)
+    WHERE OLD.is_alive AND OLD.is_dir AND NOT (NEW.is_alive AND OLD.parent_id = NEW.parent_id) AND id=OLD.parent_id;
+    UPDATE dirlen SET
+        file_count = file_count + 1, 
+        tree_file_count = tree_file_count + 1
+    WHERE NEW.is_alive AND NOT OLD.is_dir AND NOT (OLD.is_alive AND OLD.parent_id = NEW.parent_id) AND id=NEW.parent_id;
+    UPDATE dirlen SET
+        dir_count = dir_count + 1 + (SELECT dir_count FROM dirlen WHERE id=OLD.id), 
+        tree_dir_count = tree_dir_count + 1 + (SELECT tree_dir_count FROM dirlen WHERE id=OLD.id), 
+        tree_file_count = tree_file_count + (SELECT tree_file_count FROM dirlen WHERE id=OLD.id)
+    WHERE NEW.is_alive AND OLD.is_dir AND NOT (OLD.is_alive AND OLD.parent_id = NEW.parent_id) AND id=NEW.parent_id;
 END;"""
     else:
         sql += """
@@ -141,6 +207,13 @@ CREATE TRIGGER trg_data_insert
 AFTER INSERT ON data
 FOR EACH ROW
 BEGIN
+    INSERT OR REPLACE INTO dirlen(id) SELECT NEW.id WHERE NEW.is_dir;
+    UPDATE dirlen SET 
+        dir_count = dir_count + NEW.is_dir, 
+        file_count = file_count + 1 - NEW.is_dir, 
+        tree_dir_count = tree_dir_count + NEW.is_dir, 
+        tree_file_count = tree_file_count + 1 - NEW.is_dir
+    WHERE id=NEW.parent_id;
     INSERT INTO event(id, diff, fs) VALUES (
         NEW.id, 
         JSON_OBJECT(
@@ -173,8 +246,27 @@ DROP TRIGGER IF EXISTS trg_data_update;
 CREATE TRIGGER trg_data_update
 AFTER UPDATE ON data 
 FOR EACH ROW
+WHEN NOT NEW._triggered
 BEGIN
-    UPDATE data SET updated_at = strftime('%Y-%m-%dT%H:%M:%f+08:00', 'now', '+8 hours') WHERE id = NEW.id;
+    UPDATE data SET updated_at = strftime('%Y-%m-%dT%H:%M:%f+08:00', 'now', '+8 hours'), _triggered=1 WHERE id = NEW.id;
+    UPDATE dirlen SET
+        file_count = file_count - 1, 
+        tree_file_count = tree_file_count - 1
+    WHERE OLD.is_alive AND NOT OLD.is_dir AND NOT (NEW.is_alive AND OLD.parent_id = NEW.parent_id) AND id=OLD.parent_id;
+    UPDATE dirlen SET
+        dir_count = dir_count - 1 - (SELECT dir_count FROM dirlen WHERE id=OLD.id), 
+        tree_dir_count = tree_dir_count - 1 - (SELECT tree_dir_count FROM dirlen WHERE id=OLD.id), 
+        tree_file_count = tree_file_count - (SELECT tree_file_count FROM dirlen WHERE id=OLD.id)
+    WHERE OLD.is_alive AND OLD.is_dir AND NOT (NEW.is_alive AND OLD.parent_id = NEW.parent_id) AND id=OLD.parent_id;
+    UPDATE dirlen SET
+        file_count = file_count + 1, 
+        tree_file_count = tree_file_count + 1
+    WHERE NEW.is_alive AND NOT OLD.is_dir AND NOT (OLD.is_alive AND OLD.parent_id = NEW.parent_id) AND id=NEW.parent_id;
+    UPDATE dirlen SET
+        dir_count = dir_count + 1 + (SELECT dir_count FROM dirlen WHERE id=OLD.id), 
+        tree_dir_count = tree_dir_count + 1 + (SELECT tree_dir_count FROM dirlen WHERE id=OLD.id), 
+        tree_file_count = tree_file_count + (SELECT tree_file_count FROM dirlen WHERE id=OLD.id)
+    WHERE NEW.is_alive AND OLD.is_dir AND NOT (OLD.is_alive AND OLD.parent_id = NEW.parent_id) AND id=NEW.parent_id;
     INSERT INTO event(id, old, diff, fs)
     SELECT *, (
         WITH t(event) AS (
@@ -281,47 +373,6 @@ def kill_items(
     return execute(con, sql, commit=commit)
 
 
-def iter_stared_files(client: P115Client, ids: Iterable[int]) -> Iterator[dict]:
-    """通过打星标来获取一组 id 的信息（但不能是图片）
-
-    :param client: 115 网盘客户端对象
-    :param ids: 一组文件或目录的 id
-
-    :return: 迭代器，产生简略的信息
-
-        .. code:: python
-
-            {
-                "id": int, 
-                "parent_id": int, 
-                "name": str, 
-                "pickcode": str, 
-                "is_dir": 0 | 1, 
-            }
-    """
-    ts = int(time())
-    ids = set(ids)
-    update_star(client, ids)
-    discard = ids.discard
-    for event in iter_life_behavior_once(client, from_time=ts, type="star_file", app="android"):
-        fid = int(event["file_id"])
-        if fid in ids:
-            yield {
-                "id": fid, 
-                "parent_id": int(event["parent_id"]), 
-                "name": event["file_name"], 
-                "pickcode": event["pick_code"], 
-                "is_dir": 1, 
-            }
-            discard(fid)
-        if not ids:
-            break
-
-# TODO: 再实现几个版本
-# TODO: 1. 以前的方法：用 update_star, update_desc 搭配星标列表
-# TODO: 2. 新版本，完全不使用星标，通过 fs_file 实现，进行默认 20 线程并发
-# TODO: 3. 新版本，使用 fs_files 和 fs_category_get（分流执行），获取 resp["path"]，如果某个 id 已经取得，则跳过
-
 def sort(
     data: list[dict], 
     /, 
@@ -354,6 +405,7 @@ def load_ancestors(
     data: list[dict], 
     all_are_files: bool = False, 
     refresh: bool = False, 
+    dont_star: bool = False, 
 ) -> list[dict]:
     """加载祖先节点列表
 
@@ -362,6 +414,7 @@ def load_ancestors(
     :param data: 文件信息列表
     :param all_are_files: 说明所有的列表元素都是文件节点，如此可减少一次判断
     :param refresh: 是否强制刷新，如果为 False，则数据库中已经存在的节点不会被拉取
+    :param dont_star: 不要打星标
 
     :return: 返回所传入的文件信息列表所对应的祖先节点列表
     """
@@ -369,11 +422,25 @@ def load_ancestors(
     if not all_are_files:
         seen.update(a["id"] for a in data if a["is_dir"])
     ancestors: list[dict] = []
+    if dont_star:
+        call = partial(iter_selected_nodes, normalize_attr=normalize_attr)
+    else:
+        call = partial(
+            iter_selected_nodes_using_star_event, 
+            app="android", 
+            normalize_attr = lambda event: {
+                "id": int(event["file_id"]), 
+                "parent_id": int(event["parent_id"]), 
+                "name": event["file_name"], 
+                "pickcode": event["pick_code"], 
+                "is_dir": 1, 
+            }, 
+        )
     while pids := {pid for a in data if (pid := a["parent_id"]) not in seen}:
         seen |= pids
         if not refresh:
             pids.difference_update(iter_existing_id(con, pids, is_alive=False))
-        data = list(iter_stared_files(client, pids))
+        data = list(call(client, pids))
         ancestors.extend(data)
     if ancestors:
         sort(ancestors)
@@ -426,8 +493,8 @@ def update_stared_dirs(
                 data_add(attr)
     if data:
         ancestors = load_ancestors(con, client, data)
-        upsert_items(con, ancestors, commit=True)
-        upsert_items(con, sort(data), commit=True)
+        upsert_items(con, ancestors, extras={"_triggered": 0}, commit=True)
+        upsert_items(con, sort(data), extras={"_triggered": 0}, commit=True)
     return data
 
 
@@ -444,7 +511,7 @@ def is_timeouterror(exc: Exception) -> bool:
     return False
 
 
-# TODO: 这个函数可以被删除，或者被优化，使用 p115client.tool.iter_fs_files 进行优化
+# TODO: 这个函数的代码量有些太多了，使用 p115client.tool.iter_fs_files 进行优化
 # TODO: 增加一个新的函数，使用 fs_files 和 cookies 池，当且仅当总文件数小于一定值（比如 11500），则进行采用
 def iterdir(
     client: P115Client, 
@@ -607,9 +674,9 @@ def diff_dir(
         return result
     finally:
         if ancestors:
-            upsert_items(con, ancestors, extras={"is_alive": 1, "is_dir": 1}, commit=True)
+            upsert_items(con, ancestors, extras={"is_alive": 1, "is_dir": 1, "_triggered": 0}, commit=True)
         if dirs:
-            upsert_items(con, dirs, extras={"is_alive": 1}, commit=True)
+            upsert_items(con, dirs, extras={"is_alive": 1, "_triggered": 0}, commit=True)
 
 
 def normalize_attr(info: Mapping, /) -> dict:
@@ -779,8 +846,8 @@ def updatedb_life(
                 except FileNotFoundError:
                     pass
                 if ancestors:
-                    upsert_items(con, ancestors, extras={"is_alive": 1, "is_dir": 1}, commit=True)
-            upsert_items(con, attr, commit=True)
+                    upsert_items(con, ancestors, extras={"is_alive": 1, "is_dir": 1, "_triggered": 0}, commit=True)
+            upsert_items(con, attr, extras={"_triggered": 0}, commit=True)
         execute(
             con, 
             "INSERT OR IGNORE INTO life(id, data, create_time) VALUES (?,?,?)", 
@@ -796,7 +863,7 @@ def updatedb_one(
     id: int = 0, 
     /, 
     **request_kwargs, 
-):
+) -> tuple[int, int]:
     """更新一个目录
 
     :param client: 115 网盘客户端对象
@@ -810,13 +877,12 @@ def updatedb_one(
     to_upsert, to_remove = diff_dir(con, client, id, **request_kwargs)
     with transact(con) as cur:
         if to_upsert:
-            upsert_items(cur, to_upsert)
+            upsert_items(cur, to_upsert, extras={"_triggered": 0})
         if to_remove:
             kill_items(cur, to_remove)
-    return to_upsert, to_remove
+    return len(to_upsert), len(to_remove)
 
 
-# TODO: 返回值为更新数量，而不是具体值，以便用来输出日志
 def updatedb_tree(
     client: str | P115Client, 
     dbfile: None | str | Connection | Cursor = None, 
@@ -824,7 +890,7 @@ def updatedb_tree(
     /, 
     no_dir_moved: bool = True, 
     **request_kwargs, 
-) -> tuple[list[dict], list[int]]:
+) -> tuple[int, int]:
     """更新一个目录树
 
     :param client: 115 网盘客户端对象
@@ -847,9 +913,11 @@ def updatedb_tree(
             for a in resp["path"][1:]
         ]
         if ancestors:
-            upsert_items(con, ancestors, extras={"is_alive": 1, "is_dir": 1}, commit=True)
+            upsert_items(con, ancestors, extras={"is_alive": 1, "is_dir": 1, "_triggered": 0}, commit=True)
     if to_remove:
         # TODO: 下面的部分还需要进行一定程度优化
+        # TODO: 如果文件看上去似乎被删除，可能其实只是上层目录被移动了而已，所以需要正确进行处理
+        # TODO: 只要其中某一级的上级 id 不存在，则整个子树都被删除
         all_pids: set[int] = set()
         sql = "SELECT id, parent_id FROM data WHERE id IN (%s)" % (",".join(map(str, to_remove)) or "NULL")
         pairs = dict(query(con, sql))
@@ -857,9 +925,6 @@ def updatedb_tree(
         while pids:
             all_pids.update(pids)
             if not no_dir_moved:
-                # TODO: 星标目录太多时，容易有问题，因此需要用事件法，这样可以只拉取此次被打上星标的目录，也可以避免使用 update_desc
-                # TODO: 需要进行优化，通过星标法打上星标然后拉取事件，如果有 id 没被更新，则说明被删了，因此不需要使用 filter_na_ids
-                # TODO: 只要其中某一级的上级 id 不存在，则整个子树都被删除
                 update_desc(client, pids, **request_kwargs)
                 update_stared_dirs(con, client, **request_kwargs)
             pids = {pid for pid in iter_parent_id(con, pids) if pid and pid != id and pid not in all_pids}
@@ -883,11 +948,20 @@ def updatedb_tree(
             to_remove = []
     if to_remove:
         kill_items(con, to_remove, commit=True)
+    upserted = len(to_upsert)
     if to_upsert:
-        ancestors = load_ancestors(con, client, to_upsert, all_are_files=True, refresh=not no_dir_moved)
-        upsert_items(con, ancestors, commit=True)
-        upsert_items(con, to_upsert, commit=True)
-    return to_upsert + ancestors, to_remove
+        ancestors = load_ancestors(
+            con, 
+            client, 
+            to_upsert, 
+            all_are_files=True, 
+            refresh=not no_dir_moved, 
+            dont_star=True, 
+        )
+        upsert_items(con, ancestors, extras={"_triggered": 0}, commit=True)
+        upsert_items(con, to_upsert, extras={"_triggered": 0}, commit=True)
+        upserted += len(ancestors)
+    return upserted, len(to_remove)
 
 
 def updatedb(
@@ -1007,12 +1081,9 @@ def updatedb(
             try:
                 start = time()
                 if need_to_split_tasks or not recursive:
-                    to_upsert, to_remove = updatedb_one(client, con, id, **request_kwargs)
+                    upserted, removed = updatedb_one(client, con, id, **request_kwargs)
                 else:
-                    if not no_dir_moved:
-                        update_stared_dirs(con, client)
-                        no_dir_moved = True
-                    to_upsert, to_remove = updatedb_tree(client, con, id, **request_kwargs)
+                    upserted, removed = updatedb_tree(client, con, id, no_dir_moved=no_dir_moved, **request_kwargs)
             except FileNotFoundError:
                 kill_items(con, id, commit=True)
                 if logger is not None:
@@ -1033,8 +1104,8 @@ def updatedb(
                     logger.info(
                         "[\x1b[1;32mGOOD\x1b[0m] \x1b[1m%s\x1b[0m, upsert: %d, remove: %d, cost: %.6f s", 
                         id, 
-                        len(to_upsert), 
-                        len(to_remove), 
+                        upserted, 
+                        removed, 
                         time() - start, 
                     )
                 seen_add(id)

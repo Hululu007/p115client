@@ -28,20 +28,20 @@ __doc__ = """\
 通过命令行参数 -t/--token 指定令牌后，你就必须在请求时携带签名，即 \x1b[3;36msign\x1b[0m 参数
 计算方式为
 
-    \x1b[3;35mhashlib.sha1(bytes(f"302@115-{token}-{t}-{value}", "utf-8")).hexdigest()\x1b[0m
+    \x1b[3;34mhashlib\x1b[0m.\x1b[3;31msha1\x1b[0m(\x1b[3;31mbytes\x1b[0m(f\x1b[32m"302@115-{\x1b[1;3;36mtoken\x1b[0m\x1b[32m}-{\x1b[1;3;36mt\x1b[0m\x1b[32m}-{\x1b[1;3;36mvalue\x1b[0m\x1b[32m}"\x1b[0m, \x1b[32m"utf-8"\x1b[0m)).\x1b[3;31mhexdigest\x1b[0m()
 
 其中
 - \x1b[3;36mtoken\x1b[0m 就是命令行所传入的令牌
 - \x1b[3;36mt\x1b[0m 为过期时间点（默认值为 0，即永不过期）
 - \x1b[3;36mvalue\x1b[0m 就是值，像这样的链接，优先级顺序为 \x1b[3;36mpickcode\x1b[0m > \x1b[3;36mid\x1b[0m > \x1b[3;36msha1\x1b[0m > \x1b[3;36mname\x1b[0m > \x1b[3;36mname2\x1b[0m
 
-    \x1b[4;34mhttp://localhost:8000/{name2}?id={id}&name={name}&sha1={sha1}&pickcode={pickcode}\x1b[0m
+    \x1b[4;34mhttp://localhost:8000/{\x1b[1;3;36mname2\x1b[0m\x1b[4;34m}?id={\x1b[1;3;36mid\x1b[0m\x1b[4;34m}&name={\x1b[1;3;36mname\x1b[0m\x1b[4;34m}&sha1={\x1b[1;3;36msha1\x1b[0m\x1b[4;34m}&pickcode={\x1b[1;3;36mpickcode\x1b[0m\x1b[4;34m}\x1b[0m
 
 🌰 更新 cookies
 
 通过命令行参数 -p/--password 指定密码后，你就可以一次性更新很多个 cookies，使用接口（请求时需携带和命令行传入的相同的密码）
 
-    \x1b[1mPOST\x1b[0m \x1b[4;34mhttp://localhost:8000/<cookies?password={password}\x1b[0m
+    \x1b[1mPOST\x1b[0m \x1b[4;34mhttp://localhost:8000/<cookies?password={\x1b[1;3;36mpassword\x1b[0m\x1b[4;34m}\x1b[0m
 
 请求体为 json 数据
 
@@ -49,7 +49,7 @@ __doc__ = """\
 
 如果要查询目前所有的 cookies，使用接口（请求时需携带和命令行传入的相同的密码）
 
-    \x1b[1mGET\x1b[0m \x1b[4;34mhttp://localhost:8000/<cookies?password={password}\x1b[0m
+    \x1b[1mGET\x1b[0m \x1b[4;34mhttp://localhost:8000/<cookies?password={\x1b[1;3;36mpassword\x1b[0m\x1b[4;34m}\x1b[0m
 
 🌰 查询示例：
 
@@ -142,7 +142,7 @@ def main(argv: None | list[str] | Namespace = None, /):
     if uvicorn_run_config_path:
         file = open(uvicorn_run_config_path, "rb")
         match suffix := Path(uvicorn_run_config_path).suffix.lower():
-            case ".yml" | "yaml":
+            case ".yml" | ".yaml":
                 from yaml import load as yaml_load, Loader
                 run_config = yaml_load(file, Loader=Loader)
             case ".toml":

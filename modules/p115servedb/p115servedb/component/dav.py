@@ -868,9 +868,9 @@ ON CONFLICT DO UPDATE SET data = excluded.data;""", locals())
         "host": "0.0.0.0", 
         "port": 0, 
         "mount_path": "/<dav", 
+        "simple_dc": {"user_mapping": {"*": True}}, 
         **wsgidav_config, 
         "provider_mapping": {"/": P115FileSystemProvider()}, 
-        "simple_dc": {"user_mapping": {"*": True}}, 
     }
     mount_path = quote(wsgidav_config["mount_path"])
     wsgidav_app = WsgiDAVApp(wsgidav_config)

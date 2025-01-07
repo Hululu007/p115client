@@ -8,14 +8,17 @@ __all__ = [
     "iter_stared_dirs_raw", "iter_stared_dirs", "ensure_attr_path", "iterdir_raw", "iterdir", 
     "iter_files", "iter_files_raw", "dict_files", "traverse_files", "iter_dupfiles", "dict_dupfiles", 
     "iter_image_files", "dict_image_files", "iter_dangling_files", "share_extract_payload", 
-    "share_iterdir", "share_iter_files", 
+    "share_iterdir", "share_iter_files", "iter_selected_nodes", "iter_selected_nodes_using_star_event", 
+    "iter_selected_dirs_using_star", 
 ]
 __doc__ = "这个模块提供了一些和目录信息罗列有关的函数"
 
 import errno
 
+from asyncio import Semaphore as AsyncSemaphore, TaskGroup
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator, Callable, Collection, Coroutine, Iterable, Iterator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from itertools import chain, count, islice, takewhile
 from operator import itemgetter
@@ -25,7 +28,7 @@ from time import time
 from typing import cast, overload, Any, Final, Literal, NamedTuple, TypedDict, TypeVar
 from warnings import warn
 
-from asynctools import async_filter, async_map, to_list
+from asynctools import async_chain, async_filter, async_map, to_list
 from iterutils import async_foreach, run_gen_step, run_gen_step_iter, through, async_through, Yield, YieldFrom
 from iter_collect import grouped_mapping, grouped_mapping_async, iter_keyed_dups, iter_keyed_dups_async, SupportsLT
 from p115client import check_response, normalize_attr, DataError, P115Client, P115OSError, P115Warning
@@ -34,6 +37,7 @@ from p115client.type import P115DictAttrLike
 from posixpatht import escape, path_is_dir_form, splitext, splits
 
 from .edit import update_desc, update_star
+from .life import iter_life_behavior_once
 
 
 D = TypeVar("D", bound=dict)
@@ -1009,7 +1013,7 @@ def iter_stared_dirs(
 
     :return: 迭代器，被打上星标的目录信息
     """
-    do_map = async_map if async_ else map
+    do_map = lambda f, it: it if not callable(f) else (async_map if async_ else map)(f, it)
     return do_map(normalize_attr, iter_stared_dirs_raw( # type: ignore
         client, 
         page_size=page_size, 
@@ -1490,7 +1494,7 @@ def iterdir(
             async_=async_, # type: ignore
             **request_kwargs, 
         )
-        do_map = async_map if async_ else map
+        do_map = lambda f, it: it if not callable(f) else (async_map if async_ else map)(f, it)
         dirname = ""
         pancestors: list[dict] = []
         if with_ancestors or with_path:
@@ -1815,7 +1819,7 @@ def iter_files(
             async_=async_, # type: ignore
             **request_kwargs, 
         )
-        do_map = async_map if async_ else map
+        do_map = lambda f, it: it if not callable(f) else (async_map if async_ else map)(f, it)
         if with_path or with_ancestors:
             do_filter = async_filter if async_ else filter
             def process(info):
@@ -3060,4 +3064,305 @@ def share_iter_files(
         except (StopIteration, StopAsyncIteration):
             pass
     return run_gen_step(gen_step, async_=async_)
+
+
+@overload
+def iter_selected_nodes(
+    client: str | P115Client, 
+    ids: Iterable[int], 
+    normalize_attr: None | Callable[[dict], dict] = normalize_attr, 
+    max_workers: None | int = 20, 
+    *, 
+    async_: Literal[False] = False, 
+    **request_kwargs, 
+) -> Iterator[dict]:
+    ...
+@overload
+def iter_selected_nodes(
+    client: str | P115Client, 
+    ids: Iterable[int], 
+    normalize_attr: None | Callable[[dict], dict] = normalize_attr, 
+    max_workers: None | int = 20, 
+    *, 
+    async_: Literal[True], 
+    **request_kwargs, 
+) -> AsyncIterator[dict]:
+    ...
+def iter_selected_nodes(
+    client: str | P115Client, 
+    ids: Iterable[int], 
+    normalize_attr: None | Callable[[dict], dict] = normalize_attr, 
+    max_workers: None | int = 20, 
+    *, 
+    async_: Literal[False, True] = False, 
+    **request_kwargs, 
+) -> Iterator[dict] | AsyncIterator[dict]:
+    """获取一组 id 的信息
+
+    :param client: 115 客户端或 cookies
+    :param ids: 一组文件或目录的 id
+    :param normalize_attr: 把数据进行转换处理，使之便于阅读
+    :param max_workers: 最大并发数
+    :param async_: 是否异步
+    :param request_kwargs: 其它请求参数
+
+    :return: 迭代器，产生详细的信息
+    """
+    if not isinstance(client, P115Client):
+        client = P115Client(client, check_for_relogin=True)
+    if async_:
+        if max_workers is None:
+            max_workers = 20
+        sema = AsyncSemaphore(max_workers)
+        async def call(id: int, /):
+            async with sema:
+                return await client.fs_file(id, async_=True, **request_kwargs)
+        async def request():
+            async with TaskGroup() as tg:
+                create_task = tg.create_task
+                for task in [create_task(call(id)) for id in ids]:
+                    resp = await task
+                    if resp.get("code") == 20018:
+                        continue
+                    check_response(resp)
+                    info = resp["data"][0]
+                    if int(info.get("aid") or info.get("area_id")) != 1:
+                        continue
+                    if normalize_attr is None:
+                        yield info
+                    else:
+                        yield normalize_attr(info)
+    else:
+        def request():
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                for resp in executor.map(partial(client.fs_file, **request_kwargs), ids):
+                    if resp.get("code") == 20018:
+                        continue
+                    check_response(resp)
+                    info = resp["data"][0]
+                    if int(info.get("aid") or info.get("area_id")) != 1:
+                        continue
+                    if normalize_attr is None:
+                        yield info
+                    else:
+                        yield normalize_attr(info)
+    return request()
+
+
+@overload
+def iter_selected_nodes_using_star_event(
+    client: str | P115Client, 
+    ids: Iterable[int], 
+    with_pics: bool = False, 
+    normalize_attr: None | bool | Callable[[dict], dict] = True, 
+    app: str = "web", 
+    *, 
+    async_: Literal[False] = False, 
+    **request_kwargs, 
+) -> Iterator[dict]:
+    ...
+@overload
+def iter_selected_nodes_using_star_event(
+    client: str | P115Client, 
+    ids: Iterable[int], 
+    with_pics: bool = False, 
+    normalize_attr: None | bool | Callable[[dict], dict] = True, 
+    app: str = "web", 
+    *, 
+    async_: Literal[True], 
+    **request_kwargs, 
+) -> AsyncIterator[dict]:
+    ...
+def iter_selected_nodes_using_star_event(
+    client: str | P115Client, 
+    ids: Iterable[int], 
+    with_pics: bool = False, 
+    normalize_attr: None | bool | Callable[[dict], dict] = True, 
+    app: str = "web", 
+    *, 
+    async_: Literal[False, True] = False, 
+    **request_kwargs, 
+) -> Iterator[dict] | AsyncIterator[dict]:
+    """通过打星标来获取一组 id 的信息
+
+    :param client: 115 客户端或 cookies
+    :param ids: 一组文件或目录的 id
+    :param with_pics: 包含图片的 id
+    :param normalize_attr: 把数据进行转换处理，使之便于阅读
+    :param app: 使用某个 app （设备）的接口
+    :param async_: 是否异步
+    :param request_kwargs: 其它请求参数
+
+    :return: 迭代器，产生简略的信息
+
+        .. code:: python
+
+            {
+                "id": int, 
+                "parent_id": int, 
+                "name": str, 
+                "is_dir": 0 | 1, 
+                "pickcode": str, 
+                "sha1": str, 
+                "size": int, 
+                "star": 0 | 1, 
+                "labels": list[dict], 
+                "ftype": int, 
+                "type": int, 
+            }
+    """
+    if not isinstance(client, P115Client):
+        client = P115Client(client, check_for_relogin=True)
+    def gen_step():
+        nonlocal ids
+        ts = int(time())
+        ids = set(ids)
+        yield update_star(client, ids, async_=async_, **request_kwargs)
+        discard = ids.discard
+        it = iter_life_behavior_once(
+            client, 
+            from_time=ts, 
+            type="star_file", 
+            app=app, 
+            async_=async_, 
+            **request_kwargs, 
+        )
+        if with_pics:
+            it2 = iter_life_behavior_once(
+                client, 
+                from_time=ts, 
+                type="star_image_file", 
+                app=app, 
+                async_=async_, 
+                **request_kwargs, 
+            )
+            if async_:
+                it = async_chain(it, it2)
+            else:
+                it = chain(it, it2) # type: ignore
+        do_next = anext if async_ else next
+        try:
+            while True:
+                event: dict = yield do_next(it) # type: ignore
+                fid = int(event["file_id"])
+                if fid in ids:
+                    if not normalize_attr:
+                        yield Yield(event, identity=True)
+                    elif normalize_attr is True:
+                        attr = {
+                            "id": fid, 
+                            "parent_id": int(event["parent_id"]), 
+                            "name": event["file_name"], 
+                            "is_dir": not event["file_category"], 
+                            "pickcode": event["pick_code"], 
+                            "sha1": event["sha1"], 
+                            "size": event["file_size"], 
+                            "star": event["is_mark"], 
+                            "labels": event["fl"], 
+                            "ftype": event["file_type"], 
+                        }
+                        if attr["is_dir"]:
+                            attr["type"] = 0
+                        elif event.get("isv"):
+                            attr["type"] = 4
+                        elif event.get("play_long"):
+                            attr["type"] = 3
+                        else:
+                            attr["type"] = type_of_attr(attr)
+                        yield Yield(attr, identity=True)
+                    else:
+                        yield Yield(normalize_attr(event), identity=True)
+                    discard(fid)
+                    if not ids:
+                        break
+        except (StopIteration, StopAsyncIteration):
+            pass
+    return run_gen_step_iter(gen_step, async_=async_)
+
+
+@overload
+def iter_selected_dirs_using_star(
+    client: str | P115Client, 
+    ids: Iterable[int], 
+    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    raise_for_changed_count: bool = False, 
+    app: str = "web", 
+    *, 
+    async_: Literal[False] = False, 
+    **request_kwargs, 
+) -> Iterator[dict]:
+    ...
+@overload
+def iter_selected_dirs_using_star(
+    client: str | P115Client, 
+    ids: Iterable[int], 
+    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    raise_for_changed_count: bool = False, 
+    app: str = "web", 
+    *, 
+    async_: Literal[True], 
+    **request_kwargs, 
+) -> AsyncIterator[dict]:
+    ...
+def iter_selected_dirs_using_star(
+    client: str | P115Client, 
+    ids: Iterable[int], 
+    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    raise_for_changed_count: bool = False, 
+    app: str = "web", 
+    *, 
+    async_: Literal[False, True] = False, 
+    **request_kwargs, 
+) -> Iterator[dict] | AsyncIterator[dict]:
+    """通过打星标来获取一组 id 的信息（仅支持目录）
+
+    :param client: 115 客户端或 cookies
+    :param ids: 一组目录的 id（如果包括文件，则会被忽略）
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
+    :param app: 使用某个 app （设备）的接口
+    :param async_: 是否异步
+    :param request_kwargs: 其它请求参数
+
+    :return: 迭代器，产生详细的信息
+    """
+    if not isinstance(client, P115Client):
+        client = P115Client(client, check_for_relogin=True)
+    def gen_step():
+        nonlocal ids
+        ts = int(time())
+        ids = set(ids)
+        yield update_star(client, ids, async_=async_, **request_kwargs)
+        yield update_desc(client, ids, async_=async_, **request_kwargs)
+        discard = ids.discard
+        it = iter_stared_dirs(
+            client, 
+            order="user_utime", 
+            asc=0, 
+            first_page_size=64, 
+            id_to_dirnode=id_to_dirnode, 
+            normalize_attr=None, 
+            app=app, 
+            async_=async_, # type: ignore
+            **request_kwargs, 
+        )
+        do_next = anext if async_ else next
+        try:
+            while True:
+                info: dict = yield do_next(it)
+                attr = _overview_attr(info)
+                if not (attr.mtime >= ts and attr.is_dir):
+                    break
+                cid = attr.id
+                if cid in ids:
+                    if normalize_attr is None:
+                        yield Yield(info, identity=True)
+                    else:
+                        yield Yield(normalize_attr(info), identity=True)
+                    discard(cid)
+                    if not ids:
+                        break
+        except (StopIteration, StopAsyncIteration):
+            pass
+    return run_gen_step_iter(gen_step, async_=async_)
 

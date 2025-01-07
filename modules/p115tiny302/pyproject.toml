@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "p115tiny302"
-version = "0.1.0"
+version = "0.1.0.1"
 description = "115 tiny 302 backend."
 authors = ["ChenyangGao <wosiwujm@gmail.com>"]
 license = "MIT"
