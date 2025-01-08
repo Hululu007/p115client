@@ -19,12 +19,14 @@ from asyncio import Semaphore as AsyncSemaphore, TaskGroup
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator, Callable, Collection, Coroutine, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from functools import partial
 from itertools import chain, count, islice, takewhile
 from operator import itemgetter
 from re import compile as re_compile
 from string import hexdigits
 from time import time
+from types import EllipsisType
 from typing import cast, overload, Any, Final, Literal, NamedTuple, TypedDict, TypeVar
 from warnings import warn
 
@@ -37,7 +39,7 @@ from p115client.type import P115DictAttrLike
 from posixpatht import escape, path_is_dir_form, splitext, splits
 
 from .edit import update_desc, update_star
-from .life import iter_life_behavior_once
+from .life import iter_life_behavior_once, life_show
 
 
 D = TypeVar("D", bound=dict)
@@ -53,13 +55,19 @@ class DirNode(NamedTuple):
     parent_id: int
 
 
-class OverviewAttr(NamedTuple):
+@dataclass(frozen=True, unsafe_hash=True)
+class OverviewAttr:
     is_dir: bool
     id: int
     parent_id: int
     name: str
     ctime: int
     mtime: int
+    def __getitem__(self, key, /):
+        try:
+            return getattr(self, key)
+        except AttributeError as e:
+            raise LookupError(key) from e
 
 
 # TODO: 支持用 sqlite 作为缓存，实现一个 SqliteDefaultDict
@@ -139,7 +147,7 @@ def type_of_attr(attr: Mapping, /) -> int:
         - 7: 书籍
         - 99: 其它文件
 """
-    if attr.get("is_directory") or attr.get("is_dir"):
+    if attr.get("is_dir") or attr.get("is_directory"):
         return 0
     type: None | int
     if type := CLASS_TO_TYPE.get(attr.get("class", "")):
@@ -1035,8 +1043,9 @@ def ensure_attr_path(
     page_size: int = 10_000, 
     with_ancestors: bool = False, 
     with_path: bool = True, 
+    use_star: bool = False, 
     escape: None | Callable[[str], str] = escape, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
     errors: Literal["ignore", "raise", "warn"] = "raise", 
     *, 
@@ -1051,8 +1060,9 @@ def ensure_attr_path(
     page_size: int = 10_000, 
     with_ancestors: bool = False, 
     with_path: bool = True, 
+    use_star: bool = False, 
     escape: None | Callable[[str], str] = escape, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
     errors: Literal["ignore", "raise", "warn"] = "raise", 
     *, 
@@ -1066,8 +1076,9 @@ def ensure_attr_path(
     page_size: int = 10_000, 
     with_ancestors: bool = False, 
     with_path: bool = True, 
+    use_star: bool = False, 
     escape: None | Callable[[str], str] = escape, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
     errors: Literal["ignore", "raise", "warn"] = "raise", 
     *, 
@@ -1081,6 +1092,7 @@ def ensure_attr_path(
     :param page_size: 分页大小
     :param with_ancestors: 文件信息中是否要包含 "ancestors"
     :param with_path: 文件信息中是否要包含 "path"
+    :param use_star: 获取目录信息时，允许使用星标
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
     :param app: 使用某个 app （设备）的接口
@@ -1103,6 +1115,8 @@ def ensure_attr_path(
         page_size = 16
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
+    elif id_to_dirnode is ...:
+        id_to_dirnode = {}
     if not isinstance(attrs, Collection):
         attrs = tuple(attrs)
     if with_ancestors:
@@ -1141,96 +1155,38 @@ def ensure_attr_path(
     walk_next: Any = anext if async_ else next
     walk_through: Any = async_through if async_ else through
     def gen_step():
-        if not id_to_dirnode:
-            try:
-                yield walk_through(iter_stared_dirs_raw(
-                    client, 
-                    id_to_dirnode=id_to_dirnode, 
-                    app=app, 
-                    async_=async_, 
-                    **request_kwargs, 
-                ))
-            except Exception as e:
-                match errors:
-                    case "raise":
-                        raise
-                    case "warn":
-                        warn(f"{type(e).__module__}.{type(e).__qualname__}: {e}", category=P115Warning)
         pids: set[int] = set()
         for attr in attrs:
             pid = attr["parent_id"]
-            if attr.get("is_directory", False):
+            if attr.get("is_dir", False) or attr.get("is_directory", False):
                 id_to_dirnode[attr["id"]] = DirNode(attr["name"], pid)
             if pid:
                 pids.add(pid)
-        def take_while(info, /) -> bool:
-            attr = _overview_attr(info)
-            find_ids.discard(attr.id)
-            if int(attr.mtime) < start:
-                return False
-            return bool(find_ids)
-        start: float
         find_ids: set[int]
+        do_through: Callable = async_through if async_ else through
         while pids:
             if find_ids := pids - id_to_dirnode.keys():
                 try:
-                    if len(find_ids) <= len(id_to_dirnode) // page_size:
-                        for pid in find_ids:
-                            if pid in id_to_dirnode:
-                                continue
-                            yield walk_next(iterdir_raw(
-                                client, 
-                                pid, 
-                                first_page_size=1, 
-                                id_to_dirnode=id_to_dirnode, 
-                                app=app, 
-                                async_=async_, 
-                                **request_kwargs, 
-                            ), None)
-                    else:
-                        start = int(time())
-                        ids_it = iter(find_ids)
-                        while t_ids := tuple(islice(ids_it, 10_000)):
-                            # NOTE: 批量给目录添加星标，这样便于把这些目录进行批量拉取
-                            yield update_star(client, t_ids, async_=async_, **request_kwargs)
-                            # NOTE: 批量给目录添加空备注，这样可以更新这些目录的更新时间
-                            yield update_desc(client, t_ids, async_=async_, **request_kwargs)
-                        yield walk_through(iter_stared_dirs_raw(
+                    if use_star:
+                        yield do_through(iter_selected_nodes_using_star_event(
                             client, 
-                            page_size, 
-                            first_page_size=min(16, len(find_ids)), 
-                            order="user_utime", 
-                            asc=0, 
+                            find_ids, 
+                            normalize_attr=None, 
                             id_to_dirnode=id_to_dirnode, 
                             app=app, 
                             async_=async_, 
                             **request_kwargs, 
-                        ), take_while=take_while)
-                        if find_ids:
-                            # NOTE: 首先检查一下，这些 id 中如果有已经被删除的 id，则报错
-                            make_list: Callable = to_list if async_ else list
-                            na_ids = yield make_list((yield filter_na_ids(client, find_ids, async_=async_, **request_kwargs)))
-                            if na_ids:
-                                raise P115OSError(
-                                    errno.EIO, 
-                                    f"these ids have been deleted: {na_ids}", 
-                                )
-                            warn(
-                                f"unable to process these ids in bulk, back to separate processing: {find_ids}", 
-                                category=P115Warning, 
-                            )
-                            for pid in find_ids:
-                                if pid in id_to_dirnode:
-                                    continue
-                                yield walk_next(iterdir_raw(
-                                    client, 
-                                    pid, 
-                                    first_page_size=1, 
-                                    id_to_dirnode=id_to_dirnode, 
-                                    app=app, 
-                                    async_=async_, 
-                                    **request_kwargs, 
-                                ), None)
+                        ))
+                    else:
+                        yield do_through(iter_selected_nodes(
+                            client, 
+                            find_ids, 
+                            normalize_attr=None, 
+                            id_to_dirnode=id_to_dirnode, 
+                            app=app, 
+                            async_=async_, 
+                            **request_kwargs, 
+                        ))
                 except Exception as e:
                     match errors:
                         case "raise":
@@ -1665,6 +1621,7 @@ def iter_files(
     cur: Literal[0, 1] = 0, 
     with_ancestors: bool = False, 
     with_path: bool = False, 
+    use_star: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
@@ -1688,6 +1645,7 @@ def iter_files(
     cur: Literal[0, 1] = 0, 
     with_ancestors: bool = False, 
     with_path: bool = False, 
+    use_star: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
@@ -1710,6 +1668,7 @@ def iter_files(
     cur: Literal[0, 1] = 0, 
     with_ancestors: bool = False, 
     with_path: bool = False, 
+    use_star: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
@@ -1750,6 +1709,7 @@ def iter_files(
     :param cur: 仅当前目录。0: 否（将遍历子目录树上所有叶子节点），1: 是
     :param with_ancestors: 文件信息中是否要包含 "ancestors"
     :param with_path: 文件信息中是否要包含 "path"
+    :param use_star: 获取目录信息时，允许使用星标
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
@@ -1843,6 +1803,7 @@ def iter_files(
                 page_size=page_size, 
                 with_ancestors=with_ancestors, 
                 with_path=with_path, 
+                use_star=use_star, 
                 escape=escape, 
                 id_to_dirnode=id_to_dirnode, 
                 app=app, 
@@ -1864,6 +1825,7 @@ def dict_files(
     cur: Literal[0, 1] = 0, 
     with_ancestors: bool = False, 
     with_path: bool = False, 
+    use_star: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
@@ -1886,6 +1848,7 @@ def dict_files(
     cur: Literal[0, 1] = 0, 
     with_ancestors: bool = False, 
     with_path: bool = False, 
+    use_star: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
@@ -1907,6 +1870,7 @@ def dict_files(
     cur: Literal[0, 1] = 0, 
     with_ancestors: bool = False, 
     with_path: bool = False, 
+    use_star: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
@@ -1988,6 +1952,7 @@ def dict_files(
                 page_size=page_size, 
                 with_ancestors=with_ancestors, 
                 with_path=with_path, 
+                use_star=use_star, 
                 escape=escape, 
                 id_to_dirnode=id_to_dirnode, 
                 app=app, 
@@ -2010,6 +1975,7 @@ def traverse_files(
     auto_splitting_statistics_timeout: None | int | float = 5, 
     with_ancestors: bool = False, 
     with_path: bool = False, 
+    use_star: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
@@ -2032,6 +1998,7 @@ def traverse_files(
     auto_splitting_statistics_timeout: None | int | float = 5, 
     with_ancestors: bool = False, 
     with_path: bool = False, 
+    use_star: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
@@ -2053,6 +2020,7 @@ def traverse_files(
     auto_splitting_statistics_timeout: None | int | float = 5, 
     with_ancestors: bool = False, 
     with_path: bool = False, 
+    use_star: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
@@ -2084,6 +2052,7 @@ def traverse_files(
     :param auto_splitting_statistics_timeout: 如果执行统计超过此时间，则立即终止，并认为文件是无限多
     :param with_ancestors: 文件信息中是否要包含 "ancestors"
     :param with_path: 文件信息中是否要包含 "path"
+    :param use_star: 获取目录信息时，允许使用星标
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
@@ -2171,6 +2140,7 @@ def traverse_files(
                                     page_size=page_size, 
                                     with_ancestors=with_ancestors, 
                                     with_path=with_path, 
+                                    use_star=use_star, 
                                     escape=escape, 
                                     id_to_dirnode=id_to_dirnode, 
                                     app=app, 
@@ -2213,7 +2183,7 @@ def traverse_files(
                 if async_:
                     it = yield to_list(it)
                 for attr in cast(Iterable, it):
-                    if attr.get("is_directory", False):
+                    if attr.get("is_dir") or attr.get("is_directory"):
                         put(attr["id"])
                     else:
                         ext = splitext(attr["name"])[1].lower()
@@ -2372,6 +2342,7 @@ def dict_dupfiles(
     auto_splitting_statistics_timeout: None | int | float = 5, 
     with_ancestors: bool = False, 
     with_path: bool = False, 
+    use_star: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
@@ -2396,6 +2367,7 @@ def dict_dupfiles(
     auto_splitting_statistics_timeout: None | int | float = 5, 
     with_ancestors: bool = False, 
     with_path: bool = False, 
+    use_star: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
@@ -2419,6 +2391,7 @@ def dict_dupfiles(
     auto_splitting_statistics_timeout: None | int | float = 5, 
     with_ancestors: bool = False, 
     with_path: bool = False, 
+    use_star: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
@@ -2458,6 +2431,7 @@ def dict_dupfiles(
     :param auto_splitting_statistics_timeout: 如果执行统计超过此时间，则立即终止，并认为文件是无限多
     :param with_ancestors: 文件信息中是否要包含 "ancestors"
     :param with_path: 文件信息中是否要包含 "path"
+    :param use_star: 获取目录信息时，允许使用星标
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
@@ -2500,6 +2474,7 @@ def dict_dupfiles(
                 page_size=page_size, 
                 with_ancestors=with_ancestors, 
                 with_path=with_path, 
+                use_star=use_star, 
                 escape=escape, 
                 id_to_dirnode=id_to_dirnode, 
                 app=app, 
@@ -2625,6 +2600,7 @@ def dict_image_files(
     cur: Literal[0, 1] = 0, 
     with_ancestors: bool = False, 
     with_path: bool = False, 
+    use_star: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
@@ -2643,6 +2619,7 @@ def dict_image_files(
     cur: Literal[0, 1] = 0, 
     with_ancestors: bool = False, 
     with_path: bool = False, 
+    use_star: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
@@ -2660,6 +2637,7 @@ def dict_image_files(
     cur: Literal[0, 1] = 0, 
     with_ancestors: bool = False, 
     with_path: bool = False, 
+    use_star: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
@@ -2688,6 +2666,7 @@ def dict_image_files(
     :param cur: 仅当前目录。0: 否（将遍历子目录树上所有叶子节点），1: 是
     :param with_ancestors: 文件信息中是否要包含 "ancestors"
     :param with_path: 文件信息中是否要包含 "path"
+    :param use_star: 获取目录信息时，允许使用星标
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
@@ -2722,6 +2701,7 @@ def dict_image_files(
                 d.values(), 
                 with_ancestors=with_ancestors, 
                 with_path=with_path, 
+                use_star=use_star, 
                 escape=escape, 
                 id_to_dirnode=id_to_dirnode, 
                 app="android", 
@@ -3046,7 +3026,7 @@ def share_iter_files(
         try:
             while True:
                 attr = yield do_next(it)
-                if attr["is_directory"]:
+                if attr.get("is_dir") or attr.get("is_directory"):
                     payload["cid"] = attr["id"]
                     resp = yield client.share_downlist(payload, async_=async_, **request_kwargs)
                     check_response(resp)
@@ -3066,11 +3046,13 @@ def share_iter_files(
     return run_gen_step(gen_step, async_=async_)
 
 
+# TODO: 增加对 fs_file 的重试机制
 @overload
 def iter_selected_nodes(
     client: str | P115Client, 
     ids: Iterable[int], 
     normalize_attr: None | Callable[[dict], dict] = normalize_attr, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     max_workers: None | int = 20, 
     *, 
     async_: Literal[False] = False, 
@@ -3082,6 +3064,7 @@ def iter_selected_nodes(
     client: str | P115Client, 
     ids: Iterable[int], 
     normalize_attr: None | Callable[[dict], dict] = normalize_attr, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     max_workers: None | int = 20, 
     *, 
     async_: Literal[True], 
@@ -3092,6 +3075,7 @@ def iter_selected_nodes(
     client: str | P115Client, 
     ids: Iterable[int], 
     normalize_attr: None | Callable[[dict], dict] = normalize_attr, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     max_workers: None | int = 20, 
     *, 
     async_: Literal[False, True] = False, 
@@ -3102,6 +3086,7 @@ def iter_selected_nodes(
     :param client: 115 客户端或 cookies
     :param ids: 一组文件或目录的 id
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典，如果为 ...，则忽略
     :param max_workers: 最大并发数
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
@@ -3110,6 +3095,8 @@ def iter_selected_nodes(
     """
     if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
+    if id_to_dirnode is None:
+        id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
     if async_:
         if max_workers is None:
             max_workers = 20
@@ -3126,6 +3113,10 @@ def iter_selected_nodes(
                         continue
                     check_response(resp)
                     info = resp["data"][0]
+                    if id_to_dirnode is not ...:
+                        attr = _overview_attr(info)
+                        if attr.is_dir:
+                            id_to_dirnode[attr.id] = DirNode(attr.name, attr.parent_id)
                     if int(info.get("aid") or info.get("area_id")) != 1:
                         continue
                     if normalize_attr is None:
@@ -3140,6 +3131,10 @@ def iter_selected_nodes(
                         continue
                     check_response(resp)
                     info = resp["data"][0]
+                    if id_to_dirnode is not ...:
+                        attr = _overview_attr(info)
+                        if attr.is_dir:
+                            id_to_dirnode[attr.id] = DirNode(attr.name, attr.parent_id)
                     if int(info.get("aid") or info.get("area_id")) != 1:
                         continue
                     if normalize_attr is None:
@@ -3155,6 +3150,7 @@ def iter_selected_nodes_using_star_event(
     ids: Iterable[int], 
     with_pics: bool = False, 
     normalize_attr: None | bool | Callable[[dict], dict] = True, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
     *, 
     async_: Literal[False] = False, 
@@ -3167,6 +3163,7 @@ def iter_selected_nodes_using_star_event(
     ids: Iterable[int], 
     with_pics: bool = False, 
     normalize_attr: None | bool | Callable[[dict], dict] = True, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
     *, 
     async_: Literal[True], 
@@ -3178,6 +3175,7 @@ def iter_selected_nodes_using_star_event(
     ids: Iterable[int], 
     with_pics: bool = False, 
     normalize_attr: None | bool | Callable[[dict], dict] = True, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
     *, 
     async_: Literal[False, True] = False, 
@@ -3189,6 +3187,7 @@ def iter_selected_nodes_using_star_event(
     :param ids: 一组文件或目录的 id
     :param with_pics: 包含图片的 id
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典，如果为 ...，则忽略
     :param app: 使用某个 app （设备）的接口
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
@@ -3213,10 +3212,13 @@ def iter_selected_nodes_using_star_event(
     """
     if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
+    if id_to_dirnode is None:
+        id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
     def gen_step():
         nonlocal ids
         ts = int(time())
         ids = set(ids)
+        yield life_show(client, async_=async_, **request_kwargs)
         yield update_star(client, ids, async_=async_, **request_kwargs)
         discard = ids.discard
         it = iter_life_behavior_once(
@@ -3245,15 +3247,20 @@ def iter_selected_nodes_using_star_event(
             while True:
                 event: dict = yield do_next(it) # type: ignore
                 fid = int(event["file_id"])
+                pid = int(event["parent_id"])
+                name = event["file_name"]
+                is_dir = not event["file_category"]
+                if is_dir and id_to_dirnode is not ...:
+                    id_to_dirnode[fid] = DirNode(name, pid)
                 if fid in ids:
                     if not normalize_attr:
                         yield Yield(event, identity=True)
                     elif normalize_attr is True:
                         attr = {
                             "id": fid, 
-                            "parent_id": int(event["parent_id"]), 
-                            "name": event["file_name"], 
-                            "is_dir": not event["file_category"], 
+                            "parent_id": pid, 
+                            "name": name, 
+                            "is_dir": is_dir, 
                             "pickcode": event["pick_code"], 
                             "sha1": event["sha1"], 
                             "size": event["file_size"], 
@@ -3341,7 +3348,7 @@ def iter_selected_dirs_using_star(
             asc=0, 
             first_page_size=64, 
             id_to_dirnode=id_to_dirnode, 
-            normalize_attr=None, 
+            normalize_attr=normalize_attr, 
             app=app, 
             async_=async_, # type: ignore
             **request_kwargs, 
@@ -3349,16 +3356,16 @@ def iter_selected_dirs_using_star(
         do_next = anext if async_ else next
         try:
             while True:
-                info: dict = yield do_next(it)
-                attr = _overview_attr(info)
-                if not (attr.mtime >= ts and attr.is_dir):
+                info: dict = yield do_next(it) # type: ignore
+                if normalize_attr is None:
+                    attr: Any = _overview_attr(info)
+                else:
+                    attr = info
+                if not (attr["mtime"] >= ts and attr["is_dir"]):
                     break
-                cid = attr.id
+                cid = attr["id"]
                 if cid in ids:
-                    if normalize_attr is None:
-                        yield Yield(info, identity=True)
-                    else:
-                        yield Yield(normalize_attr(info), identity=True)
+                    yield Yield(info, identity=True)
                     discard(cid)
                     if not ids:
                         break
