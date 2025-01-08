@@ -15,8 +15,8 @@ pip install -U p115dav
 ```console
 $ p115dav -h
 usage: p115dav [-h] [-cp COOKIES_PATH] [-o STRM_ORIGIN] [-t TTL] [-p1 PREDICATE] [-t1 {ignore,ignore-file,expr,lambda,stmt,module,file,re}] [-p2 STRM_PREDICATE]
-               [-t2 {filter,filter-file,expr,lambda,stmt,module,file,re}] [-fs] [-H HOST] [-P PORT] [-cu] [-d] [-ass] [-uc UVICORN_RUN_CONFIG_PATH]
-               [-wc WSGIDAV_CONFIG_PATH] [-l] [-v]
+               [-t2 {filter,filter-file,expr,lambda,stmt,module,file,re}] [-fs] [-H HOST] [-P PORT] [-cu] [-d] [-ass] [-ow] [-uc UVICORN_RUN_CONFIG_PATH]
+               [-wc WSGIDAV_CONFIG_PATH] [-wu [WSGIDAV_USERNAME_PASSWORD ...]] [-l] [-v]
                [dbfile]
 
     🕸️ 115 网盘 WebDAV 和 302 直链程序 🕷️
@@ -90,6 +90,7 @@ options:
   -cu, --cache-url      缓存下载链接
   -d, --debug           启用 debug 模式，输出详细的错误信息
   -ass, --load-libass   加载 libass.js，实现 ass/ssa 字幕特效
+  -ow, --only-webdav    禁用网页版，只有 webdav 可用
   -uc UVICORN_RUN_CONFIG_PATH, --uvicorn-run-config-path UVICORN_RUN_CONFIG_PATH
                         uvicorn 启动时的配置文件路径，会作为关键字参数传给 `uvicorn.run`，支持 JSON、YAML 或 TOML 格式，会根据扩展名确定，不能确定时视为 JSON
   -wc WSGIDAV_CONFIG_PATH, --wsgidav-config-path WSGIDAV_CONFIG_PATH
@@ -98,6 +99,8 @@ options:
                         
                             https://wsgidav.readthedocs.io/en/latest/user_guide_configure.html#sample-wsgidav-yaml
                         
+  -wu [WSGIDAV_USERNAME_PASSWORD ...], --wsgidav-username-password [WSGIDAV_USERNAME_PASSWORD ...]
+                        可传入多组用户名和密码，格式为 username:password，中间用逗号分隔，如果不传则无或者任意用户名和密码都可通过
   -l, --license         输出授权信息
   -v, --version         输出版本号
 

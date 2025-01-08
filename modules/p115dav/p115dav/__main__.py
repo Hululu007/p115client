@@ -179,7 +179,7 @@ parser.add_argument("-P", "--port", default=8000, type=int, help="端口号，�
 parser.add_argument("-cu", "--cache-url", action="store_true", help="缓存下载链接")
 parser.add_argument("-d", "--debug", action="store_true", help="启用 debug 模式，输出详细的错误信息")
 parser.add_argument("-ass", "--load-libass", action="store_true", help="加载 libass.js，实现 ass/ssa 字幕特效")
-parser.add_argument("-ow", "--only-webdav", action="store_true", help="仅用网页版，只有 webdav 可用")
+parser.add_argument("-ow", "--only-webdav", action="store_true", help="禁用网页版，只有 webdav 可用")
 parser.add_argument("-uc", "--uvicorn-run-config-path", help="uvicorn 启动时的配置文件路径，会作为关键字参数传给 `uvicorn.run`，支持 JSON、YAML 或 TOML 格式，会根据扩展名确定，不能确定时视为 JSON")
 parser.add_argument("-wc", "--wsgidav-config-path", help="""WsgiDAV 启动时的配置文件路径，支持 JSON、YAML 或 TOML 格式，会根据扩展名确定，不能确定时视为 JSON
 如需样板文件，请阅读：

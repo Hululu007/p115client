@@ -415,6 +415,17 @@ def make_application(
             attr["thumb"] = thumb
         return attr
 
+    def wrap_url(url: str, /, url_detail: None | bool = False):
+        if url_detail is None:
+            return redirect(url)
+        elif url_detail:
+            if isinstance(url, P115URL):
+                return {"type": "file", "url": url, "headers": url.get("headers")}
+            else:
+                return {"type": "image", "url": url}
+        else:
+            return url
+
     def queue_execute():
         cur = con.cursor()
         execute = cur.execute
@@ -1397,10 +1408,12 @@ END;
     @app.router.get("/%3Curl")
     @app.router.get("/%3Curl/*")
     async def get_url(
-        request: Request, 
         pickcode: str, 
         image: bool = False, 
         web: bool = False, 
+        user_agent: str = "", 
+        url_detail: None | bool = None, 
+        request: None | Request = None, 
     ) -> dict:
         """获取下载链接
 
@@ -1410,12 +1423,13 @@ END;
         """
         if image:
             return {"type": "image", "url": await get_image_url(pickcode)}
-        user_agent = (request.get_first_header(b"User-agent") or b"").decode("latin-1")
+        if not user_agent and request is not None:
+            user_agent = (request.get_first_header(b"User-agent") or b"").decode("latin-1")
         if (cache_url and (r := DOWNLOAD_URL_CACHE.get((pickcode, user_agent)))
             or (r := DOWNLOAD_URL_CACHE1.get(pickcode))
             or (r := DOWNLOAD_URL_CACHE2.get((pickcode, user_agent)))
         ):
-            return {"type": "file", "url": (url := r[1]), "headers": url.get("headers")}
+            return wrap_url(r[1], url_detail)
         url = await get_file_url(pickcode, user_agent=user_agent, use_web_api=web)
         expire_ts = int(next(v for k, v in parse_qsl(urlsplit(url).query) if k == "t")) - 60 * 5
         if "&c=0&f=&" in url:
@@ -1424,7 +1438,7 @@ END;
             DOWNLOAD_URL_CACHE2[(pickcode, user_agent)] = (expire_ts, url)
         elif cache_url:
             DOWNLOAD_URL_CACHE[(pickcode, user_agent)] = (expire_ts, url)
-        return {"type": "file", "url": url, "headers": url.get("headers")}
+        return wrap_url(url, url_detail)
 
     @skip_if_only_webdav(app.router.route("/", methods=["GET", "HEAD"]))
     @skip_if_only_webdav(app.router.route("/<path:path2>", methods=["GET", "HEAD"]))
@@ -1482,10 +1496,11 @@ END;
             )
         if not is_dir:
             resp = await get_url(
-                request, 
                 pickcode=pickcode, 
                 image=image, 
                 web=web, 
+                user_agent=(request.get_first_header(b"User-agent") or b"").decode("latin-1"), 
+                url_detail=True, 
             )
             url: P115URL = resp["url"]
             if web:
@@ -1585,29 +1600,27 @@ END;
     @app.router.get("/%3Cshare/%3Curl")
     @app.router.get("/%3Cshare/%3Curl/*")
     async def get_share_url(
-        request: Request, 
         share_code: str, 
         id: int, 
         receive_code: str = "", 
         image: bool = False, 
         web: bool = False, 
+        url_detail: None | bool = None, 
+        request: None | Request = None, 
     ):
         if not receive_code:
             share_info = await get_share_info(share_code)
             receive_code = share_info["receive_code"]
         if image:
-            return {
-                "type": "image", 
-                "url": await get_share_image_url(share_code, receive_code, id), 
-            }
+            url = await get_share_image_url(share_code, receive_code, id)
+            return wrap_url(url, url_detail)
         if r := DOWNLOAD_URL_CACHE1.get((share_code, id)):
-            return {"type": "file", "url": r[1], "headers": None}
-        user_agent = (request.get_first_header(b"User-agent") or b"").decode("latin-1")
+            return wrap_url(r[1], url_detail)
         url = await get_share_file_url(share_code, receive_code, id, use_web_api=web)
         if "&c=0&f=&" in url:
             expire_ts = int(next(v for k, v in parse_qsl(urlsplit(url).query) if k == "t")) - 60 * 5
             DOWNLOAD_URL_CACHE1[(share_code, id)] = (expire_ts, url)
-        return {"type": "file", "url": url, "headers": url.get("headers")}
+        return wrap_url(url, url_detail)
 
     @skip_if_only_webdav(app.router.get("/%3Cshare/%3Cid"))
     @skip_if_only_webdav(app.router.get("/%3Cshare/%3Cid/*"))
@@ -1789,12 +1802,12 @@ END;
             )
         if not is_dir:
             resp = await get_share_url(
-                request, 
                 share_code, 
                 id=id, 
                 image=image, 
                 web=web, 
                 receive_code=receive_code, 
+                url_detail=True, 
             )
             url: P115URL = resp["url"]
             if web:
@@ -1984,18 +1997,18 @@ END;
             attr = self.attr
             name = encode_uri_component_loose(attr["name"])
             if share_code := attr.get("share_code"):
-                url = f"{self.origin}/<share/{name}?file=true&share_code={share_code}&id={attr['id']}"
+                url = f"{self.origin}/<share/<url/{name}?share_code={share_code}&id={attr['id']}"
             else:
-                url = f"{self.origin}/{name}?file=true&pickcode={attr['pickcode']}&id={attr['id']}&sha1={attr['sha1']}"
+                url = f"{self.origin}/<url/{name}?pickcode={attr['pickcode']}&id={attr['id']}&sha1={attr['sha1']}"
             return bytes(url, "utf-8")
 
         @locked_cacheproperty
         def url(self, /) -> str:
             attr = self.attr
             if share_code := attr.get("share_code"):
-                return f"{self.origin}/<share?file=true&share_code={share_code}&id={attr['id']}"
+                return run_coroutine_threadsafe(get_share_url(share_code, attr["id"], url_detail=False), loop).result()
             else:
-                return f"{self.origin}/?file=true&pickcode={attr['pickcode']}"
+                return run_coroutine_threadsafe(get_url(attr["pickcode"], user_agent=self.environ["HTTP_USER_AGENT"], url_detail=False), loop).result()
 
         def get_content(self, /):
             if self.is_strm:
@@ -2154,9 +2167,8 @@ END;
             return True
 
     if only_webdav:
-        @app.router.route("/", methods=["GET", "HEAD"])
-        @app.router.route("/<path:path>", methods=["GET", "HEAD"])
-        def index(request: Request, path: str = ""):
+        @app.router.route("/*", methods=["GET", "HEAD"])
+        def index(request: Request):
             return redirect(f"/<dav{request.url}")
 
     # NOTE: https://wsgidav.readthedocs.io/en/latest/user_guide_configure.html
