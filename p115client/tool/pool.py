@@ -10,7 +10,7 @@ __doc__ = "这个模块提供了一些和 cookies 池有关的函数"
 
 from asyncio import Lock as AsyncLock
 from collections import deque
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from functools import partial, update_wrapper
 from threading import Lock
 from time import time
@@ -134,17 +134,18 @@ def make_pool(
     :return: 返回一个函数，调用后返回一个元组，包含 值 和 一个调用以在完成后把 值 返还池中
     """
     generate = generate_factory(**request_kwargs)
-    dq: deque[tuple[Any, float]] = deque(((a, time()) for a in initial_values))
+    dq: deque[tuple[Any, float, int]] = deque(((a, time(), 0) for a in initial_values))
     push, pop = dq.append, dq.popleft
     def get_value(async_: bool = False):
         def call():
+            n = 0
             if dq and dq[0][1] + cooldown_time < time():
-                value = pop()[0]
+                value, _, n = pop()
             elif async_:
                 value = yield generate(async_=True)
             else:
                 value = generate()
-            return value, partial(push, (value, time()))
+            return value + f"; n={n}", partial(push, (value, time(), n+1))
         return run_gen_step(call, async_=async_)
     if not lock:
         setattr(get_value, "deque", dq)
@@ -231,6 +232,7 @@ def call_wrap_with_cookies_pool(
     /, 
     func: Callable = P115Client("").fs_files, 
     check: bool | Callable = True, 
+    base_url_seq: None | Sequence = None, 
 ) -> Callable:
     """包装函数，使得用 cookies 池执行请求
 
@@ -244,6 +246,8 @@ def call_wrap_with_cookies_pool(
                 cookies, revert = yield get_cookies(async_=True)
             else:
                 cookies, revert = get_cookies()
+            if "base_url" not in kwds and base_url_seq:
+                kwds["base_url"] = base_url_seq[int(cookies.rpartition("=")[-1]) % len(base_url_seq)]
             while True:
                 if headers:
                     headers = dict(headers, Cookie=cookies)

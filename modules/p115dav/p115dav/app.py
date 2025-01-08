@@ -197,6 +197,7 @@ def make_application(
     cache_size: int = 65536, 
     debug: bool = False, 
     wsgidav_config: dict = {}, 
+    only_webdav: bool = False, 
 ) -> Application:
     from a2wsgi import WSGIMiddleware
     from asynctools import to_list
@@ -284,6 +285,13 @@ def make_application(
     dummy_client: P115Client = P115Client("")
     con: Connection
     loop: AbstractEventLoop
+
+    def skip_if_only_webdav(deco, /):
+        def wrapped(func, /):
+            if not only_webdav:
+                deco(func)
+            return func
+        return wrapped
 
     def default(obj, /):
         if isinstance(obj, Buffer):
@@ -1007,17 +1015,20 @@ VALUES (:share_code, :id, :parent_id, :sha1, :name, :path, :is_dir)"""
             initial_cookies = [c for l in open(cookies_rotation_file, encoding="latin-1") if (c := l.strip())]
         except Exception:
             initial_cookies = []
-        get_cookies = cookies_pool(client, "harmony", initial_cookies, cooldown_time=3)
+        get_cookies = cookies_pool(client, "harmony", initial_cookies, cooldown_time=2)
         deque = getattr(get_cookies, "deque")
-        fs_files = call_wrap_with_cookies_pool(get_cookies)
+        fs_files = call_wrap_with_cookies_pool(
+            get_cookies, 
+            base_url_seq=("http://webapi.115.com", "https://webapi.115.com"), 
+        )
         try:
             async with client.async_session:
                 app.services.register(P115Client, instance=client)
                 yield
         finally:
             with open(cookies_rotation_file, "w", encoding="latin-1") as file:
-                for cookie, _ in deque:
-                    print(cookie, file=file)
+                for t in deque:
+                    print(t[0], file=file)
 
     @app.lifespan
     async def register_connection(app: Application):
@@ -1213,8 +1224,8 @@ END;
                 raise
         return response
 
-    @app.router.get("/%3Cid")
-    @app.router.get("/%3Cid/*")
+    @skip_if_only_webdav(app.router.get("/%3Cid"))
+    @skip_if_only_webdav(app.router.get("/%3Cid/*"))
     async def get_id(
         id: int = -1, 
         pickcode: str = "", 
@@ -1242,7 +1253,12 @@ END;
                 return ret
             id_to_dirnode: dict[int, tuple[str, int]] = {}
             try:
-                call = call_wrap_with_cookies_pool(get_cookies, get_id_to_path, check=False)
+                call = call_wrap_with_cookies_pool(
+                    get_cookies, 
+                    get_id_to_path, 
+                    check=False, 
+                    base_url_seq=("http://webapi.115.com", "https://webapi.115.com"), 
+                )
                 return update_cache_for_p115id(await call(
                     dummy_client, 
                     path, 
@@ -1257,8 +1273,8 @@ END;
                         for id, (name, pid) in id_to_dirnode.items()
                     ])
 
-    @app.router.get("/%3Cpickcode")
-    @app.router.get("/%3Cpickcode/*")
+    @skip_if_only_webdav(app.router.get("/%3Cpickcode"))
+    @skip_if_only_webdav(app.router.get("/%3Cpickcode/*"))
     async def get_pickcode(
         id: int = -1, 
         pickcode: str = "", 
@@ -1301,8 +1317,8 @@ END;
         })
         return pickcode
 
-    @app.router.get("/%3Cattr")
-    @app.router.get("/%3Cattr/*")
+    @skip_if_only_webdav(app.router.get("/%3Cattr"))
+    @skip_if_only_webdav(app.router.get("/%3Cattr/*"))
     async def get_attr(
         id: int = -1, 
         pickcode: str = "", 
@@ -1329,8 +1345,8 @@ END;
         update_cache(attr)
         return attr
 
-    @app.router.get("/%3Clist")
-    @app.router.get("/%3Clist/*")
+    @skip_if_only_webdav(app.router.get("/%3Clist"))
+    @skip_if_only_webdav(app.router.get("/%3Clist/*"))
     async def get_list(
         id: int = -1, 
         pickcode: str = "", 
@@ -1340,8 +1356,8 @@ END;
         id = await get_id(id=id, pickcode=pickcode, sha1=sha1, path=path)
         return await get_file_list(id)
 
-    @app.router.get("/%3Cm3u8")
-    @app.router.get("/%3Cm3u8/*")
+    @skip_if_only_webdav(app.router.get("/%3Cm3u8"))
+    @skip_if_only_webdav(app.router.get("/%3Cm3u8/*"))
     async def get_m3u8(pickcode: str = ""):
         """获取 m3u8 文件链接
         """
@@ -1358,8 +1374,8 @@ END;
         check_response(resp)
         return data["video_url"]
 
-    @app.router.get("/%3Csubtitles")
-    @app.router.get("/%3Csubtitles/*")
+    @skip_if_only_webdav(app.router.get("/%3Csubtitles"))
+    @skip_if_only_webdav(app.router.get("/%3Csubtitles/*"))
     async def get_subtitles(pickcode: str):
         """获取字幕（随便提供此文件夹内的任何一个文件的提取码即可）
         """
@@ -1410,8 +1426,8 @@ END;
             DOWNLOAD_URL_CACHE[(pickcode, user_agent)] = (expire_ts, url)
         return {"type": "file", "url": url, "headers": url.get("headers")}
 
-    @app.router.route("/", methods=["GET", "HEAD"])
-    @app.router.route("/<path:path2>", methods=["GET", "HEAD"])
+    @skip_if_only_webdav(app.router.route("/", methods=["GET", "HEAD"]))
+    @skip_if_only_webdav(app.router.route("/<path:path2>", methods=["GET", "HEAD"]))
     async def get_page(
         request: Request, 
         id: int = -1, 
@@ -1593,8 +1609,8 @@ END;
             DOWNLOAD_URL_CACHE1[(share_code, id)] = (expire_ts, url)
         return {"type": "file", "url": url, "headers": url.get("headers")}
 
-    @app.router.get("/%3Cshare/%3Cid")
-    @app.router.get("/%3Cshare/%3Cid/*")
+    @skip_if_only_webdav(app.router.get("/%3Cshare/%3Cid"))
+    @skip_if_only_webdav(app.router.get("/%3Cshare/%3Cid/*"))
     async def get_share_id(
         share_code: str, 
         id: int = -1, 
@@ -1646,8 +1662,8 @@ END;
                 raise FileNotFoundError(ENOENT, {"share_code": share_code, "path": path})
         return 0
 
-    @app.router.get("/%3Cshare/%3Cattr")
-    @app.router.get("/%3Cshare/%3Cattr/*")
+    @skip_if_only_webdav(app.router.get("/%3Cshare/%3Cattr"))
+    @skip_if_only_webdav(app.router.get("/%3Cshare/%3Cattr/*"))
     async def get_share_attr(
         share_code: str, 
         id: int = -1, 
@@ -1703,8 +1719,8 @@ END;
         _ = await get_share_file_list(share_code, receive_code, parent_id, refresh_thumbs=True)
         return ID_TO_ATTR[(share_code, id)]
 
-    @app.router.get("/%3Cshare/%3Clist")
-    @app.router.get("/%3Cshare/%3Clist/*")
+    @skip_if_only_webdav(app.router.get("/%3Cshare/%3Clist"))
+    @skip_if_only_webdav(app.router.get("/%3Cshare/%3Clist/*"))
     async def get_share_list(
         share_code: str = "", 
         id: int = -1, 
@@ -1736,8 +1752,8 @@ END;
             id = await get_share_id(share_code, sha1=sha1, path=path, receive_code=receive_code)
         return await get_share_file_list(share_code, receive_code, id, refresh_thumbs=True)
 
-    @app.router.route("/%3Cshare", methods=["GET", "HEAD"])
-    @app.router.route("/%3Cshare/<path:path2>", methods=["GET", "HEAD"])
+    @skip_if_only_webdav(app.router.route("/%3Cshare", methods=["GET", "HEAD"]))
+    @skip_if_only_webdav(app.router.route("/%3Cshare/<path:path2>", methods=["GET", "HEAD"]))
     async def get_share_page(
         request: Request, 
         share_code: str = "", 
@@ -2136,6 +2152,12 @@ END;
 
         def is_readonly(self, /) -> bool:
             return True
+
+    if only_webdav:
+        @app.router.route("/", methods=["GET", "HEAD"])
+        @app.router.route("/<path:path>", methods=["GET", "HEAD"])
+        def index(request: Request, path: str = ""):
+            return redirect(f"/<dav{request.url}")
 
     # NOTE: https://wsgidav.readthedocs.io/en/latest/user_guide_configure.html
     wsgidav_config = {

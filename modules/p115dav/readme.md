@@ -14,10 +14,9 @@ pip install -U p115dav
 
 ```console
 $ p115dav -h
-usage: p115dav [-h] [-cp COOKIES_PATH] [-o STRM_ORIGIN] [-t TTL] [-p1 PREDICATE]
-               [-t1 {ignore,ignore-file,expr,lambda,stmt,module,file,re}] [-p2 STRM_PREDICATE]
-               [-t2 {filter,filter-file,expr,lambda,stmt,module,file,re}] [-fs] [-H HOST] [-P PORT] [-cu]
-               [-d] [-ass] [-uc UVICORN_RUN_CONFIG_PATH] [-wc WSGIDAV_CONFIG_PATH] [-l] [-v]
+usage: p115dav [-h] [-cp COOKIES_PATH] [-o STRM_ORIGIN] [-t TTL] [-p1 PREDICATE] [-t1 {ignore,ignore-file,expr,lambda,stmt,module,file,re}] [-p2 STRM_PREDICATE]
+               [-t2 {filter,filter-file,expr,lambda,stmt,module,file,re}] [-fs] [-H HOST] [-P PORT] [-cu] [-d] [-ass] [-uc UVICORN_RUN_CONFIG_PATH]
+               [-wc WSGIDAV_CONFIG_PATH] [-l] [-v]
                [dbfile]
 
     🕸️ 115 网盘 WebDAV 和 302 直链程序 🕷️

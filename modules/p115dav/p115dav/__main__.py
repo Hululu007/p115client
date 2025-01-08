@@ -179,6 +179,7 @@ parser.add_argument("-P", "--port", default=8000, type=int, help="端口号，�
 parser.add_argument("-cu", "--cache-url", action="store_true", help="缓存下载链接")
 parser.add_argument("-d", "--debug", action="store_true", help="启用 debug 模式，输出详细的错误信息")
 parser.add_argument("-ass", "--load-libass", action="store_true", help="加载 libass.js，实现 ass/ssa 字幕特效")
+parser.add_argument("-ow", "--only-webdav", action="store_true", help="仅用网页版，只有 webdav 可用")
 parser.add_argument("-uc", "--uvicorn-run-config-path", help="uvicorn 启动时的配置文件路径，会作为关键字参数传给 `uvicorn.run`，支持 JSON、YAML 或 TOML 格式，会根据扩展名确定，不能确定时视为 JSON")
 parser.add_argument("-wc", "--wsgidav-config-path", help="""WsgiDAV 启动时的配置文件路径，支持 JSON、YAML 或 TOML 格式，会根据扩展名确定，不能确定时视为 JSON
 如需样板文件，请阅读：
@@ -186,6 +187,7 @@ parser.add_argument("-wc", "--wsgidav-config-path", help="""WsgiDAV 启动时的
     https://wsgidav.readthedocs.io/en/latest/user_guide_configure.html#sample-wsgidav-yaml
 
 """)
+parser.add_argument("-wu", "--wsgidav-username-password", nargs="*", help="可传入多组用户名和密码，格式为 username:password，中间用逗号分隔，如果不传则无或者任意用户名和密码都可通过")
 parser.add_argument("-l", "--license", action="store_true", help="输出授权信息")
 parser.add_argument("-v", "--version", action="store_true", help="输出版本号")
 
@@ -246,6 +248,18 @@ def main(argv: None | list[str] | Namespace = None, /):
                 wsgidav_config = json_loads(file.read())
     else:
         wsgidav_config = {}
+    if list_username_password := args.wsgidav_username_password:
+        if user_mapping := {
+            "user_mapping": {
+                "*": {
+                    user: {"password": pswd}
+                    for user, _, pswd in (
+                        user_pswd.partition(":") for user_pswd in list_username_password
+                    ) if user
+                }
+            }
+        }:
+            wsgidav_config["simple_dc"] = user_mapping
 
     uvicorn_run_config_path = args.uvicorn_run_config_path
     if uvicorn_run_config_path:
@@ -297,6 +311,7 @@ def main(argv: None | list[str] | Namespace = None, /):
         cache_url=args.cache_url, 
         debug=args.debug, 
         wsgidav_config=wsgidav_config, 
+        only_webdav=args.only_webdav, 
     )
     uvicorn.run(app, **run_config)
 

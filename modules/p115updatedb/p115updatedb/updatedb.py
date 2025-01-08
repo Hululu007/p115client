@@ -398,6 +398,7 @@ def sort(
     return data
 
 
+# TODO: 可以再进行优化，对于文件节点，可以用 fs_category_get 来获取目录树，由此或许可以减少大量的查询（文件用 fs_category_get，目录用 fs_file）
 def load_ancestors(
     con: Connection | Cursor, 
     /, 
@@ -1119,7 +1120,6 @@ def updatedb(
             executor.shutdown(wait=False, cancel_futures=True)
 
 # TODO: 如果提供的是一个 web、harmony、desktop 的 cookies，则自动扫码获得一个 tv 版的 cookies
-# TODO: 为全量获取星标目录进行一些优化，并发拉取
 # TODO: 允许全量拉取并发执行，冷却时间为 1 秒（仅当文件总数小于等于 6900 时）
 # TODO: 增加一个选项，允许对数据进行全量而不是增量更新，这样可以避免一些问题
 # TODO: 再实现一个拉取数据的函数，只拉取文件数据，不拉取目录，只看更新时间，只要更新时间较新的，就写入数据库，只增改不删，如果是全新的，就用多线程（20线程），如果不是则从日期最新开始拉，如果一个目录太大，则临时找出所有子目录，再分拆，如果目标是文件，则直接把数据保存到数据库，然后停工（通过category_get获取）
