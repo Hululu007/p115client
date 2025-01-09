@@ -30,7 +30,7 @@ from _thread import start_new_thread
 from tempfile import TemporaryFile
 from threading import Lock
 from time import time
-from typing import cast, overload, Any, Final, Literal, Self, TypeVar, Unpack
+from typing import cast, overload, Any, Final, Literal, Self, Unpack
 from urllib.parse import quote, unquote, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 from warnings import warn
@@ -67,7 +67,6 @@ from .type import RequestKeywords, MultipartResumeData, P115Cookies, P115URL
 from ._upload import buffer_length, make_dataiter, oss_upload, oss_multipart_upload
 
 
-T = TypeVar("T")
 CRE_SHARE_LINK_search: Final = re_compile(r"/s/(?P<share_code>\w+)(\?password=(?P<receive_code>\w+))?").search
 CRE_SET_COOKIE: Final = re_compile(r"[0-9a-f]{32}=[0-9a-f]{32}.*")
 CRE_CLIENT_API_search: Final = re_compile(r"^ +((?:GET|POST) .*)", MULTILINE).search
@@ -14260,7 +14259,7 @@ class P115Client:
                 return make_ed2k_url(name or file.name, *ed2k_hash(file))
 
     @overload
-    def hash(
+    def hash[T](
         self, 
         /, 
         url: str | Callable[[], str], 
@@ -14273,7 +14272,7 @@ class P115Client:
     ) -> tuple[int, HashObj | T]:
         ...
     @overload
-    def hash(
+    def hash[T](
         self, 
         /, 
         url: str | Callable[[], str], 
@@ -14285,7 +14284,7 @@ class P115Client:
         async_: Literal[True], 
     ) -> Coroutine[Any, Any, tuple[int, HashObj | T]]:
         ...
-    def hash(
+    def hash[T](
         self, 
         /, 
         url: str | Callable[[], str], 
@@ -14334,7 +14333,7 @@ class P115Client:
                     return file_digest(file, digest, stop=max(0, stop-start)) # type: ignore
 
     @overload
-    def hashes(
+    def hashes[T](
         self, 
         /, 
         url: str | Callable[[], str], 
@@ -14347,7 +14346,7 @@ class P115Client:
     ) -> tuple[int, list[HashObj | T]]:
         ...
     @overload
-    def hashes(
+    def hashes[T](
         self, 
         /, 
         url: str | Callable[[], str], 
@@ -14359,7 +14358,7 @@ class P115Client:
         async_: Literal[True], 
     ) -> Coroutine[Any, Any, tuple[int, list[HashObj | T]]]:
         ...
-    def hashes(
+    def hashes[T](
         self, 
         /, 
         url: str | Callable[[], str], 

@@ -8,17 +8,15 @@ __all__ = [
     "iter_stared_dirs_raw", "iter_stared_dirs", "ensure_attr_path", "iterdir_raw", "iterdir", 
     "iter_files", "iter_files_raw", "dict_files", "traverse_files", "iter_dupfiles", "dict_dupfiles", 
     "iter_image_files", "dict_image_files", "iter_dangling_files", "share_extract_payload", 
-    "share_iterdir", "share_iter_files", "iter_selected_nodes", "iter_selected_nodes_using_star_event", 
-    "iter_selected_dirs_using_star", 
+    "share_iterdir", "share_iter_files", "iter_selected_nodes", "iter_selected_nodes_by_category_get", 
+    "iter_selected_nodes_using_star_event", "iter_selected_dirs_using_star", 
 ]
 __doc__ = "这个模块提供了一些和目录信息罗列有关的函数"
 
 import errno
 
-from asyncio import Semaphore as AsyncSemaphore, TaskGroup
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator, Callable, Collection, Coroutine, Iterable, Iterator, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
 from itertools import chain, count, islice, takewhile
@@ -27,12 +25,14 @@ from re import compile as re_compile
 from string import hexdigits
 from time import time
 from types import EllipsisType
-from typing import cast, overload, Any, Final, Literal, NamedTuple, TypedDict, TypeVar
+from typing import cast, overload, Any, Final, Literal, NamedTuple, TypedDict
 from warnings import warn
 
 from asynctools import async_chain, async_filter, async_map, to_list
+from concurrenttools import taskgroup_map, threadpool_map
 from iterutils import async_foreach, run_gen_step, run_gen_step_iter, through, async_through, Yield, YieldFrom
 from iter_collect import grouped_mapping, grouped_mapping_async, iter_keyed_dups, iter_keyed_dups_async, SupportsLT
+from orjson import loads
 from p115client import check_response, normalize_attr, DataError, P115Client, P115OSError, P115Warning
 from p115client.const import CLASS_TO_TYPE, SUFFIX_TO_TYPE
 from p115client.type import P115DictAttrLike
@@ -41,9 +41,6 @@ from posixpatht import escape, path_is_dir_form, splitext, splits
 from .edit import update_desc, update_star
 from .life import iter_life_behavior_once, life_show
 
-
-D = TypeVar("D", bound=dict)
-K = TypeVar("K")
 
 CRE_SHARE_LINK_search1 = re_compile(r"(?:/s/|share\.115\.com/)(?P<share_code>[a-z0-9]+)\?password=(?:(?P<receive_code>[a-z0-9]{4}))?").search
 CRE_SHARE_LINK_search2 = re_compile(r"(?P<share_code>[a-z0-9]+)(?:-(?P<receive_code>[a-z0-9]{4}))?").search
@@ -714,7 +711,7 @@ def _iter_fs_files(
     client: str | P115Client, 
     payload: int | str | dict = 0, 
     first_page_size: int = 0, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
     ensure_file: None | bool = None, 
     app: str = "web", 
@@ -728,7 +725,7 @@ def _iter_fs_files(
     client: str | P115Client, 
     payload: int | str | dict = 0, 
     first_page_size: int = 0, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
     ensure_file: None | bool = None, 
     app: str = "web", 
@@ -741,7 +738,7 @@ def _iter_fs_files(
     client: str | P115Client, 
     payload: int | str | dict = 0, 
     first_page_size: int = 0, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
     ensure_file: None | bool = None, 
     app: str = "web", 
@@ -820,13 +817,10 @@ def _iter_fs_files(
             check_response(resp)
             if cid and int(resp["path"][-1]["cid"]) != cid:
                 raise FileNotFoundError(errno.ENOENT, cid)
-            cur_ans = [(0, "")]
-            for info in resp["path"][1:]:
-                pid, name = int(info["cid"]), info["name"]
-                id_to_dirnode[pid] = DirNode(name, int(info["pid"]))
-                cur_ans.append((pid, "name"))
-            if ans and ans != cur_ans:
-                warn(f"cid={cid} ancestors changed: {ans} -> {cur_ans}", category=P115Warning)
+            if id_to_dirnode is not ...:
+                for info in resp["path"][1:]:
+                    pid, name = int(info["cid"]), info["name"]
+                    id_to_dirnode[pid] = DirNode(name, int(info["pid"]))
             if count == 0:
                 count = int(resp.get(key_of_count) or 0)
             elif count != int(resp.get(key_of_count) or 0):
@@ -841,7 +835,8 @@ def _iter_fs_files(
             for info in resp["data"]:
                 attr = _overview_attr(info)
                 if attr.is_dir:
-                    id_to_dirnode[attr.id] = DirNode(attr.name, attr.parent_id)
+                    if id_to_dirnode is not ...:
+                        id_to_dirnode[attr.id] = DirNode(attr.name, attr.parent_id)
                 elif ensure_file is False:
                     return
                 yield Yield(info, identity=True)
@@ -871,7 +866,7 @@ def iter_stared_dirs_raw(
     first_page_size: int = 0, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
     app: str = "web", 
     *, 
@@ -886,7 +881,7 @@ def iter_stared_dirs_raw(
     first_page_size: int = 0, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
     app: str = "web", 
     *, 
@@ -900,7 +895,7 @@ def iter_stared_dirs_raw(
     first_page_size: int = 0, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
     app: str = "web", 
     *, 
@@ -959,7 +954,7 @@ def iter_stared_dirs(
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
     app: str = "web", 
     *, 
@@ -975,7 +970,7 @@ def iter_stared_dirs(
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
     app: str = "web", 
     *, 
@@ -990,7 +985,7 @@ def iter_stared_dirs(
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
     app: str = "web", 
     *, 
@@ -1037,7 +1032,7 @@ def iter_stared_dirs(
 
 
 @overload
-def ensure_attr_path(
+def ensure_attr_path[D: dict](
     client: str | P115Client, 
     attrs: Iterable[D], 
     page_size: int = 10_000, 
@@ -1054,7 +1049,7 @@ def ensure_attr_path(
 ) -> Collection[D]:
     ...
 @overload
-def ensure_attr_path(
+def ensure_attr_path[D: dict](
     client: str | P115Client, 
     attrs: Iterable[D], 
     page_size: int = 10_000, 
@@ -1070,7 +1065,7 @@ def ensure_attr_path(
     **request_kwargs, 
 ) -> Coroutine[Any, Any, Collection[D]]:
     ...
-def ensure_attr_path(
+def ensure_attr_path[D: dict](
     client: str | P115Client, 
     attrs: Iterable[D], 
     page_size: int = 10_000, 
@@ -1230,7 +1225,7 @@ def iterdir_raw(
     asc: Literal[0, 1] = 1, 
     show_dir: Literal[0, 1] = 1, 
     fc_mix: Literal[0, 1] = 1, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
     ensure_file: None | bool = None, 
     app: str = "web", 
@@ -1249,7 +1244,7 @@ def iterdir_raw(
     asc: Literal[0, 1] = 1, 
     show_dir: Literal[0, 1] = 1, 
     fc_mix: Literal[0, 1] = 1, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
     ensure_file: None | bool = None, 
     app: str = "web", 
@@ -1267,7 +1262,7 @@ def iterdir_raw(
     asc: Literal[0, 1] = 1, 
     show_dir: Literal[0, 1] = 1, 
     fc_mix: Literal[0, 1] = 1, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
     ensure_file: None | bool = None, 
     app: str = "web", 
@@ -1339,7 +1334,7 @@ def iterdir(
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
     ensure_file: None | bool = None, 
     app: str = "web", 
@@ -1362,7 +1357,7 @@ def iterdir(
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
     ensure_file: None | bool = None, 
     app: str = "web", 
@@ -1384,7 +1379,7 @@ def iterdir(
     with_path: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
     ensure_file: None | bool = None, 
     app: str = "web", 
@@ -1432,6 +1427,8 @@ def iterdir(
         client = P115Client(client, check_for_relogin=True)
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
+    elif id_to_dirnode is ... and (with_ancestors or with_path):
+        id_to_dirnode = {}
     def gen_step():
         nonlocal cid
         it = iterdir_raw(
@@ -1455,7 +1452,8 @@ def iterdir(
         pancestors: list[dict] = []
         if with_ancestors or with_path:
             def process(info: dict, /) -> dict:
-                nonlocal dirname, pancestors
+                nonlocal dirname, pancestors, id_to_dirnode
+                id_to_dirnode = cast(dict, id_to_dirnode)
                 attr = normalize_attr(info)
                 if not pancestors:
                     cid = attr["parent_id"]
@@ -1498,7 +1496,7 @@ def iter_files_raw(
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     cur: Literal[0, 1] = 0, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
     app: str = "web", 
     *, 
@@ -1517,7 +1515,7 @@ def iter_files_raw(
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     cur: Literal[0, 1] = 0, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
     app: str = "web", 
     *, 
@@ -1535,7 +1533,7 @@ def iter_files_raw(
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     cur: Literal[0, 1] = 0, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
     app: str = "web", 
     *, 
@@ -1624,7 +1622,7 @@ def iter_files(
     use_star: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
@@ -1648,7 +1646,7 @@ def iter_files(
     use_star: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
@@ -1671,7 +1669,7 @@ def iter_files(
     use_star: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
@@ -1724,13 +1722,16 @@ def iter_files(
         client = P115Client(client, check_for_relogin=True)
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
+    elif id_to_dirnode is ... and (with_ancestors or with_path):
+        id_to_dirnode = {}
     if with_ancestors or with_path:
         cache: list[dict] = []
         add_to_cache = cache.append
     if with_ancestors:
         id_to_ancestors: dict[int, list[dict]] = {}
-
         def get_ancestors(id: int, attr: dict | tuple[str, int] | DirNode, /) -> list[dict]:
+            nonlocal id_to_dirnode
+            id_to_dirnode = cast(dict, id_to_dirnode)
             if isinstance(attr, (DirNode, tuple)):
                 name, pid = attr
             else:
@@ -1746,8 +1747,9 @@ def iter_files(
             return ancestors
     if with_path:
         id_to_path: dict[int, str] = {}
-
         def get_path(attr: dict | tuple[str, int] | DirNode, /) -> str:
+            nonlocal id_to_dirnode
+            id_to_dirnode = cast(dict, id_to_dirnode)
             if isinstance(attr, (DirNode, tuple)):
                 name, pid = attr
             else:
@@ -1828,7 +1830,7 @@ def dict_files(
     use_star: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
@@ -1851,7 +1853,7 @@ def dict_files(
     use_star: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
@@ -1873,7 +1875,7 @@ def dict_files(
     use_star: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
@@ -1978,7 +1980,7 @@ def traverse_files(
     use_star: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
@@ -2001,7 +2003,7 @@ def traverse_files(
     use_star: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
@@ -2023,7 +2025,7 @@ def traverse_files(
     use_star: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
@@ -2097,6 +2099,8 @@ def traverse_files(
         auto_splitting_threshold = 16
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
+    elif id_to_dirnode is ... and (with_ancestors or with_path):
+        id_to_dirnode = {}
     if app in ("", "web", "desktop", "harmony"):
         fs_files: Callable = client.fs_files
     else:
@@ -2124,8 +2128,9 @@ def traverse_files(
                         )))
                         if cid and int(resp["path"][-1]["cid"]) != cid:
                             continue
-                        for info in resp["path"][1:]:
-                            id_to_dirnode[int(info["cid"])] = DirNode(info["name"], int(info["pid"]))
+                        if id_to_dirnode is not ...:
+                            for info in resp["path"][1:]:
+                                id_to_dirnode[int(info["cid"])] = DirNode(info["name"], int(info["pid"]))
                     except (ReadTimeout, TimeoutError):
                         file_count = float("inf")
                     else:
@@ -2199,7 +2204,7 @@ def traverse_files(
 
 
 @overload
-def iter_dupfiles(
+def iter_dupfiles[K](
     client: str | P115Client, 
     cid: int = 0, 
     key: Callable[[dict], K] = itemgetter("sha1", "size"), 
@@ -2211,7 +2216,7 @@ def iter_dupfiles(
     auto_splitting_threshold: int = 150_000, 
     auto_splitting_statistics_timeout: None | int | float = 5, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
@@ -2220,7 +2225,7 @@ def iter_dupfiles(
 ) -> Iterator[tuple[K, dict]]:
     ...
 @overload
-def iter_dupfiles(
+def iter_dupfiles[K](
     client: str | P115Client, 
     cid: int = 0, 
     key: Callable[[dict], K] = itemgetter("sha1", "size"), 
@@ -2232,7 +2237,7 @@ def iter_dupfiles(
     auto_splitting_threshold: int = 150_000, 
     auto_splitting_statistics_timeout: None | int | float = 5, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
@@ -2240,7 +2245,7 @@ def iter_dupfiles(
     **request_kwargs, 
 ) -> AsyncIterator[tuple[K, dict]]:
     ...
-def iter_dupfiles(
+def iter_dupfiles[K](
     client: str | P115Client, 
     cid: int = 0, 
     key: Callable[[dict], K] = itemgetter("sha1", "size"), 
@@ -2252,7 +2257,7 @@ def iter_dupfiles(
     auto_splitting_threshold: int = 150_000, 
     auto_splitting_statistics_timeout: None | int | float = 5, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
@@ -2329,7 +2334,7 @@ def iter_dupfiles(
 
 
 @overload
-def dict_dupfiles(
+def dict_dupfiles[K](
     client: str | P115Client, 
     cid: int = 0, 
     key: Callable[[dict], K] = itemgetter("sha1", "size"), 
@@ -2345,7 +2350,7 @@ def dict_dupfiles(
     use_star: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
@@ -2354,7 +2359,7 @@ def dict_dupfiles(
 ) -> dict[K, list[dict]]:
     ...
 @overload
-def dict_dupfiles(
+def dict_dupfiles[K](
     client: str | P115Client, 
     cid: int = 0, 
     key: Callable[[dict], K] = itemgetter("sha1", "size"), 
@@ -2370,7 +2375,7 @@ def dict_dupfiles(
     use_star: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
@@ -2378,7 +2383,7 @@ def dict_dupfiles(
     **request_kwargs, 
 ) -> Coroutine[Any, Any, dict[K, list[dict]]]:
     ...
-def dict_dupfiles(
+def dict_dupfiles[K](
     client: str | P115Client, 
     cid: int = 0, 
     key: Callable[[dict], K] = itemgetter("sha1", "size"), 
@@ -2394,7 +2399,7 @@ def dict_dupfiles(
     use_star: bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
@@ -2602,7 +2607,7 @@ def dict_image_files(
     with_path: bool = False, 
     use_star: bool = False, 
     escape: None | Callable[[str], str] = escape, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False] = False, 
@@ -2621,7 +2626,7 @@ def dict_image_files(
     with_path: bool = False, 
     use_star: bool = False, 
     escape: None | Callable[[str], str] = escape, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[True], 
@@ -2639,7 +2644,7 @@ def dict_image_files(
     with_path: bool = False, 
     use_star: bool = False, 
     escape: None | Callable[[str], str] = escape, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False, True] = False, 
@@ -3097,51 +3102,106 @@ def iter_selected_nodes(
         client = P115Client(client, check_for_relogin=True)
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
+    def project(resp: dict, /) -> None | dict:
+        if resp.get("code") == 20018:
+            return None
+        check_response(resp)
+        info = resp["data"][0]
+        if id_to_dirnode is not ...:
+            attr = _overview_attr(info)
+            if attr.is_dir:
+                id_to_dirnode[attr.id] = DirNode(attr.name, attr.parent_id)
+        if int(info.get("aid") or info.get("area_id")) != 1:
+            return None
+        if normalize_attr is None:
+            return info
+        return normalize_attr(info)
     if async_:
-        if max_workers is None:
-            max_workers = 20
-        sema = AsyncSemaphore(max_workers)
-        async def call(id: int, /):
-            async with sema:
-                return await client.fs_file(id, async_=True, **request_kwargs)
-        async def request():
-            async with TaskGroup() as tg:
-                create_task = tg.create_task
-                for task in [create_task(call(id)) for id in ids]:
-                    resp = await task
-                    if resp.get("code") == 20018:
-                        continue
-                    check_response(resp)
-                    info = resp["data"][0]
-                    if id_to_dirnode is not ...:
-                        attr = _overview_attr(info)
-                        if attr.is_dir:
-                            id_to_dirnode[attr.id] = DirNode(attr.name, attr.parent_id)
-                    if int(info.get("aid") or info.get("area_id")) != 1:
-                        continue
-                    if normalize_attr is None:
-                        yield info
-                    else:
-                        yield normalize_attr(info)
+        request_kwargs["async_"] = True
+        return async_filter(None, async_map(project, taskgroup_map( # type: ignore
+            client.fs_file, ids, max_workers=max_workers, kwargs=request_kwargs)))
     else:
-        def request():
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                for resp in executor.map(partial(client.fs_file, **request_kwargs), ids):
-                    if resp.get("code") == 20018:
-                        continue
-                    check_response(resp)
-                    info = resp["data"][0]
-                    if id_to_dirnode is not ...:
-                        attr = _overview_attr(info)
-                        if attr.is_dir:
-                            id_to_dirnode[attr.id] = DirNode(attr.name, attr.parent_id)
-                    if int(info.get("aid") or info.get("area_id")) != 1:
-                        continue
-                    if normalize_attr is None:
-                        yield info
-                    else:
-                        yield normalize_attr(info)
-    return request()
+        return filter(None, map(project, threadpool_map(
+            client.fs_file, ids, max_workers=max_workers, kwargs=request_kwargs)))
+
+
+@overload
+def iter_selected_nodes_by_category_get(
+    client: str | P115Client, 
+    ids: Iterable[int], 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
+    app: str = "web", 
+    max_workers: None | int = 20, 
+    *, 
+    async_: Literal[False] = False, 
+    **request_kwargs, 
+) -> Iterator[dict]:
+    ...
+@overload
+def iter_selected_nodes_by_category_get(
+    client: str | P115Client, 
+    ids: Iterable[int], 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
+    app: str = "web", 
+    max_workers: None | int = 20, 
+    *, 
+    async_: Literal[True], 
+    **request_kwargs, 
+) -> AsyncIterator[dict]:
+    ...
+def iter_selected_nodes_by_category_get(
+    client: str | P115Client, 
+    ids: Iterable[int], 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
+    app: str = "web", 
+    max_workers: None | int = 20, 
+    *, 
+    async_: Literal[False, True] = False, 
+    **request_kwargs, 
+) -> Iterator[dict] | AsyncIterator[dict]:
+    """获取一组 id 的信息
+
+    :param client: 115 客户端或 cookies
+    :param ids: 一组文件或目录的 id
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典，如果为 ...，则忽略
+    :param app: 使用某个 app （设备）的接口
+    :param max_workers: 最大并发数
+    :param async_: 是否异步
+    :param request_kwargs: 其它请求参数
+
+    :return: 迭代器，产生详细的信息
+    """
+    if not isinstance(client, P115Client):
+        client = P115Client(client, check_for_relogin=True)
+    if id_to_dirnode is None:
+        id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
+    if app in ("", "web", "desktop", "harmony"):
+        func: Callable = client.fs_category_get
+    else:
+        func = client.fs_category_get_app
+    def call(id, /):
+        def parse(_, content: bytes):
+            resp = loads(content)
+            if resp:
+                resp["id"] = id
+                resp["parent_id"] = int(resp["paths"][-1]["file_id"])
+                resp["name"] = resp["file_name"]
+                resp["is_dir"] = not resp["sha1"]
+            return resp
+        return func(id, async_=async_, parse=parse, **request_kwargs)
+    def project(resp: dict, /) -> None | dict:
+        if not resp:
+            return None
+        check_response(resp)
+        if id_to_dirnode is not ... and not resp["sha1"]:
+            id_to_dirnode[resp["id"]] = DirNode(resp["name"], resp["parent_id"])
+        return resp
+    if async_:
+        return async_filter(None, async_map(project, taskgroup_map( # type: ignore
+            call, ids, max_workers=max_workers)))
+    else:
+        return filter(None, map(project, threadpool_map(
+            call, ids, max_workers=max_workers)))
 
 
 @overload
@@ -3291,7 +3351,7 @@ def iter_selected_nodes_using_star_event(
 def iter_selected_dirs_using_star(
     client: str | P115Client, 
     ids: Iterable[int], 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
     app: str = "web", 
     *, 
@@ -3303,7 +3363,7 @@ def iter_selected_dirs_using_star(
 def iter_selected_dirs_using_star(
     client: str | P115Client, 
     ids: Iterable[int], 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
     app: str = "web", 
     *, 
@@ -3314,7 +3374,7 @@ def iter_selected_dirs_using_star(
 def iter_selected_dirs_using_star(
     client: str | P115Client, 
     ids: Iterable[int], 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
     app: str = "web", 
     *, 

@@ -19,7 +19,7 @@ from functools import partial
 from hmac import digest as hmac_digest
 from inspect import iscoroutinefunction
 from itertools import count
-from typing import cast, overload, Any, Literal, TypeVar
+from typing import cast, overload, Any, Literal
 from urllib.parse import urlencode
 from xml.etree.ElementTree import fromstring
 
@@ -38,9 +38,6 @@ from iterutils import (
 )
 
 from .exception import MultipartUploadAbort
-
-
-T = TypeVar("T")
 
 
 def buffer_length(b: Buffer, /) -> int:
@@ -200,7 +197,7 @@ def oss_upload_sign(
     return headers, params
 
 
-def oss_upload_request(
+def oss_upload_request[T](
     request: Callable[..., T], 
     /, 
     url: str, 
