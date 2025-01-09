@@ -18,25 +18,25 @@ from sqlite3 import connect, Connection, Cursor
 from string import digits
 from time import time
 from typing import cast, Final, NoReturn
+from warnings import warn
 
 from concurrenttools import run_as_thread
 from orjson import dumps
 from p115client import check_response, P115Client
 from p115client.const import CLASS_TO_TYPE, SUFFIX_TO_TYPE
-from p115client.exception import BusyOSError, DataError
-from p115client.tool.edit import update_desc, update_star
+from p115client.exception import BusyOSError, DataError, P115Warning
 from p115client.tool.fs_files import iter_fs_files, iter_fs_files_threaded
 from p115client.tool.iterdir import (
-    filter_na_ids, get_id_to_path, iter_stared_dirs, iter_selected_nodes, iter_selected_nodes_using_star_event
+    get_id_to_path, iter_stared_dirs, iter_selected_nodes, iter_selected_nodes_using_star_event
 )
 from p115client.tool.life import iter_life_behavior, iter_life_behavior_once, IGNORE_BEHAVIOR_TYPES
 from sqlitetools import execute, find, query, transact, upsert_items, AutoCloseConnection
 
 from .query import (
-    get_parent_id, has_id, iter_descendants_fast, iter_existing_id, 
-    iter_parent_id, select_mtime_groups, 
+    get_dir_count, get_parent_id, has_id, iter_descendants_fast, iter_existing_id, 
+    iter_id_to_parent_id, iter_parent_id, select_mtime_groups, 
 )
-from .util import ZERO_DICT, bfs_gen
+from .util import bfs_gen
 
 
 # NOTE: 需要 mtime 的 115 生活事件类型集
@@ -51,8 +51,6 @@ handler.setFormatter(logging.Formatter(
     "\x1b[0m\x1b[1;35m%(name)s\x1b[0m \x1b[5;31m➜\x1b[0m %(message)s"
 ))
 logger.addHandler(handler)
-# NOTE: 轮流获取 proapi 的 origin
-get_proapi_origin = cycle(("https://proapi.115.com", "http://pro.api.115.com")).__next__
 
 
 def initdb(con: Connection | Cursor, /, disable_event: bool = False) -> Cursor:
@@ -399,6 +397,11 @@ def sort(
 
 
 # TODO: 可以再进行优化，对于文件节点，可以用 fs_category_get 来获取目录树，由此或许可以减少大量的查询（文件用 fs_category_get，目录用 fs_file）
+# 如果有一堆节点，要找出它们的所有祖先节点：
+# 1. 首先挑出所有文件节点，pid相同的，只取一个
+# 2. 用 fs_category_get 批量获取祖先节点列表
+# 3. 对剩下的目录节点，如果这些节点在 seen 集合中，则忽略，只处理不在里面的，循环处理之
+# 4. 最后加以整合即可
 def load_ancestors(
     con: Connection | Cursor, 
     /, 
@@ -472,7 +475,7 @@ def update_stared_dirs(
                 order="user_utime", 
                 asc=0, 
                 first_page_size=64, 
-                id_to_dirnode=ZERO_DICT, 
+                id_to_dirnode=..., 
                 normalize_attr=normalize_attr, 
                 app="android", 
                 **request_kwargs, 
@@ -512,23 +515,26 @@ def is_timeouterror(exc: Exception) -> bool:
     return False
 
 
-# TODO: 这个函数的代码量有些太多了，使用 p115client.tool.iter_fs_files 进行优化
 # TODO: 增加一个新的函数，使用 fs_files 和 cookies 池，当且仅当总文件数小于一定值（比如 11500），则进行采用
 def iterdir(
     client: P115Client, 
     cid: int = 0, 
     /, 
     first_page_size: int = 0, 
-    page_size: int = 10_000, 
-    payload: dict = {}, 
+    page_size: int = 0, 
+    show_dir: bool = True, 
+    fix_order: bool = True, 
+    cooldown: None | int | float = None, 
     **request_kwargs, 
 ) -> tuple[int, list[dict], set[int], Iterator[dict]]:
     """拉取一个目录中的文件或目录的数据
 
     :param client: 115 网盘客户端对象
     :param cid: 目录的 id
-    :param first_page_size: 首次拉取的分页大小，如果为 None 或者 <= 0，自动确定
-    :param page_size: 分页大小
+    :param first_page_size: 首次拉取的分页大小，如果 <= 0，自动确定
+    :param page_size: 分页大小，如果 <= 0，自动确定
+    :param show_dir: 如果为 True，则拉取 cid 所指定目录下直属的文件或目录节点，否则拉取所指定目录下整个子目录树中的所有文件节点（不含目录）
+    :param fix_order: 由于使用 `P115Client.fs_files_app` 时，`fc_mix` 不生效，所以必要时，需要自己去修复顺序
     :param payload: 其它查询参数
     :param request_kwargs: 其它 http 请求参数，会传给具体的请求函数，默认的是 httpx，可用参数 request 进行设置
 
@@ -539,85 +545,75 @@ def iterdir(
         3. 已经拉取的文件或目录的 id 的集合
         4. 迭代器，用来获取数据
     """
-    if page_size <= 0:
-        page_size = 10_000
-    if first_page_size <= 0:
-        first_page_size = page_size
-    payload = {
-        "asc": 0, "cid": cid, "custom_order": 1, "fc_mix": 1, "o": "user_utime", "offset": 0, 
-        "limit": first_page_size, "show_dir": 1, **payload, 
-    }
-    request_kwargs.setdefault("base_url", get_proapi_origin)
-    fs_files = client.fs_files_app
-    def get_files(payload, /):
-        while True:
-            try:
-                return check_response(fs_files(payload, **request_kwargs))
-            except DataError:
-                if payload["limit"] <= 1150:
-                    raise
-                payload["limit"] -= 1_000
-                if payload["limit"] < 1150:
-                    payload["limit"] = 1150
-    resp = get_files(payload)
-    if cid and int(resp["path"][-1]["cid"]) != cid:
-        raise NotADirectoryError(cid)
-    count = resp["count"]
-    ancestors = [
-        {"id": a["cid"], "parent_id": a["pid"], "name": a["name"]} 
-        for a in resp["path"][1:]
-    ]
     seen: set[int] = set()
     seen_add = seen.add
-    payload["limit"] = page_size
+    count: int = 0
+    ancestors: list[dict] = []
     def iterate():
-        nonlocal resp
-        offset = int(payload["offset"])
-        payload["limit"] = page_size
+        nonlocal count
         dirs: deque[dict] = deque()
         push, pop = dirs.append, dirs.popleft
-        while True:
-            data = resp["data"]
-            for attr in map(normalize_attr, data):
-                fid = cast(int, attr["id"])
-                if fid in seen:
-                    raise BusyOSError(
-                        EBUSY, 
-                        f"duplicate id found, means that some unpulled items have been updated: cid={cid}", 
-                    )
-                seen_add(fid)
-                if attr["is_dir"]:
-                    push(attr)
-                else:
-                    if dirs:
-                        mtime = attr["mtime"]
-                        while dirs and dirs[0]["mtime"] >= mtime:
-                            yield pop()
-                    yield attr
-            offset += len(data)
-            if offset >= count:
-                yield from dirs
-                break
-            payload["offset"] = offset
-            resp = get_files(payload)
-            if cid and int(resp["path"][-1]["cid"]) != cid:
-                raise FileNotFoundError(cid)
+        if cooldown:
+            it = iter_fs_files_threaded(
+                client, 
+                {"cid": cid, "show_dir": int(show_dir)}, 
+                page_size=page_size, 
+                app="android", 
+                raise_for_changed_count=True, 
+                cooldown=cooldown, 
+                **request_kwargs, 
+            )
+        else:
+            it = iter_fs_files(
+                client, 
+                {"cid": cid, "show_dir": int(show_dir)}, 
+                first_page_size=first_page_size, 
+                page_size=page_size, 
+                app="android", 
+                raise_for_changed_count=True, 
+                **request_kwargs, 
+            )
+        for n, resp in enumerate(it):
             ancestors[:] = (
                 {"id": a["cid"], "parent_id": a["pid"], "name": a["name"]} 
                 for a in resp["path"][1:]
             )
-            if count != resp["count"]:
-                raise BusyOSError(f"count changes during iteration: {cid}")
-    return count, ancestors, seen, iterate()
+            if not n:
+                count = int(resp["count"])
+                yield
+            if fix_order:
+                for attr in map(normalize_attr, resp["data"]):
+                    fid = cast(int, attr["id"])
+                    if fid in seen:
+                        raise BusyOSError(
+                            EBUSY, 
+                            f"duplicate id found, means that some unpulled items have been updated: cid={cid}", 
+                        )
+                    seen_add(fid)
+                    if attr["is_dir"]:
+                        push(attr)
+                    else:
+                        if dirs:
+                            mtime = attr["mtime"]
+                            while dirs and dirs[0]["mtime"] >= mtime:
+                                yield pop()
+                        yield attr
+            else:
+                yield from map(normalize_attr, resp["data"])
+        if dirs:
+            yield from dirs
+    it = iterate()
+    next(it)
+    return count, ancestors, seen, it
 
 
-# TODO: 增加一个参数，用来说明总文件数，以决定是否并发拉取
-# TODO: 可以支持全量拉取，不做任何的比较
+# TODO: 增加一个参数，用来说明总文件数，以决定采用并发拉取，还是 cookies 池
 def diff_dir(
     con: Connection | Cursor, 
     client: P115Client, 
     id: int = 0, 
     /, 
+    refresh: bool = False, 
     tree: bool = False, 
     **request_kwargs, 
 ) -> tuple[list[dict], list[int]]:
@@ -626,21 +622,31 @@ def diff_dir(
     :param con: 数据库连接或游标
     :param client: 115 网盘客户端对象
     :param id: 目录的 id
+    :param refresh: 执行全量拉取
     :param tree: 如果为 True，则比对目录树，但仅对文件，即叶子节点，如果为 False，则比对所有直接（1 级）子节点，包括文件和目录
     :param request_kwargs: 其它 http 请求参数，会传给具体的请求函数，默认的是 httpx，可用参数 request 进行设置
 
     :return: 2 元组，1) 待更替的数据列表，2) 待移除的 id 列表
     """
+    upsert_list: list[dict] = []
+    remove_list: list[int] = []
+    if refresh or not ((dirlen := get_dir_count(con, id)) and (dirlen["dir_count"] or dirlen["file_count"])):
+        if tree:
+            _, ancestors, _, data_it = iterdir(client, id, show_dir=False, cooldown=0.5, **request_kwargs)
+        else:
+            _, ancestors, _, data_it = iterdir(client, id, cooldown=0.5, **request_kwargs)
+        try:
+            upsert_list.extend(data_it)
+        finally:
+            if ancestors:
+                upsert_items(con, ancestors, extras={"is_alive": 1, "is_dir": 1, "_triggered": 0}, commit=True)
+        return upsert_list, remove_list
     future = run_as_thread(select_mtime_groups, con, id, tree=tree)
     if tree:
-        count, ancestors, seen, data_it = iterdir(client, id, first_page_size=128, payload={"show_dir": 0}, **request_kwargs)
+        count, ancestors, seen, data_it = iterdir(client, id, first_page_size=128, show_dir=False, **request_kwargs)
     else:
         count, ancestors, seen, data_it = iterdir(client, id, first_page_size=16, **request_kwargs)
     remains, groups = future.result()
-    dirs: list[dict] = []
-    upsert_list: list[dict] = []
-    remove_list: list[int] = []
-    dirs_add = dirs.append
     upsert_add = upsert_list.append
     remove_extend = remove_list.extend
     result = upsert_list, remove_list
@@ -649,8 +655,6 @@ def diff_dir(
             his_it = iter(groups)
             his_mtime, his_ids = next(his_it)
         for n, attr in enumerate(data_it, 1):
-            if attr["is_dir"]:
-                dirs_add(attr)
             if remains:
                 cur_id = attr["id"]
                 cur_mtime = attr["mtime"]
@@ -676,8 +680,6 @@ def diff_dir(
     finally:
         if ancestors:
             upsert_items(con, ancestors, extras={"is_alive": 1, "is_dir": 1, "_triggered": 0}, commit=True)
-        if dirs:
-            upsert_items(con, dirs, extras={"is_alive": 1, "_triggered": 0}, commit=True)
 
 
 def normalize_attr(info: Mapping, /) -> dict:
@@ -745,6 +747,9 @@ def _init_client(
 ) -> tuple[P115Client, Connection | Cursor]:
     if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
+    if (app := client.login_app()) in ("web", "desktop", "harmony"):
+        warn(f'app within ("web", "desktop", "harmony") is not recommended, as it will retrieve a new "tv" cookies', category=P115Warning)
+        client.login_another_app("tv", replace=True)
     if not dbfile:
         dbfile = f"115-{client.user_id}.db"
     if isinstance(dbfile, (Connection, Cursor)):
@@ -824,7 +829,6 @@ def updatedb_life(
                 attr["type"] = SUFFIX_TO_TYPE.get(splitext(attr["name"])[-1].lower(), 99)
             if not has_id(con, parent_id, is_alive=False):
                 ancestors: list[dict] = []
-                request_kwargs.setdefault("base_url", get_proapi_origin)
                 try:
                     if parent_id == 0:
                         pass
@@ -890,6 +894,7 @@ def updatedb_tree(
     id: int = 0, 
     /, 
     no_dir_moved: bool = True, 
+    refresh: bool = False, 
     **request_kwargs, 
 ) -> tuple[int, int]:
     """更新一个目录树
@@ -903,52 +908,21 @@ def updatedb_tree(
     :return: 2 元组，1) 已更替的数据列表，2) 已移除的 id 列表
     """
     client, con = _init_client(client, dbfile)
-    # TODO: 需要特别实现一下，多个版本
-    # TODO: 如果强制进行刷新，则也可能有 to_remove，首先获取此目录树下的 id 列表，然后重新拉取，如果有 id 找不到，才是删除，这样可以避免过多删除
-    #to_upsert, to_remove = diff_dir(con, client, id, tree=True, **request_kwargs)
-    to_upsert, to_remove = [], []
-    for resp in iter_fs_files_threaded(client, {"cid": id, "show_dir": 0}, app="android", cooldown=0.5):
-        to_upsert.extend(map(normalize_attr, resp["data"]))
-        ancestors = [
-            {"id": a["cid"], "parent_id": a["pid"], "name": a["name"]} 
-            for a in resp["path"][1:]
-        ]
-        if ancestors:
-            upsert_items(con, ancestors, extras={"is_alive": 1, "is_dir": 1, "_triggered": 0}, commit=True)
-    if to_remove:
-        # TODO: 下面的部分还需要进行一定程度优化
-        # TODO: 如果文件看上去似乎被删除，可能其实只是上层目录被移动了而已，所以需要正确进行处理
-        # TODO: 只要其中某一级的上级 id 不存在，则整个子树都被删除
-        all_pids: set[int] = set()
-        sql = "SELECT id, parent_id FROM data WHERE id IN (%s)" % (",".join(map(str, to_remove)) or "NULL")
-        pairs = dict(query(con, sql))
-        pids = set(pairs.values())
-        while pids:
-            all_pids.update(pids)
-            if not no_dir_moved:
-                update_desc(client, pids, **request_kwargs)
-                update_stared_dirs(con, client, **request_kwargs)
-            pids = {pid for pid in iter_parent_id(con, pids) if pid and pid != id and pid not in all_pids}
-        if all_pids:
-            na_ids = set(filter_na_ids(client, all_pids, **request_kwargs))
-            for fid, pid in pairs.items():
-                if pid in na_ids:
-                    na_ids.add(fid)
-                    continue
-                ids = [fid, pid]
-                while pid := get_parent_id(con, pid, 0):
-                    if pid in na_ids:
-                        na_ids.update(ids)
-                        break
-                    elif pid == id:
-                        na_ids.add(fid)
-                        break
-                    ids.append(pid)
-            to_remove = list(na_ids)
-        else:
-            to_remove = []
-    if to_remove:
-        kill_items(con, to_remove, commit=True)
+    to_upsert, to_remove = diff_dir(con, client, id, refresh=refresh, tree=True, **request_kwargs)
+    if to_remove and not no_dir_moved:
+        pairs = dict(iter_id_to_parent_id(con, to_remove))
+        to_remove = []
+        append = list.append
+        for info in list(iter_selected_nodes(client, tuple(pairs.keys()), normalize_attr=None, id_to_dirnode=..., **request_kwargs)):
+            attr = normalize_attr(info)
+            fid = attr["id"]
+            if int(info["aid"]) != 1:
+                append(to_remove, fid)
+            else:
+                append(to_upsert, attr)
+            del pairs[fid]
+        if pairs:
+            to_remove.extend(pairs)
     upserted = len(to_upsert)
     if to_upsert:
         ancestors = load_ancestors(
@@ -959,9 +933,16 @@ def updatedb_tree(
             refresh=not no_dir_moved, 
             dont_star=True, 
         )
+        if refresh:
+            ids = {a["id"] for a in to_upsert}
+            pids = {v for k, v in iter_id_to_parent_id(con, ids) if v and k not in ids}
+            pids.difference_update(a["id"] for a in ancestors)
+            to_remove.extend(pids)
         upsert_items(con, ancestors, extras={"_triggered": 0}, commit=True)
         upsert_items(con, to_upsert, extras={"_triggered": 0}, commit=True)
         upserted += len(ancestors)
+    if to_remove:
+        kill_items(con, to_remove, commit=True)
     return upserted, len(to_remove)
 
 
@@ -1119,8 +1100,5 @@ def updatedb(
         if need_calc_size:
             executor.shutdown(wait=False, cancel_futures=True)
 
-# TODO: 如果提供的是一个 web、harmony、desktop 的 cookies，则自动扫码获得一个 tv 版的 cookies
-# TODO: 允许全量拉取并发执行，冷却时间为 1 秒（仅当文件总数小于等于 6900 时）
-# TODO: 增加一个选项，允许对数据进行全量而不是增量更新，这样可以避免一些问题
-# TODO: 再实现一个拉取数据的函数，只拉取文件数据，不拉取目录，只看更新时间，只要更新时间较新的，就写入数据库，只增改不删，如果是全新的，就用多线程（20线程），如果不是则从日期最新开始拉，如果一个目录太大，则临时找出所有子目录，再分拆，如果目标是文件，则直接把数据保存到数据库，然后停工（通过category_get获取）
+# TODO: 允许全量拉取使用 cookies 池，仅当文件总数小于等于 6900 时，因此 diff_dir 需要接受一个参数，即预估文件总数
 # TODO: 为 115 生活单独做一个命令行命令

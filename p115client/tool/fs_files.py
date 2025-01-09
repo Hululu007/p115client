@@ -10,7 +10,7 @@ from collections import deque
 from collections.abc import AsyncIterator, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from copy import copy
-from errno import ENOENT, ENOTDIR
+from errno import EBUSY, ENOENT, ENOTDIR
 from functools import partial
 from itertools import cycle
 from time import time
@@ -19,7 +19,7 @@ from typing import cast, overload, Final, Literal
 from iterutils import run_gen_step, run_gen_step_iter, Yield
 from p115client import check_response, P115Client
 from p115client.client import get_status_code
-from p115client.exception import DataError
+from p115client.exception import BusyOSError, DataError
 
 
 get_proapi_origin: Final = cycle(("https://proapi.115.com", "http://pro.api.115.com")).__next__
@@ -45,6 +45,7 @@ def iter_fs_files(
     first_page_size: int = 0, 
     page_size: int = 10_000, 
     app: str = "web", 
+    raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -58,6 +59,7 @@ def iter_fs_files(
     first_page_size: int = 0, 
     page_size: int = 10_000, 
     app: str = "web", 
+    raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -70,6 +72,7 @@ def iter_fs_files(
     first_page_size: int = 0, 
     page_size: int = 10_000, 
     app: str = "web", 
+    raise_for_changed_count: bool = False, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -78,9 +81,10 @@ def iter_fs_files(
 
     :param client: 115 网盘客户端对象
     :param payload: 目录的 id 或者详细的查询参数
-    :param first_page_size: 首次拉取的分页大小
-    :param page_size: 分页大小
+    :param first_page_size: 首次拉取的分页大小，如果 <= 0，则自动确定
+    :param page_size: 分页大小，如果 <= 0，则自动确定
     :param app: 使用此设备的接口
+    :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param async_: 是否异步
     :param request_kwargs: 其它 http 请求参数，会传给具体的请求函数，默认的是 httpx，可用参数 request 进行设置
 
@@ -95,7 +99,7 @@ def iter_fs_files(
     if isinstance(payload, (int, str)):
         payload = {"cid": payload}
     payload = {
-        "asc": 0, "cid": 0, "custom_order": 1, "fc_mix": 0, "o": "user_utime", 
+        "asc": 0, "cid": 0, "custom_order": 1, "fc_mix": 1, "o": "user_utime", 
         "offset": 0, "limit": first_page_size, "show_dir": 1, **payload, 
     }
     cid = int(payload["cid"])
@@ -118,14 +122,17 @@ def iter_fs_files(
     def gen_step():
         resp = yield run_gen_step(get_files(payload), async_=async_)
         payload["limit"] = page_size
+        count = int(resp["count"])
         while True:
             if cid and int(resp["path"][-1]["cid"]) != cid:
                 raise NotADirectoryError(ENOTDIR, cid)
             yield Yield(resp, identity=True)
             payload["offset"] += len(resp["data"])
-            if payload["offset"] >= resp["count"]:
+            if payload["offset"] >= count:
                 break
             resp = yield run_gen_step(get_files(payload), async_=async_)
+            if raise_for_changed_count and count != int(resp["count"]):
+                raise BusyOSError(EBUSY, f"count changes during iteration: {cid}")
     return run_gen_step_iter(gen_step, async_=async_)
 
 
@@ -135,6 +142,7 @@ def iter_fs_files_threaded(
     /, 
     page_size: int = 7_000, 
     app: str = "web", 
+    raise_for_changed_count: bool = False, 
     cooldown: int | float = 1, 
     max_workers: None | int = None, 
     **request_kwargs, 
@@ -143,8 +151,9 @@ def iter_fs_files_threaded(
 
     :param client: 115 网盘客户端对象
     :param payload: 目录的 id 或者详细的查询参数
-    :param page_size: 分页大小
+    :param page_size: 分页大小，如果 <= 0，则自动确定
     :param app: 使用此设备的接口
+    :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param cooldown: 冷却时间，单位为秒
     :param max_workers: 最大工作线程数
     :param request_kwargs: 其它 http 请求参数，会传给具体的请求函数，默认的是 httpx，可用参数 request 进行设置
@@ -202,7 +211,10 @@ def iter_fs_files_threaded(
                     else:
                         raise FileNotFoundError(ENOENT, cid)
                 yield resp
-                count = resp["count"]
+                if count < 0:
+                    count = int(resp["count"])
+                elif raise_for_changed_count and count != int(resp["count"]):
+                    raise BusyOSError(EBUSY, f"count changes during iteration: {cid}")
                 if dq:
                     future, offset = pop()
                 elif not count or offset >= count or offset != resp["offset"] or offset + len(resp["data"]) >= count:
@@ -223,6 +235,7 @@ async def iter_fs_files_asynchronized(
     /, 
     page_size: int = 7_000, 
     app: str = "web", 
+    raise_for_changed_count: bool = False, 
     cooldown: int | float = 1, 
     **request_kwargs, 
 ) -> AsyncIterator[dict]:
@@ -230,8 +243,9 @@ async def iter_fs_files_asynchronized(
 
     :param client: 115 网盘客户端对象
     :param payload: 目录的 id 或者详细的查询参数
-    :param page_size: 分页大小
+    :param page_size: 分页大小，如果 <= 0，则自动确定
     :param app: 使用此设备的接口
+    :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param cooldown: 冷却时间，单位为秒
     :param request_kwargs: 其它 http 请求参数，会传给具体的请求函数，默认的是 httpx，可用参数 request 进行设置
 
@@ -287,7 +301,10 @@ async def iter_fs_files_asynchronized(
                     else:
                         raise FileNotFoundError(ENOENT, cid)
                 yield resp
-                count = resp["count"]
+                if count < 0:
+                    count = int(resp["count"])
+                elif raise_for_changed_count and count != int(resp["count"]):
+                    raise BusyOSError(EBUSY, f"count changes during iteration: {cid}")
                 if dq:
                     task, offset = pop()
                 elif not count or offset >= count or offset != resp["offset"] or offset + len(resp["data"]) >= count:

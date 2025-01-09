@@ -3,11 +3,11 @@
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __all__ = [
-    "has_id", "iter_existing_id", "get_parent_id", "iter_parent_id", 
-    "iter_id_to_path", "id_to_path", "get_id", "get_pickcode", "get_sha1", 
-    "get_path", "get_ancestors", "get_attr", "iter_children", "iter_descendants", 
-    "iter_descendants_fast", "iter_files_with_path_url", "select_na_ids", 
-    "select_mtime_groups", "dump_to_alist", 
+    "get_dir_count", "has_id", "iter_existing_id", "get_parent_id", "iter_parent_id", 
+    "iter_id_to_parent_id", "iter_id_to_path", "id_to_path", "get_id", "get_pickcode", 
+    "get_sha1", "get_path", "get_ancestors", "get_attr", "iter_children", 
+    "iter_descendants", "iter_descendants_fast", "iter_files_with_path_url", 
+    "select_na_ids", "select_mtime_groups", "dump_to_alist", 
 ]
 
 from collections.abc import Callable, Iterable, Iterator, Sequence
@@ -34,6 +34,17 @@ FIELDS: Final = (
 EXTENDED_FIELDS: Final = (*FIELDS, "path", "posixpath")
 
 register_converter("DATETIME", lambda dt: datetime.fromisoformat(str(dt, "utf-8")))
+
+
+def get_dir_count(
+    con: Connection | Cursor, 
+    id: int, 
+    /, 
+) -> None | dict:
+    record = find(con, "SELECT dir_count, file_count, tree_dir_count, tree_file_count FROM dirlen WHERE id=?", id)
+    if record is None:
+        return None
+    return dict(zip(("dir_count", "file_count", "tree_dir_count", "tree_file_count"), record))
 
 
 def has_id(
@@ -86,6 +97,25 @@ def iter_parent_id(
 ) -> Iterator[int]:
     sql = "SELECT parent_id FROM data WHERE id IN (%s)" % (",".join(map("%d".__mod__, ids)) or "NULL")
     return (id for id, in query(con, sql))
+
+
+def iter_id_to_parent_id(
+    con: Connection | Cursor, 
+    ids: Iterable[int], 
+    /, 
+    recursive: bool = False, 
+):
+    s_ids = "(%s)" % (",".join(map(str, ids)) or "NULL")
+    if recursive:
+        sql = """\
+WITH pairs AS (
+    SELECT id, parent_id FROM data WHERE id IN %s
+    UNION ALL
+    SELECT data.id, data.parent_id FROM pairs JOIN data ON (pairs.parent_id = data.id)
+) SELECT * FROM pairs""" % s_ids
+    else:
+        "SELECT id, parent_id FROM data WHERE id IN %s" % s_ids
+    return query(con, sql)
 
 
 def iter_id_to_path(

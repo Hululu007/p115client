@@ -2008,7 +2008,7 @@ END;
             if share_code := attr.get("share_code"):
                 return run_coroutine_threadsafe(get_share_url(share_code, attr["id"], url_detail=False), loop).result()
             else:
-                return run_coroutine_threadsafe(get_url(attr["pickcode"], user_agent=self.environ["HTTP_USER_AGENT"], url_detail=False), loop).result()
+                return run_coroutine_threadsafe(get_url(attr["pickcode"], user_agent=self.environ.get("HTTP_USER_AGENT", ""), url_detail=False), loop).result()
 
         def get_content(self, /):
             if self.is_strm:
