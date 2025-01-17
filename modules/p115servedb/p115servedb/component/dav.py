@@ -25,7 +25,6 @@ from blacksheep import redirect, text, Application, Router
 from blacksheep.contents import Content, StreamedContent
 from blacksheep.messages import Request, Response
 from blacksheep.server import asgi
-from blacksheep.server.compression import use_gzip_compression
 from blacksheep.server.remotes.forwarding import ForwardedHeadersMiddleware
 from blacksheep.server.rendering.jinja2 import JinjaRenderer
 from blacksheep.server.responses import view_async
@@ -161,7 +160,6 @@ def make_application(
             cookies_path = ""
 
     app = Application(router=Router(), show_error_details=debug)
-    use_gzip_compression(app)
     app.serve_files(
         Path(__file__).parent.with_name("static"), 
         root_path="/%3Cstatic", 

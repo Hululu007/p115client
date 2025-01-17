@@ -364,13 +364,13 @@ def make_application(
             return r[1]
         if app == "chrome":
             resp = await client.post(
-                "http://pro.api.115.com/app/chrome/downurl", 
+                "https://proapi.115.com/app/chrome/downurl", 
                 content=FormContent([("data", encrypt(f'{{"pickcode":"{pickcode}"}}').decode("utf-8"))]), 
                 headers={"User-Agent": user_agent, "Cookie": cookies}, 
             )
         else:
             resp = await client.post(
-                f"http://pro.api.115.com/{app or 'android'}/2.0/ufile/download", 
+                f"https://proapi.115.com/{app or 'android'}/2.0/ufile/download", 
                 content=FormContent([("data", encrypt(f'{{"pick_code":"{pickcode}"}}').decode("utf-8"))]), 
                 headers={"User-Agent": user_agent, "Cookie": cookies}, 
             )
@@ -412,12 +412,12 @@ def make_application(
         payload = {"share_code": share_code, "receive_code": receive_code, "file_id": file_id}
         if app:
             resp = await client.get(
-                f"http://pro.api.115.com/{app}/2.0/share/downurl?{urlencode(payload)}", 
+                f"https://proapi.115.com/{app}/2.0/share/downurl?{urlencode(payload)}", 
                 headers={"Cookie": cookies}, 
             )
         else:
             resp = await client.post(
-                "http://pro.api.115.com/app/share/downurl", 
+                "https://proapi.115.com/app/share/downurl", 
                 content=FormContent([("data", encrypt(dumps(payload)).decode("utf-8"))]), 
                 headers={"Cookie": cookies}, 
             )

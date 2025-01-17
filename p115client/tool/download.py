@@ -306,6 +306,7 @@ def iter_files_with_url(
     cur: Literal[0, 1] = 0, 
     with_ancestors: bool = False, 
     with_path: bool = False, 
+    use_star: None | bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
@@ -326,6 +327,7 @@ def iter_files_with_url(
     cur: Literal[0, 1] = 0, 
     with_ancestors: bool = False, 
     with_path: bool = False, 
+    use_star: None | bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
@@ -345,6 +347,7 @@ def iter_files_with_url(
     cur: Literal[0, 1] = 0, 
     with_ancestors: bool = False, 
     with_path: bool = False, 
+    use_star: None | bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
@@ -374,6 +377,7 @@ def iter_files_with_url(
     :param cur: 仅当前目录。0: 否（将遍历子目录树上所有叶子节点），1: 是
     :param with_ancestors: 文件信息中是否要包含 "ancestors"
     :param with_path: 文件信息中是否要包含 "path"
+    :param use_star: 获取目录信息时，是否允许使用星标 （如果为 None，则采用流处理，否则采用批处理）
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
@@ -391,6 +395,7 @@ def iter_files_with_url(
         cur=cur, 
         with_ancestors=with_ancestors, 
         with_path=with_path, 
+        use_star=use_star, 
         escape=escape, 
         normalize_attr=normalize_attr, 
         id_to_dirnode=id_to_dirnode, 
@@ -446,6 +451,7 @@ def iter_images_with_url(
     cur: Literal[0, 1] = 0, 
     with_ancestors: bool = False, 
     with_path: bool = False, 
+    use_star: None | bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
@@ -464,6 +470,7 @@ def iter_images_with_url(
     cur: Literal[0, 1] = 0, 
     with_ancestors: bool = False, 
     with_path: bool = False, 
+    use_star: None | bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
@@ -481,6 +488,7 @@ def iter_images_with_url(
     cur: Literal[0, 1] = 0, 
     with_ancestors: bool = False, 
     with_path: bool = False, 
+    use_star: None | bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
@@ -501,6 +509,7 @@ def iter_images_with_url(
     :param cur: 仅当前目录。0: 否（将遍历子目录树上所有叶子节点），1: 是
     :param with_ancestors: 文件信息中是否要包含 "ancestors"
     :param with_path: 文件信息中是否要包含 "path"
+    :param use_star: 获取目录信息时，是否允许使用星标 （如果为 None，则采用流处理，否则采用批处理）
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
@@ -517,6 +526,7 @@ def iter_images_with_url(
         cur=cur, 
         with_ancestors=with_ancestors, 
         with_path=with_path, 
+        use_star=use_star, 
         escape=escape, 
         normalize_attr=normalize_attr, 
         id_to_dirnode=id_to_dirnode, 
@@ -573,6 +583,7 @@ def iter_subtitles_with_url(
     cur: Literal[0, 1] = 0, 
     with_ancestors: bool = False, 
     with_path: bool = False, 
+    use_star: None | bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
@@ -591,6 +602,7 @@ def iter_subtitles_with_url(
     cur: Literal[0, 1] = 0, 
     with_ancestors: bool = False, 
     with_path: bool = False, 
+    use_star: None | bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
@@ -608,6 +620,7 @@ def iter_subtitles_with_url(
     cur: Literal[0, 1] = 0, 
     with_ancestors: bool = False, 
     with_path: bool = False, 
+    use_star: None | bool = False, 
     escape: None | Callable[[str], str] = escape, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
@@ -633,6 +646,7 @@ def iter_subtitles_with_url(
     :param cur: 仅当前目录。0: 否（将遍历子目录树上所有叶子节点），1: 是
     :param with_ancestors: 文件信息中是否要包含 "ancestors"
     :param with_path: 文件信息中是否要包含 "path"
+    :param use_star: 获取目录信息时，是否允许使用星标 （如果为 None，则采用流处理，否则采用批处理）
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
@@ -659,12 +673,13 @@ def iter_subtitles_with_url(
                 cur=cur, 
                 with_ancestors=with_ancestors, 
                 with_path=with_path, 
+                use_star=use_star, 
                 escape=escape, 
                 normalize_attr=normalize_attr, 
                 id_to_dirnode=id_to_dirnode, 
                 app=app, 
                 raise_for_changed_count=raise_for_changed_count, 
-                async_=async_, 
+                async_=async_, # type: ignore
                 **request_kwargs, 
             )
             for suffix in suffixes

@@ -15,11 +15,12 @@ from functools import partial
 from itertools import cycle
 from time import time
 from typing import cast, overload, Final, Literal
+from warnings import warn
 
 from iterutils import run_gen_step, run_gen_step_iter, Yield
 from p115client import check_response, P115Client
 from p115client.client import get_status_code
-from p115client.exception import BusyOSError, DataError
+from p115client.exception import BusyOSError, DataError, P115Warning
 
 
 get_proapi_origin: Final = cycle(("https://proapi.115.com", "http://pro.api.115.com")).__next__
@@ -131,8 +132,12 @@ def iter_fs_files(
             if payload["offset"] >= count:
                 break
             resp = yield run_gen_step(get_files(payload), async_=async_)
-            if raise_for_changed_count and count != int(resp["count"]):
-                raise BusyOSError(EBUSY, f"count changes during iteration: {cid}")
+            if count != (count := int(resp["count"])):
+                message = f"cid={cid} detected count changes during iteration: {count} -> {resp['count']}"
+                if raise_for_changed_count:
+                    raise BusyOSError(EBUSY, message)
+                else:
+                    warn(message, category=P115Warning)
     return run_gen_step_iter(gen_step, async_=async_)
 
 
@@ -213,8 +218,12 @@ def iter_fs_files_threaded(
                 yield resp
                 if count < 0:
                     count = int(resp["count"])
-                elif raise_for_changed_count and count != int(resp["count"]):
-                    raise BusyOSError(EBUSY, f"count changes during iteration: {cid}")
+                elif count != (count := int(resp["count"])):
+                    message = f"cid={cid} detected count changes during iteration: {count} -> {resp['count']}"
+                    if raise_for_changed_count:
+                        raise BusyOSError(EBUSY, message)
+                    else:
+                        warn(message, category=P115Warning)
                 if dq:
                     future, offset = pop()
                 elif not count or offset >= count or offset != resp["offset"] or offset + len(resp["data"]) >= count:
@@ -303,8 +312,12 @@ async def iter_fs_files_asynchronized(
                 yield resp
                 if count < 0:
                     count = int(resp["count"])
-                elif raise_for_changed_count and count != int(resp["count"]):
-                    raise BusyOSError(EBUSY, f"count changes during iteration: {cid}")
+                elif count != (count := int(resp["count"])):
+                    message = f"cid={cid} detected count changes during iteration: {count} -> {resp['count']}"
+                    if raise_for_changed_count:
+                        raise BusyOSError(EBUSY, message)
+                    else:
+                        warn(message, category=P115Warning)
                 if dq:
                     task, offset = pop()
                 elif not count or offset >= count or offset != resp["offset"] or offset + len(resp["data"]) >= count:
@@ -315,5 +328,4 @@ async def iter_fs_files_asynchronized(
                         break
                     task = make_task()
 
-# TODO: 基于以上函数，提供给 iterdir.py，实现并发拉取
 # TODO: 以上的数据获取方式某种程度上应该是通用的，只要是涉及到 offset 和 count，因此可以总结出一个更抽象的函数

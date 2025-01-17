@@ -24,7 +24,6 @@ from operator import itemgetter
 from os import fsdecode, fstat, isatty, stat, PathLike, path as ospath
 from pathlib import Path, PurePath
 from re import compile as re_compile, MULTILINE
-from string import hexdigits
 from sys import exc_info
 from _thread import start_new_thread
 from tempfile import TemporaryFile
@@ -55,6 +54,7 @@ from p115cipher.fast import rsa_encode, rsa_decode, ecdh_encode_token, ecdh_aes_
 from property import locked_cacheproperty
 from re import compile as re_compile
 from startfile import startfile, startfile_async # type: ignore
+from undefined import undefined
 from urlopen import urlopen
 from yarl import URL
 
@@ -166,7 +166,7 @@ def complete_proapi(
     if callable(base_url):
         base_url = base_url()
     if not base_url:
-        base_url = f"http://proapi.115.com"
+        base_url = "https://proapi.115.com"
     return f"{base_url}{app}{path}"
 
 
@@ -767,18 +767,74 @@ def normalize_attr(
         return normalize_attr_web(info, keep_raw=keep_raw, dict_cls=dict_cls)
 
 
+class IgnoreCaseDict[V](dict[str, V]):
+
+    def __contains__(self, key, /) -> bool:
+        if isinstance(key, str):
+            return super().__contains__(key.lower())
+        return False
+
+    def __delitem__(self, key: str, /):
+        return super().__delitem__(key.lower())
+
+    def __getitem__(self, key: str, /) -> V:
+        return super().__getitem__(key.lower())
+
+    def __setitem__(self, key: str, value: V, /):
+        super().__setitem__(key.lower(), value)
+
+    @overload # type: ignore
+    @classmethod
+    def fromkeys(cls, iterable: Iterable[str], value: None = None, /) -> IgnoreCaseDict[None | Any]:
+        ...
+    @overload
+    @classmethod
+    def fromkeys[T](cls, iterable: Iterable[str], value: T, /) -> IgnoreCaseDict[T]:
+        ...
+    @classmethod
+    def fromkeys(cls, iterable: Iterable[str], value=None, /) -> IgnoreCaseDict:
+        return cls(zip(map(str.lower, iterable), repeat(value)))
+
+    @overload
+    def get(self, key: str) -> None | V:
+        ...
+    @overload
+    def get[T](self, key: str, default: T) -> V | T:
+        ...
+    def get(self, key: str, default=None):
+        return super().get(key.lower(), default)
+
+    def pop(self, key: str, default=undefined) -> V:
+        if default is undefined:
+            return super().pop(key.lower())
+        return super().pop(key.lower(), default)
+
+    def setdefault(self, key: str, default = None, /) -> V:
+        return super().setdefault(key.lower(), default)
+
+    def update(self, /, *args, **kwargs):
+        update = super().update
+        for arg in args:
+            if not arg:
+                continue
+            if isinstance(arg, Mapping):
+                arg = items(arg)
+            update(((k.lower(), v) for k, v in arg))
+        if kwargs:
+            update(((k.lower(), v) for k, v in kwargs.items()))
+
+
 class P115Client:
     """115 的客户端对象
 
-    :param cookies: 115 的 cookies，要包含 `UID`、`CID`、`KID` 和 `SEID` 等，可选择性包含 `uid` （相当于获取新的 cookies 的 refresh token）
+    :param cookies: 115 的 cookies，要包含 `UID`、`CID`、`KID` 和 `SEID` 等
 
-        - 如果为 None，则会要求人工扫二维码登录
-        - 如果是 str，则要求是格式正确的 cookies 字符串，例如 "UID=...; CID=...; KID=...; SEID=..."，如果包含 "uid=..."（一个 sha1 哈希值的 16 进制表示），则会用来更新 `self.login_uid` 属性
+        - 如果是 None，则会要求人工扫二维码登录
+        - 如果是 str，则要求是格式正确的 cookies 字符串，例如 "UID=...; CID=...; KID=...; SEID=..."
         - 如果是 bytes 或 os.PathLike，则视为路径，当更新 cookies 时，也会往此路径写入文件，格式要求同上面的 `str`
         - 如果是 collections.abc.Mapping，则是一堆 cookie 的名称到值的映射
         - 如果是 collections.abc.Iterable，则其中每一条都视为单个 cookie
 
-    :param login_uid: 已经确认扫码过的 token 或者登录状态（即 cookies 为在线状态）的 client，可用于绑定设备以获取 cookies，这个比 cookies 中所提取的 uid 优先级更高。如果为 True 或者字符串，会在初始化代码时设置 `self.login_uid` 属性
     :param check_for_relogin: 网页请求抛出异常时，判断是否要重新登录并重试
 
         - 如果为 False，则不重试
@@ -851,7 +907,6 @@ class P115Client:
         self, 
         /, 
         cookies: None | str | bytes | PathLike | Mapping[str, str] | Iterable[Mapping | Cookie | Morsel] = None, 
-        login_uid: bool | str | Self = False, 
         check_for_relogin: bool | Callable[[BaseException], bool | int] = False, 
         ensure_cookies: bool = False, 
         app: None | str = None, 
@@ -859,7 +914,6 @@ class P115Client:
     ):
         self.init(
             cookies=cookies, 
-            login_uid=login_uid, 
             check_for_relogin=check_for_relogin, 
             ensure_cookies=ensure_cookies, 
             app=app, 
@@ -939,16 +993,9 @@ class P115Client:
             cookies = cookies.strip().rstrip(";")
             if not cookies:
                 return
-            if len(cookies) == 40 and not cookies.strip(hexdigits):
-                self.login_uid = cookies
-                return
             cookies = cookies_str_to_dict(cookies)
             if not cookies:
                 return
-            login_uid = cookies.pop("uid", "")
-            if "login_uid" not in self.__dict__:
-                if len(login_uid) == 40 and not login_uid.strip(hexdigits):
-                    self.login_uid = login_uid
         set_cookie = cookiejar.set_cookie
         clear_cookie = cookiejar.clear
         cookie: Mapping | Cookie | Morsel
@@ -998,10 +1045,10 @@ class P115Client:
         except KeyError:
             from multidict import CIMultiDict
             headers = self.__dict__["headers"] = CIMultiDict({
-                "Accept": "application/json, text/plain, */*", 
-                "Accept-Encoding": "gzip, deflate", 
-                "Connection": "keep-alive", 
-                "User-Agent": "Mozilla/5.0 AppleWebKit/600 Safari/600 Chrome/124.0.0.0", 
+                "accept": "application/json, text/plain, */*", 
+                "accept-encoding": "gzip, deflate", 
+                "connection": "keep-alive", 
+                "user-agent": "Mozilla/5.0 AppleWebKit/600 Safari/600 Chrome/124.0.0.0", 
             })
             return headers
 
@@ -1052,10 +1099,6 @@ class P115Client:
         if cookies is None:
             cookies = str(self.cookies_str)
         cookies_bytes = bytes(cookies, encoding)
-        if login_uid := self.__dict__.get("login_uid", ""):
-            if cookies_bytes:
-                cookies_bytes += b"; "
-            cookies_bytes += b"uid=" + bytes(login_uid, "latin-1")
         with cookies_path.open("wb") as f:
             f.write(cookies_bytes)
         try:
@@ -1075,7 +1118,6 @@ class P115Client:
         cls, 
         /, 
         cookies: None | str | bytes | PathLike | Mapping[str, str] | Iterable[Mapping | Cookie | Morsel] = None, 
-        login_uid: bool | str | Self = False, 
         check_for_relogin: bool | Callable[[BaseException], bool | int] = False, 
         ensure_cookies: bool = False, 
         app: None | str = None, 
@@ -1092,7 +1134,6 @@ class P115Client:
         cls, 
         /, 
         cookies: None | str | bytes | PathLike | Mapping[str, str] | Iterable[Mapping | Cookie | Morsel] = None, 
-        login_uid: bool | str | Self = False, 
         check_for_relogin: bool | Callable[[BaseException], bool | int] = False, 
         ensure_cookies: bool = False, 
         app: None | str = None, 
@@ -1108,7 +1149,6 @@ class P115Client:
         cls, 
         /, 
         cookies: None | str | bytes | PathLike | Mapping[str, str] | Iterable[Mapping | Cookie | Morsel] = None, 
-        login_uid: bool | str | Self = False, 
         check_for_relogin: bool | Callable[[BaseException], bool | int] = False, 
         ensure_cookies: bool = False, 
         app: None | str = None, 
@@ -1123,10 +1163,7 @@ class P115Client:
                 self = cls.__new__(cls)
             else:
                 self = instance
-            is_valid_uid = isinstance(login_uid, P115Client) or isinstance(login_uid, str) and len(login_uid) == 40 and not login_uid.strip(hexdigits)
             if cookies is None:
-                if is_valid_uid:
-                    self.login_uid = login_uid
                 yield self.login(
                     app, 
                     console_qrcode=console_qrcode, 
@@ -1145,8 +1182,6 @@ class P115Client:
                         self._read_cookies()
                 elif cookies:
                     setattr(self, "cookies", cookies)
-                if is_valid_uid:
-                    self.login_uid = login_uid
                 if ensure_cookies:
                     yield self.login(
                         app, 
@@ -1154,17 +1189,9 @@ class P115Client:
                         async_=async_, 
                         **request_kwargs, 
                     )
-            if login_uid is not False and "login_uid" not in self.__dict__:
-                self.login_uid = yield self.login_without_app(async_=async_, **request_kwargs)
             setattr(self, "check_for_relogin", check_for_relogin)
             return self
         return run_gen_step(gen_step, async_=async_)
-
-    @locked_cacheproperty
-    def login_uid(self, /) -> str | Self:
-        """相当于是获取 cookies 的 refresh token
-        """
-        return self.login_without_app()
 
     @locked_cacheproperty
     def request_lock(self, /) -> Lock:
@@ -1318,20 +1345,12 @@ class P115Client:
                 app = yield self.login_app(async_=async_, **request_kwargs)
             if not app:
                 app = "alipaymini"
-            if uid := self.__dict__.get("login_uid"):
-                resp = yield self.login_qrcode_scan_result(
-                    uid, 
-                    app, 
-                    async_=async_, 
-                    **request_kwargs, 
-                )
-            else:
-                resp = yield self.login_with_qrcode(
-                    app, 
-                    console_qrcode=console_qrcode, 
-                    async_=async_, 
-                    **request_kwargs, 
-                )
+            resp = yield self.login_with_qrcode(
+                app, 
+                console_qrcode=console_qrcode, 
+                async_=async_, 
+                **request_kwargs, 
+            )
             try:
                 check_response(resp)
             except AuthenticationError:
@@ -1469,25 +1488,13 @@ class P115Client:
                 app = yield self.login_app(async_=async_, **request_kwargs)
             if not app:
                 raise ValueError("can't determine the login app")
-            uid: None | str | P115Client = self.__dict__.get("login_uid")
-            has_uid = uid is not None
-            if uid is None:
-                uid = yield self.login_without_app(async_=async_, **request_kwargs)
-                uid = cast(str, uid)
-            resp = yield self.login_qrcode_scan_result(
+            uid: str = yield self.login_without_app(async_=async_, **request_kwargs)
+            return (yield self.login_qrcode_scan_result(
                 uid, 
                 app, 
                 async_=async_, 
                 **request_kwargs, 
-            )
-            if not resp["state"] and has_uid and resp.get("errno") == 40101017:
-                login_uid = yield self.login_without_app(async_=async_, **request_kwargs)
-                instance: P115Client = self
-                while isinstance(uid, P115Client) and "login_uid" in uid.__dict__:
-                    instance, uid = uid, uid.login_uid
-                instance.login_uid = login_uid
-                return (yield self.login_with_app(app, async_=async_, **request_kwargs))
-            return resp
+            ))
         return run_gen_step(gen_step, async_=async_)
 
     @overload
@@ -1708,7 +1715,6 @@ class P115Client:
                 async_=async_, 
                 **request_kwargs, 
             )))
-            self.login_uid = uid
             return uid
         return run_gen_step(gen_step, async_=async_)
 
@@ -1752,8 +1758,6 @@ class P115Client:
             一个设备被新登录者下线，意味着这个 cookies 失效了，不能执行任何需要权限的操作
 
             但一个设备的新登录者，并不总是意味着把较早的登录者下线，一般需要触发某个检查机制后，才会把同一设备下除最近一次登录外的所有 cookies 失效
-
-            如果把二维码的 uid (refresh token) 扫码成功缓存起来，以后由它绑定同一设备获取 cookies，可以实现单设备多个同时登录
 
         :param app: 要登录的 app，如果为 None，则用当前登录设备，如果无当前登录设备，则报错
         :param replace: 替换某个 client 对象的 cookie
@@ -1841,7 +1845,7 @@ class P115Client:
                 inst = self
                 setattr(inst, "cookies", cookies)
             else:
-                inst = type(self)(cookies, login_uid=self.login_uid, check_for_relogin=check_for_relogin)
+                inst = type(self)(cookies, check_for_relogin=check_for_relogin)
             if self is not inst and ssoent == inst.login_ssoent:
                 warn(f"login with the same ssoent {ssoent!r}, {self!r} will expire within 60 seconds", category=P115Warning)
             return inst
@@ -1852,7 +1856,7 @@ class P115Client:
     def login_bind_app(
         cls, 
         /, 
-        uid: str | Self, 
+        uid: str, 
         app: str = "alipaymini", 
         check_for_relogin: bool | Callable[[BaseException], bool | int] = False, 
         *, 
@@ -1865,7 +1869,7 @@ class P115Client:
     def login_bind_app(
         cls, 
         /, 
-        uid: str | Self, 
+        uid: str, 
         app: str = "alipaymini", 
         check_for_relogin: bool | Callable[[BaseException], bool | int] = False, 
         *, 
@@ -1877,7 +1881,7 @@ class P115Client:
     def login_bind_app(
         cls, 
         /, 
-        uid: str | Self, 
+        uid: str, 
         app: str = "alipaymini", 
         check_for_relogin: bool | Callable[[BaseException], bool | int] = False, 
         *, 
@@ -1889,11 +1893,9 @@ class P115Client:
         .. hint::
             同一个设备可以有多个 cookies 同时在线
 
-            你把二维码的 uid (refresh token) 扫码成功后缓存起来，以后由它绑定同一设备获取 cookies，就可以实现单设备多个同时登录
-
             其实只要你不主动去执行检查，这些 cookies 可以同时生效，只是看起来像“黑户”
 
-        :param uid: 登录二维码的 uid （refresh token）或者另一个已登录的 `P115Client` 对象
+        :param uid: 登录二维码的 uid
         :param app: 待绑定的设备名称
         :param check_for_relogin: 网页请求抛出异常时，判断是否要重新登录并重试
 
@@ -1965,7 +1967,7 @@ class P115Client:
         def gen_step():
             resp = yield cls.login_qrcode_scan_result(uid, app, async_=async_, **request_kwargs)
             cookies = check_response(resp)["data"]["cookie"]
-            return cls(cookies, login_uid=uid, check_for_relogin=check_for_relogin)
+            return cls(cookies, check_for_relogin=check_for_relogin)
         return run_gen_step(gen_step, async_=async_)
 
     @overload
@@ -2008,6 +2010,7 @@ class P115Client:
         url: str, 
         method: str = "GET", 
         params = None, 
+        data = None, 
         *, 
         ecdh_encrypt: bool = False, 
         get_cookies: None | Callable[..., None | str] = None, 
@@ -2094,30 +2097,33 @@ class P115Client:
                 if not url.startswith("/"):
                     url = "/" + url
                 if url.startswith(("/app/", "/android/", "/115android/", "/ios/", "/115ios/", "/115ipad/", "/wechatmini/", "/alipaymini/")):
-                    url = "http://pro.api.115.com" + url
+                    url = "http://proapi.115.com" + url
                 else:
-                    url = "http://web.api.115.com" + url
+                    url = "http://webapi.115.com" + url
         if params:
             url = make_url(url, params)
-        headers = request_kwargs.get("headers")
-        need_set_cookies = not (request is None and (urlsplit(url).hostname or "").endswith("115.com"))
         if request is None:
             request_kwargs["session"] = self.async_session if async_ else self.session
             request_kwargs["async_"] = async_
-            headers = dict(headers) if headers else {}
+            headers: IgnoreCaseDict[str] = IgnoreCaseDict()
             request = get_default_request()
         else:
-            headers = {**self.headers, **(headers or {})}
-        if need_set_cookies and all(c.lower() != "cookie" for c in headers):
-            headers["Cookie"] = self.cookies_str
+            headers = IgnoreCaseDict(self.headers)
+        headers.update(request_kwargs.get("headers") or {})
+        need_set_cookies = get_cookies is not None or "cookie" not in headers
         if m := CRE_API_match(url):
-            headers["Host"] = m.expand(r"\1.api.115.com")
+            headers["host"] = m.expand(r"\1.api.115.com")
         request_kwargs["headers"] = headers
         if ecdh_encrypt:
             url = make_url(url, _default_k_ec)
-            if "data" in request_kwargs:
-                request_kwargs["data"] = ecdh_aes_encode(urlencode(request_kwargs["data"]).encode("latin-1") + b"&")
-            headers["Content-Type"] = "application/x-www-form-urlencoded"
+            if data:
+                request_kwargs["data"] = ecdh_aes_encode(urlencode(data).encode("latin-1") + b"&")
+            headers["content-type"] = "application/x-www-form-urlencoded"
+        elif isinstance(data, (list, dict)):
+            request_kwargs["data"] = urlencode(data).encode("latin-1")
+            headers["content-type"] = "application/x-www-form-urlencoded"
+        elif data is not None:
+            request_kwargs["data"] = data
         request_kwargs.setdefault("parse", default_parse)
         def gen_step():
             check_for_relogin = self.check_for_relogin
@@ -2126,14 +2132,12 @@ class P115Client:
                 get_cookies_need_arg = argcount(get_cookies) >= 1
             cookies_new: None | str
             cookies_: None | str = None
-            req = partial(request, url=url, method=method, **request_kwargs)
             for i in count(0):
                 exc = None
                 try:
                     if get_cookies is None:
-                        cookies_old = self.cookies_str
                         if need_set_cookies:
-                            headers["Cookie"] = cookies_old
+                            cookies_old = headers["cookie"] = self.cookies_str
                     else:
                         if get_cookies_need_arg:
                             cookies_ = yield get_cookies(async_)
@@ -2141,11 +2145,11 @@ class P115Client:
                             cookies_ = yield get_cookies()
                         if not cookies_:
                             raise ValueError("can't get new cookies")
-                        headers["Cookie"] = cookies_
-                    return (yield req)
+                        headers["cookie"] = cookies_
+                    return (yield partial(request, url=url, method=method, **request_kwargs))
                 except BaseException as e:
                     exc = e
-                    if cant_relogin:
+                    if cant_relogin or not need_set_cookies:
                         raise
                     if isinstance(e, (AuthenticationError, LoginError)):
                         if get_cookies is not None or cookies_old != self.cookies_str or cookies_old != self._read_cookies():
@@ -2155,13 +2159,6 @@ class P115Client:
                     if not res if isinstance(res, bool) else res != 405:
                         raise
                     if get_cookies is not None:
-                        continue
-                    if (not i and 
-                        "login_uid" in self.__dict__ and 
-                        not all(map(self.cookies.__contains__, ("UID", "CID", "SEID")))
-                    ):
-                        app = yield self.login_app(async_=async_)
-                        yield self.login_another_app(app or "alipaymini", replace=True, async_=async_)
                         continue
                     cookies = self.cookies_str
                     if not cookies_equal(cookies, cookies_old):
@@ -2177,7 +2174,9 @@ class P115Client:
                         cookies_new = self.cookies_str
                         cookies_mtime_new = getattr(self, "cookies_mtime", 0)
                         if cookies_equal(cookies, cookies_new):
-                            warn("relogin to refresh cookies", category=P115Warning)
+                            m = CRE_COOKIES_UID_search(cookies)
+                            uid = "" if m is None else m[0]
+                            warn(f"relogin to refresh cookies: UID={uid!r} app={self.login_app()!r}", category=P115Warning)
                             need_read_cookies = cookies_mtime_new > cookies_mtime
                             if need_read_cookies:
                                 cookies_new = self._read_cookies()
@@ -3295,18 +3294,7 @@ class P115Client:
             - paths: str = "文件"
         """
         api = complete_webapi("/files/add_extract_file", base_url=base_url)
-        if (headers := request_kwargs.get("headers")):
-            headers = request_kwargs["headers"] = dict(headers)
-        else:
-            headers = request_kwargs["headers"] = {}
-        headers["Content-Type"] = "application/x-www-form-urlencoded"
-        return self.request(
-            api, 
-            "POST", 
-            data=urlencode(payload).encode("latin-1"), 
-            async_=async_, 
-            **request_kwargs, 
-        )
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
     def extract_download_url(
@@ -3851,18 +3839,51 @@ class P115Client:
             - show_play_long[{fid}]: 0 | 1 = 1 💡 设置或取消显示时长
         """
         api = complete_webapi("/files/batch_edit", base_url=base_url)
-        if (headers := request_kwargs.get("headers")):
-            headers = request_kwargs["headers"] = dict(headers)
-        else:
-            headers = request_kwargs["headers"] = {}
-        headers["Content-Type"] = "application/x-www-form-urlencoded"
-        return self.request(
-            api, 
-            "POST", 
-            data=urlencode(payload).encode("latin-1"), 
-            async_=async_, 
-            **request_kwargs, 
-        )
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_batch_edit_app(
+        self, 
+        payload: list | dict, 
+        /, 
+        app: str = "android", 
+        base_url: str | Callable[[], str] = "", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_batch_edit_app(
+        self, 
+        payload: list | dict, 
+        /, 
+        app: str = "android", 
+        base_url: str | Callable[[], str] = "", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_batch_edit_app(
+        self, 
+        payload: list | dict, 
+        /, 
+        app: str = "android", 
+        base_url: str | Callable[[], str] = "", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """批量设置文件或目录（显示时长等）
+
+        POST https://proapi.115.com/android/files/batch_edit
+
+        :payload:
+            - show_play_long[{fid}]: 0 | 1 = 1 💡 设置或取消显示时长
+        """
+        api = complete_proapi("/files/batch_edit", base_url, app)
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
     def fs_category_get(
@@ -4096,7 +4117,9 @@ class P115Client:
 
         :payload:
             - fid: int | str 💡 文件或目录 id，只接受单个 id
-            - fid[0]: int | str 💡 文件或目录 id，多个 id 用 fid[{no}] 进行排序
+            - fid[]: int | str
+            - ...
+            - fid[0]: int | str
             - fid[1]: int | str
             - ...
             - pid: int | str = 0 💡 目标目录 id
@@ -4241,7 +4264,9 @@ class P115Client:
 
         :payload:
             - fid: int | str 💡 文件或目录的 id，多个用逗号 "," 隔开
-            - fid[0]: int | str 💡 文件或目录 id，多个 id 用 fid[{no}] 进行排序
+            - fid[]: int | str
+            - ...
+            - fid[0]: int | str
             - fid[1]: int | str
             - ...
         """
@@ -4257,7 +4282,7 @@ class P115Client:
     @overload
     def fs_delete_app(
         self, 
-        payload: dict, 
+        payload: int | str | dict, 
         /, 
         app: str = "android", 
         base_url: str | Callable[[], str] = "", 
@@ -4269,7 +4294,7 @@ class P115Client:
     @overload
     def fs_delete_app(
         self, 
-        payload: dict, 
+        payload: int | str | dict, 
         /, 
         app: str = "android", 
         base_url: str | Callable[[], str] = "", 
@@ -4280,7 +4305,7 @@ class P115Client:
         ...
     def fs_delete_app(
         self, 
-        payload: dict, 
+        payload: int | str | dict, 
         /, 
         app: str = "android", 
         base_url: str | Callable[[], str] = "", 
@@ -4292,11 +4317,19 @@ class P115Client:
 
         POST https://proapi.115.com/android/rb/delete
 
-        .. todo::
-            待破解
+        :payload:
+            - file_ids: int | str 💡 文件或目录的 id，多个用逗号 "," 隔开
+            - file_ids[]: int | str
+            - ...
+            - file_ids[0]: int | str
+            - file_ids[1]: int | str
+            - ...
+            - user_id: int | str = <default> 💡 不用管
         """
         api = complete_proapi("/rb/delete", base_url, app)
-        payload = dict(payload, user_id=self.user_id)
+        if isinstance(payload, (int, str)):
+            payload = {"file_ids": payload}
+        payload["user_id"] = self.user_id
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -4654,7 +4687,6 @@ class P115Client:
         :payload:
             - fid: int | str
             - fid[]: int | str
-            - fid[]: int | str
             - ...
             - file_desc: str = <default> 💡 可以用 html
             - file_label: int | str = <default> 💡 标签 id，多个用逗号 "," 隔开
@@ -4662,18 +4694,65 @@ class P115Client:
             - show_play_long: 0 | 1 = <default> 💡 文件名称显示时长
         """
         api = complete_webapi("/files/edit", base_url=base_url)
-        if (headers := request_kwargs.get("headers")):
-            headers = request_kwargs["headers"] = dict(headers)
-        else:
-            headers = request_kwargs["headers"] = {}
-        headers["Content-Type"] = "application/x-www-form-urlencoded"
-        return self.request(
-            api, 
-            "POST", 
-            data=urlencode(payload).encode("latin-1"), 
-            async_=async_, 
-            **request_kwargs, 
-        )
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_edit_app(
+        self, 
+        payload: int | str | tuple[int | str] | list | dict, 
+        /, 
+        app: str = "android", 
+        base_url: str | Callable[[], str] = "", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_edit_app(
+        self, 
+        payload: int | str | tuple[int | str] | list | dict, 
+        /, 
+        app: str = "android", 
+        base_url: str | Callable[[], str] = "", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_edit_app(
+        self, 
+        payload: int | str | tuple[int | str] | list | dict, 
+        /, 
+        app: str = "android", 
+        base_url: str | Callable[[], str] = "", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """设置文件或目录（备注、标签等）
+
+        POST https://proapi.115.com/android/files/update
+
+        :payload:
+            - file_id: int | str
+            - file_id[]: int | str
+            ...
+            - file_id[0]: int | str
+            - file_id[1]: int | str
+            - ...
+            - file_desc: str = <default> 💡 可以用 html
+            - file_label: int | str = <default> 💡 标签 id，多个用逗号 "," 隔开
+            - fid_cover: int | str = <default> 💡 封面图片的文件 id，多个用逗号 "," 隔开，如果要删除，值设为 0 即可
+            - show_play_long: 0 | 1 = <default> 💡 文件名称显示时长
+            - (其它各种参数)
+        """
+        api = complete_proapi("/files/update", base_url, app)
+        if isinstance(payload, (int, str)):
+            payload = {"file_id": payload}
+        elif isinstance(payload, tuple):
+            payload = {f"file_id[i]": p for i, p in enumerate(payload)}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
     def _fs_edit_set(
@@ -6501,18 +6580,7 @@ class P115Client:
         payload = [("name[]", label) for label in lables if label]
         if not payload:
             return {"state": False, "message": "no op"}
-        if (headers := request_kwargs.get("headers")):
-            headers = request_kwargs["headers"] = dict(headers)
-        else:
-            headers = request_kwargs["headers"] = {}
-        headers["Content-Type"] = "application/x-www-form-urlencoded"
-        return self.request(
-            api, 
-            "POST", 
-            data=urlencode(payload).encode("latin-1"), 
-            async_=async_, 
-            **request_kwargs, 
-        )
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
     def fs_label_del(
@@ -6898,6 +6966,9 @@ class P115Client:
             1. 目录层级最多 25 级（不算文件节点的话）
             2. 名字不能包含 3 个字符之一 "<>，如果包含，则会被替换为 _
 
+        .. attention::
+            这个方法并不产生 115 生活的操作事件
+
         :payload:
             - path: str
             - parent_id: int | str = 0
@@ -7050,7 +7121,9 @@ class P115Client:
 
         :payload:
             - fid: int | str 💡 文件或目录 id，只接受单个 id
-            - fid[0]: int | str 💡 文件或目录 id，多个 id 用 fid[{no}] 进行排序
+            - fid[]: int | str
+            - ...
+            - fid[0]: int | str
             - fid[1]: int | str
             - ...
             - pid: int | str = 0 💡 目标目录 id
@@ -7107,7 +7180,10 @@ class P115Client:
         POST https://proapi.115.com/android/files/move
 
         .. todo::
-            待破解
+            待破解（还不知道上级 id 是什么字段）
+
+            - ids: int | str 💡 文件或目录 id，多个用逗号 "," 隔开
+            - user_id: int | str = <default> 💡 不用管
         """
         api = complete_proapi("/files/move", base_url, app)
         payload = dict(payload, user_id=self.user_id)
@@ -8105,6 +8181,62 @@ class P115Client:
             payload = {"file_id": ",".join(map(str, payload)), "star": int(star)}
         else:
             payload = {"star": int(star), **payload}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_star_set_app(
+        self, 
+        payload: int | str | Iterable[int | str] | dict, 
+        /, 
+        star: bool = True, 
+        app: str = "android", 
+        base_url: str | Callable[[], str] = "", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_star_set_app(
+        self, 
+        payload: int | str | Iterable[int | str] | dict, 
+        /, 
+        star: bool = True, 
+        app: str = "android", 
+        base_url: str | Callable[[], str] = "", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_star_set_app(
+        self, 
+        payload: int | str | Iterable[int | str] | dict, 
+        /, 
+        star: bool = True, 
+        app: str = "android", 
+        base_url: str | Callable[[], str] = "", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """为文件或目录设置或取消星标
+
+        POST https://proapi.115.com/android/files/star
+
+        :payload:
+            - ids: int | str 💡 文件或目录 id，多个用逗号 "," 隔开
+            - star: 0 | 1 = 1
+            - user_id: int | str = <default> 💡 不用管
+        """
+        api = complete_proapi("/files/star", base_url, app)
+        if isinstance(payload, (int, str)):
+            payload = {"ids": payload, "star": int(star)}
+        elif not isinstance(payload, dict):
+            payload = {"ids": ",".join(map(str, payload)), "star": int(star)}
+        else:
+            payload = {"star": int(star), **payload}
+        payload["user_id"] = self.user_id
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -9375,7 +9507,7 @@ class P115Client:
     @overload
     @staticmethod
     def login_qrcode_scan_result(
-        uid: str | P115Client, 
+        uid: str, 
         app: str = "alipaymini", 
         request: None | Callable = None, 
         *, 
@@ -9386,7 +9518,7 @@ class P115Client:
     @overload
     @staticmethod
     def login_qrcode_scan_result(
-        uid: str | P115Client, 
+        uid: str, 
         app: str = "alipaymini", 
         request: None | Callable = None, 
         *, 
@@ -9396,7 +9528,7 @@ class P115Client:
         ...
     @staticmethod
     def login_qrcode_scan_result(
-        uid: str | P115Client, 
+        uid: str, 
         app: str = "alipaymini", 
         request: None | Callable = None, 
         *, 
@@ -9418,8 +9550,6 @@ class P115Client:
         if app == "desktop":
             app = "web"
         api = f"http://passportapi.115.com/app/1.0/{app}/1.0/login/qrcode/"
-        while isinstance(uid, P115Client):
-            uid = uid.login_uid
         payload = {"account": uid}
         request_kwargs.setdefault("parse", default_parse)
         if request is None:
@@ -10094,6 +10224,11 @@ class P115Client:
         """添加一个种子作为离线任务
 
         POST https://lixian.115.com/lixianssp/?ac=add_task_bt
+
+        .. note::
+            `client.offline_add_torrent(info_hash)` 相当于 `client.offline_add_url(f"magnet:?xt=urn:btih:{info_hash}")`
+
+            但此接口的优势是允许选择要下载的文件
 
         :payload:
             - info_hash: str 💡 种子文件的 info_hash

@@ -27,7 +27,8 @@ from p115client.const import CLASS_TO_TYPE, SUFFIX_TO_TYPE
 from p115client.exception import BusyOSError, DataError, P115Warning
 from p115client.tool.fs_files import iter_fs_files, iter_fs_files_threaded
 from p115client.tool.iterdir import (
-    get_id_to_path, iter_stared_dirs, iter_selected_nodes, iter_selected_nodes_using_star_event
+    get_id_to_path, iter_stared_dirs, iter_selected_nodes, iter_selected_nodes_using_star_event, 
+    iter_selected_nodes_by_category_get, 
 )
 from p115client.tool.life import iter_life_behavior, iter_life_behavior_once, IGNORE_BEHAVIOR_TYPES
 from sqlitetools import execute, find, query, transact, upsert_items, AutoCloseConnection
@@ -154,14 +155,6 @@ CREATE TRIGGER trg_data_insert
 AFTER INSERT ON data
 FOR EACH ROW
 BEGIN
-    SELECT NULL;
-END;
-
-DROP TRIGGER IF EXISTS trg_data_insert;
-CREATE TRIGGER trg_data_insert
-AFTER UPDATE ON data 
-FOR EACH ROW
-BEGIN
     INSERT OR REPLACE INTO dirlen(id) SELECT NEW.id WHERE NEW.is_dir;
     UPDATE dirlen SET 
         dir_count = dir_count + NEW.is_dir, 
@@ -174,8 +167,8 @@ END;
 DROP TRIGGER IF EXISTS trg_data_update;
 CREATE TRIGGER trg_data_update
 AFTER UPDATE ON data 
-WHEN NOT NEW._triggered
 FOR EACH ROW
+WHEN NOT NEW._triggered
 BEGIN
     UPDATE data SET updated_at = strftime('%Y-%m-%dT%H:%M:%f+08:00', 'now', '+8 hours'), _triggered=1 WHERE id = NEW.id;
     UPDATE dirlen SET
@@ -396,12 +389,6 @@ def sort(
     return data
 
 
-# TODO: 可以再进行优化，对于文件节点，可以用 fs_category_get 来获取目录树，由此或许可以减少大量的查询（文件用 fs_category_get，目录用 fs_file）
-# 如果有一堆节点，要找出它们的所有祖先节点：
-# 1. 首先挑出所有文件节点，pid相同的，只取一个
-# 2. 用 fs_category_get 批量获取祖先节点列表
-# 3. 对剩下的目录节点，如果这些节点在 seen 集合中，则忽略，只处理不在里面的，循环处理之
-# 4. 最后加以整合即可
 def load_ancestors(
     con: Connection | Cursor, 
     /, 
@@ -427,11 +414,12 @@ def load_ancestors(
         seen.update(a["id"] for a in data if a["is_dir"])
     ancestors: list[dict] = []
     if dont_star:
-        call = partial(iter_selected_nodes, normalize_attr=normalize_attr)
+        call = partial(iter_selected_nodes, id_to_dirnode=..., normalize_attr=normalize_attr)
     else:
         call = partial(
             iter_selected_nodes_using_star_event, 
             app="android", 
+            id_to_dirnode=..., 
             normalize_attr = lambda event: {
                 "id": int(event["file_id"]), 
                 "parent_id": int(event["parent_id"]), 
@@ -448,6 +436,39 @@ def load_ancestors(
         ancestors.extend(data)
     if ancestors:
         sort(ancestors)
+    return ancestors
+
+
+# TODO: 可以把批量拉取文件节点和这个函数结合起来使用，如果 parent_id 在 id_to_dirnode 则忽略，作为 iter_files 的新实现
+def load_ancestors2(
+    con: Connection | Cursor, 
+    /, 
+    client: P115Client, 
+    data: list[dict], 
+    all_are_files: bool = False, 
+    refresh: bool = False, 
+    dont_star: bool = False, 
+) -> list[dict]:
+    """加载祖先节点列表
+
+    :param con: 数据库连接或游标
+    :param client: 115 网盘客户端对象
+    :param data: 文件信息列表
+    :param all_are_files: 说明所有的列表元素都是文件节点，如此可减少一次判断
+    :param refresh: 是否强制刷新，如果为 False，则数据库中已经存在的节点不会被拉取
+
+    :return: 返回所传入的文件信息列表所对应的祖先节点列表
+    """
+    id_to_dirnode: dict = {}
+    for _ in iter_selected_nodes_by_category_get(
+        client, 
+        {a["parent_id"]: a["id"] for a in data}.values(), 
+        id_to_dirnode=id_to_dirnode, 
+        normalize_attr=normalize_attr, 
+    ):
+        pass
+    ancestors = [{"id": fid, "name": name, "parent_id": pid, "is_dir": 1} for fid, (name, pid) in id_to_dirnode.items()]
+    sort(ancestors)
     return ancestors
 
 
@@ -925,7 +946,7 @@ def updatedb_tree(
             to_remove.extend(pairs)
     upserted = len(to_upsert)
     if to_upsert:
-        ancestors = load_ancestors(
+        ancestors = load_ancestors2(
             con, 
             client, 
             to_upsert, 
@@ -1100,5 +1121,5 @@ def updatedb(
         if need_calc_size:
             executor.shutdown(wait=False, cancel_futures=True)
 
-# TODO: 允许全量拉取使用 cookies 池，仅当文件总数小于等于 6900 时，因此 diff_dir 需要接受一个参数，即预估文件总数
+# TODO: 允许全量拉取使用 cookies 池，仅当文件总数小于等于 6900 时，因此 diff_dir 需要接受一个参数，即预估文件总数（启发值）
 # TODO: 为 115 生活单独做一个命令行命令

@@ -114,7 +114,7 @@ WITH pairs AS (
     SELECT data.id, data.parent_id FROM pairs JOIN data ON (pairs.parent_id = data.id)
 ) SELECT * FROM pairs""" % s_ids
     else:
-        "SELECT id, parent_id FROM data WHERE id IN %s" % s_ids
+        sql = "SELECT id, parent_id FROM data WHERE id IN %s" % s_ids
     return query(con, sql)
 
 

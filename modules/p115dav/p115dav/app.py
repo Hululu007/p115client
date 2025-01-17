@@ -18,6 +18,7 @@ from datetime import datetime
 from errno import ENOENT, EBUSY
 from http import HTTPStatus
 from io import BytesIO
+from itertools import dropwhile
 from math import isinf, isnan
 from pathlib import Path
 from posixpath import split as splitpath, splitext
@@ -32,6 +33,7 @@ from time import time
 from _thread import start_new_thread
 from typing import cast, Any
 from urllib.parse import parse_qsl, quote, unquote, urlsplit, urlunsplit
+from warnings import warn
 from weakref import WeakValueDictionary
 
 
@@ -126,7 +128,6 @@ def _init():
     from blacksheep import redirect, text, Application, Router
     from blacksheep.contents import Content, StreamedContent
     from blacksheep.messages import Request, Response
-    from blacksheep.server.compression import use_gzip_compression
     from blacksheep.server.remotes.forwarding import ForwardedHeadersMiddleware
     from blacksheep.server.responses import view_async
 
@@ -198,13 +199,13 @@ def make_application(
     debug: bool = False, 
     wsgidav_config: dict = {}, 
     only_webdav: bool = False, 
+    allow_incomplete: bool = False, 
 ) -> Application:
     from a2wsgi import WSGIMiddleware
     from asynctools import to_list
     from blacksheep import redirect, text, Application, Router
     from blacksheep.contents import Content, StreamedContent
     from blacksheep.messages import Request, Response
-    from blacksheep.server.compression import use_gzip_compression
     from blacksheep.server.remotes.forwarding import ForwardedHeadersMiddleware
     from blacksheep.server.responses import view_async
     from cachedict import LRUDict, TTLDict, TLRUDict
@@ -216,7 +217,7 @@ def make_application(
     from httpagentparser import detect as detect_ua # type: ignore
     from orjson import dumps, OPT_INDENT_2, OPT_SORT_KEYS
     from p115client import check_response, CLASS_TO_TYPE, SUFFIX_TO_TYPE, P115Client, P115URL
-    from p115client.exception import AuthenticationError, BusyOSError
+    from p115client.exception import AuthenticationError, BusyOSError, P115Warning
     from p115client.tool import get_id_to_path, get_id_to_pickcode, get_id_to_sha1, share_iterdir, P115ID
     from p115client.tool.pool import call_wrap_with_cookies_pool, cookies_pool
     from path_predicate import MappingPath
@@ -243,7 +244,6 @@ def make_application(
         cookies_path = Path("115-cookies.txt")
 
     app = Application(router=Router(), show_error_details=debug)
-    use_gzip_compression(app)
     app.serve_files(
         Path(__file__).with_name("static"), 
         root_path="/%3Cpic", 
@@ -280,6 +280,7 @@ def make_application(
     put_task = QUEUE.put_nowait
     get_task = QUEUE.get
     fs_files: Callable
+    fs_files_aps: Callable
     get_cookies: Callable
     client: P115Client
     dummy_client: P115Client = P115Client("")
@@ -417,6 +418,11 @@ def make_application(
 
     def wrap_url(url: str, /, url_detail: None | bool = False):
         if url_detail is None:
+            if isinstance(url, P115URL):
+                return Response(302, [
+                    (b"Location", bytes(url, "utf-8")), 
+                    (b"Content-Disposition", b'attachment; filename="%s"' % bytes(quote(url["name"], safe=""), "latin-1")), 
+                ], Content(b"application/json; charset=utf-8", dumps(url.__dict__)))
             return redirect(url)
         elif url_detail:
             if isinstance(url, P115URL):
@@ -743,6 +749,68 @@ LIMIT 1;""", (share_code, id))
                     raise BusyOSError(EBUSY, f"count changes during iteration: {cid}")
         return count, ancestors, iter()
 
+    async def iterdir_limited(cid: int = 0, /) -> tuple[int, list[dict], AsyncIterator[AttrDict]]:
+        payload = {
+            "asc": 1, "cid": cid, "count_folders": 1, "cur": 1, "fc_mix": 0, "limit": 10_000, 
+            "offset": 0, "show_dir": 1, 
+        }
+        ancestors = [{"id": "0", "parent_id": "0", "name": ""}]
+        count = 0
+        folder_count = 0
+        async def request(params={}, /) -> dict:
+            nonlocal count, folder_count
+            resp = await fs_files_aps({**payload, **params}, base_url=True, async_=True)
+            check_response(resp)
+            if cid and int(resp["path"][-1]["cid"]) != cid:
+                raise FileNotFoundError(ENOENT, {"id": cid})
+            ancestors[1:] = (
+                {"id": a["cid"], "parent_id": a["pid"], "name": a["name"]} 
+                for a in resp["path"][1:]
+            )
+            if count == 0:
+                count = int(resp["count"])
+                folder_count = int(resp.get("folder_count", 0))
+            elif count != int(resp["count"]) or folder_count != int(resp.get("folder_count", 0)):
+                raise BusyOSError(EBUSY, f"count changes during iteration: {cid}")
+            return resp["data"]
+        data = await request()
+        async def iter():
+            nonlocal data
+            file_count = count - folder_count
+            n = 0
+            for n, attr in enumerate(map(normalize_attr, data), 1):
+                yield attr
+            if count > len(data):
+                if folder_count > len(data):
+                    special_dirs = frozenset(("我的接收", "自动备份", "云下载", "手机相册", "我的时光记录", "我的留恋", "云收藏"))
+                    diff = folder_count - len(data)
+                    if not cid:
+                        for info in data:
+                            if info["n"] in special_dirs:
+                                diff += 1
+                            else:
+                                break
+                    data = await request({"asc": 0, "limit": diff})
+                    for n, attr in enumerate(map(normalize_attr, dropwhile(lambda a: a["n"] in special_dirs, data)), n + 1):
+                        yield attr
+                    if n < folder_count:
+                        warn(f"lost {folder_count - n} directories: cid={cid}", category=P115Warning)
+                    n = folder_count
+                    data = await request({"show_dir": 0})
+                    for n, attr in enumerate(map(normalize_attr, data), n + 1):
+                        yield attr
+                elif folder_count:
+                    data = await request({"show_dir": 0, "limit": count - len(data), "offset": len(data) - folder_count})
+                    for n, attr in enumerate(map(normalize_attr, data), n + 1):
+                        yield attr
+                if n < count:
+                    data = await request({"show_dir": 0, "asc": 0, "limit": count - n})
+                    for n, attr in enumerate(map(normalize_attr, data), n + 1):
+                        yield attr
+                    if n < count:
+                        warn(f"lost {count - n} files: cid={cid}", category=P115Warning)
+        return count, ancestors, iter()
+
     async def update_file_list_partial(cid: int, file_list: dict):
         """更新文件列表
         """
@@ -827,7 +895,7 @@ LIMIT 1;""", (share_code, id))
                         for attr in file_list["children"] if attr["type"] == 2
                     ), default=0)
                     will_full_update = earliest_thumb_ts > 0 and earliest_thumb_ts - time() < 600
-            if not will_full_update:
+            if not will_full_update and not allow_incomplete:
                 file_list = cast(dict, file_list)
                 if isnan(ttl) or isinf(ttl) or ttl < 0:
                     return file_list
@@ -838,7 +906,10 @@ LIMIT 1;""", (share_code, id))
                 await update_file_list_partial(cid, file_list)
                 return file_list
             try:
-                count, ancestors, it = await iterdir(cid)
+                if allow_incomplete:
+                    count, ancestors, it = await iterdir_limited(cid)
+                else:
+                    count, ancestors, it = await iterdir(cid)
             except FileNotFoundError:
                 put_task(("UPDATE data SET parent_id=NULL WHERE id=?;", cid))
                 raise
@@ -1015,7 +1086,7 @@ VALUES (:share_code, :id, :parent_id, :sha1, :name, :path, :is_dir)"""
 
     @app.lifespan
     async def register_client(app: Application):
-        nonlocal client, fs_files, get_cookies
+        nonlocal client, fs_files, fs_files_aps, get_cookies
         client = P115Client(
             cookies_path, 
             app="alipaymini", 
@@ -1032,6 +1103,7 @@ VALUES (:share_code, :id, :parent_id, :sha1, :name, :path, :is_dir)"""
             get_cookies, 
             base_url_seq=("http://webapi.115.com", "https://webapi.115.com"), 
         )
+        fs_files_aps = call_wrap_with_cookies_pool(get_cookies, func=P115Client("").fs_files_aps)
         try:
             async with client.async_session:
                 app.services.register(P115Client, instance=client)
@@ -1513,7 +1585,10 @@ END;
                     ], 
                 )
             else:
-                return redirect(url)
+                return Response(302, [
+                    (b"Location", bytes(url, "utf-8")), 
+                    (b"Content-Disposition", b'attachment; filename="%s"' % bytes(quote(url["name"], safe=""), "latin-1")), 
+                ], Content(b"application/json; charset=utf-8", dumps(url.__dict__)))
         file_list = await get_list(id=id)
         ancestors = file_list["ancestors"]
         children  = file_list["children"]
@@ -1820,7 +1895,10 @@ END;
                     ], 
                 )
             else:
-                return redirect(url)
+                return Response(302, [
+                    (b"Location", bytes(url, "utf-8")), 
+                    (b"Content-Disposition", b'attachment; filename="%s"' % bytes(quote(url["name"], safe=""), "latin-1")), 
+                ], Content(b"application/json; charset=utf-8", dumps(url.__dict__)))
         file_list = await get_share_list(share_code, id=id, receive_code=receive_code)
         ancestors = file_list["ancestors"]
         children  = file_list["children"]
@@ -2005,10 +2083,11 @@ END;
         @locked_cacheproperty
         def url(self, /) -> str:
             attr = self.attr
+            name = encode_uri_component_loose(attr["name"])
             if share_code := attr.get("share_code"):
-                return run_coroutine_threadsafe(get_share_url(share_code, attr["id"], url_detail=False), loop).result()
+                return f"/<share/<url?share_code={share_code}&id={attr['id']}"
             else:
-                return run_coroutine_threadsafe(get_url(attr["pickcode"], user_agent=self.environ.get("HTTP_USER_AGENT", ""), url_detail=False), loop).result()
+                return f"/<url?pickcode={attr['pickcode']}"
 
         def get_content(self, /):
             if self.is_strm:

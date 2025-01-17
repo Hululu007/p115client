@@ -266,7 +266,7 @@ def call_wrap_with_cookies_pool(
                     revert()
                     return resp
                 except BaseException as e:
-                    if isinstance(e, P115OSError) and e.args[0]["errno"] == 40101004:
+                    if isinstance(e, P115OSError) and e.args[1].get("errno") == 40101004:
                         raise
                     elif isinstance(e, AuthenticationError) or get_status(e) == 405:
                         if async_:
