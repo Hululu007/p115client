@@ -284,7 +284,9 @@ def file_close(file, /, async_: bool = False):
             return deleter(file)
 
 
-def cookies_equal(cookies1: str, cookies2: str, /) -> bool:
+def cookies_equal(cookies1: None | str, cookies2: None | str, /) -> bool:
+    if not (cookies1 and cookies2):
+        return False
     if cookies1 == cookies2:
         return True
     cks1 = cookies_str_to_dict(cookies1)

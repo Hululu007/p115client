@@ -4,12 +4,13 @@
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __all__ = [
     "ID_TO_DIRNODE_CACHE", "P115ID", "unescape_115_charref", "type_of_attr", "get_path_to_cid", 
-    "get_ancestors_to_cid", "get_id_to_path", "get_id_to_sha1", "get_id_to_pickcode", "filter_na_ids", 
-    "iter_stared_dirs_raw", "iter_stared_dirs", "ensure_attr_path", "ensure_attr_path_by_category_get", 
-    "iterdir_raw", "iterdir", "iter_files", "iter_files_raw", "traverse_files", "iter_dupfiles", 
-    "iter_image_files", "iter_dangling_files", "share_extract_payload", "share_iterdir", "share_iter_files", 
-    "iter_selected_nodes", "iter_selected_nodes_by_category_get", "iter_selected_nodes_by_edit", 
-    "iter_selected_nodes_using_star_event", "iter_selected_dirs_using_star", 
+    "get_ancestors", "get_ancestors_to_cid", "get_id_to_path", "get_id_to_sha1", "get_id_to_pickcode", 
+    "filter_na_ids", "iter_stared_dirs_raw", "iter_stared_dirs", "ensure_attr_path", 
+    "ensure_attr_path_by_category_get", "iterdir_raw", "iterdir", "iter_files", "iter_files_raw", 
+    "traverse_files", "iter_dupfiles", "iter_image_files", "iter_dangling_files", "share_extract_payload", 
+    "share_iterdir", "share_iter_files", "iter_selected_nodes", "iter_selected_nodes_by_category_get", 
+    "iter_selected_nodes_by_edit", "iter_selected_nodes_using_star_event", "iter_selected_dirs_using_star", 
+    "iter_files_with_path", 
 ]
 __doc__ = "这个模块提供了一些和目录信息罗列有关的函数"
 
@@ -19,7 +20,8 @@ from collections.abc import AsyncIterator, Callable, Collection, Coroutine, Iter
 from dataclasses import dataclass
 from errno import EIO, ENOENT
 from functools import partial
-from itertools import chain, count, islice, takewhile
+from hashlib import md5
+from itertools import chain, count, cycle, islice, takewhile
 from operator import itemgetter
 from re import compile as re_compile
 from string import hexdigits
@@ -32,13 +34,16 @@ from weakref import WeakValueDictionary
 
 from asynctools import async_chain, async_filter, async_map, to_list
 from concurrenttools import taskgroup_map, threadpool_map
-from iterutils import async_foreach, ensure_aiter, run_gen_step, run_gen_step_iter, through, async_through, Yield, YieldFrom
+from iterutils import (
+    async_foreach, ensure_aiter, foreach, run_gen_step, run_gen_step_iter, 
+    through, async_through, Yield, YieldFrom, 
+)
 from iter_collect import grouped_mapping, grouped_mapping_async, iter_keyed_dups, iter_keyed_dups_async, SupportsLT
 from orjson import loads
 from p115client import check_response, normalize_attr, DataError, P115Client, P115OSError, P115Warning
 from p115client.const import CLASS_TO_TYPE, SUFFIX_TO_TYPE
 from p115client.type import P115DictAttrLike
-from posixpatht import escape, path_is_dir_form, splitext, splits
+from posixpatht import escape, joins, path_is_dir_form, splitext, splits
 
 from .edit import update_desc, update_star
 from .fs_files import iter_fs_files, iter_fs_files_threaded, iter_fs_files_asynchronized
@@ -48,6 +53,33 @@ from .life import iter_life_behavior_once, life_show
 CRE_SHARE_LINK_search1 = re_compile(r"(?:/s/|share\.115\.com/)(?P<share_code>[a-z0-9]+)\?password=(?:(?P<receive_code>[a-z0-9]{4}))?").search
 CRE_SHARE_LINK_search2 = re_compile(r"(?P<share_code>[a-z0-9]+)(?:-(?P<receive_code>[a-z0-9]{4}))?").search
 CRE_115_CHARREF_sub = re_compile("\\[\x02([0-9]+)\\]").sub
+WEBAPI_BASE_URLS = (
+    "http://webapi.115.com", 
+    "http://webapi.115.com", 
+    "https://webapi.115.com", 
+    "http://anxia.com/webapi", 
+    "http://v.anxia.com/webapi", 
+    "http://webapi.115.com", 
+    "http://webapi.115.com", 
+)
+PROAPI_BASE_URLS = (
+    "http://proapi.115.com", 
+    "https://proapi.115.com", 
+    "http://proapi.115.com", 
+    "https://proapi.115.com", 
+)
+APS_BASE_URLS = (
+    "http://aps.115.com", 
+    "http://anxia.com/aps", 
+    "http://v.anxia.com/aps", 
+    "http://anxia.com/aps", 
+    "http://v.anxia.com/aps", 
+    "http://anxia.com/aps", 
+    "http://v.anxia.com/aps", 
+    "http://aps.115.com", 
+)
+
+_n_get_ancestors = 0
 
 
 class DirNode(NamedTuple):
@@ -249,6 +281,127 @@ def get_path_to_cid(
 
 
 @overload
+def get_ancestors(
+    client: str | P115Client, 
+    attr: dict, 
+    *, 
+    async_: Literal[False] = False, 
+    **request_kwargs, 
+) -> list[dict]:
+    ...
+@overload
+def get_ancestors(
+    client: str | P115Client, 
+    attr: dict, 
+    *, 
+    async_: Literal[True], 
+    **request_kwargs, 
+) -> Coroutine[Any, Any, list[dict]]:
+    ...
+def get_ancestors(
+    client: str | P115Client, 
+    attr: dict, 
+    *, 
+    async_: Literal[False, True] = False, 
+    **request_kwargs, 
+) -> list[dict] | Coroutine[Any, Any, list[dict]]:
+    """获取某个节点对应的祖先节点列表（只有 id、parent_id 和 name 的信息）
+
+    :param client: 115 客户端或 cookies
+    :param attr: 待查询节点的信息（必须有 id 和 parent_id）
+    :param async_: 是否异步
+    :param request_kwargs: 其它请求参数
+
+    :return: 目录所对应的祖先信息列表，每一条的结构如下
+
+        .. code:: python
+
+            {
+                "id": int, # 目录的 id
+                "parent_id": int, # 上级目录的 id
+                "name": str, # 名字
+            }
+    """
+    def get_resp():
+        global _n_get_ancestors
+        nonlocal client
+        if not isinstance(client, P115Client):
+            client = P115Client(client, check_for_relogin=True)
+        n = _n_get_ancestors % 30
+        if n < 7:
+            _n_get_ancestors += 1
+            return client.fs_files(
+                {"cid": attr["parent_id"], "limit": 1}, 
+                base_url=WEBAPI_BASE_URLS[n], 
+                async_=async_, 
+                **request_kwargs, 
+            )
+        n -= 7
+        if n < 4:
+            _n_get_ancestors += 1
+            return client.fs_files_app(
+                {"cid": attr["parent_id"], "hide_data": 1}, 
+                base_url=PROAPI_BASE_URLS[n], 
+                async_=async_, 
+                **request_kwargs, 
+            )
+        n -= 4
+        if n < 8:
+            _n_get_ancestors += 1
+            return client.fs_files_aps(
+                {"cid": attr["parent_id"], "limit": 1}, 
+                base_url=APS_BASE_URLS[n], 
+                async_=async_, 
+                **request_kwargs, 
+            )
+        if attr.get("is_dir"):
+            _n_get_ancestors = 0
+            return get_resp()
+        n -= 8
+        if n < 7:
+            _n_get_ancestors += 1
+            return client.fs_category_get(
+                attr["id"], 
+                base_url=WEBAPI_BASE_URLS[n], 
+                async_=async_, 
+                **request_kwargs, 
+            )
+        n -= 7
+        _n_get_ancestors += 1
+        return client.fs_category_get_app(
+            attr["id"], 
+            base_url=PROAPI_BASE_URLS[n], 
+            async_=async_, 
+            **request_kwargs, 
+        )
+    def gen_step():
+        if not attr["parent_id"]:
+            return [{"id": 0, "parent_id": 0, "name": ""}]
+        resp = yield get_resp()
+        if not resp:
+            raise FileNotFoundError(attr)
+        check_response(resp)
+        if "path" in resp:
+            return [{
+                "parent_id": int(info["pid"]), 
+                "id": int(info["cid"]), 
+                "name": info["name"], 
+            } for info in resp["path"]]
+        else:
+            ancestors: list[dict] = []
+            add_ans = ancestors.append
+            pid = 0
+            for info in resp["paths"]:
+                add_ans({
+                    "parent_id": pid, 
+                    "id": (pid := int(info["file_id"])), 
+                    "name": info["file_name"], 
+                })
+            return ancestors
+    return run_gen_step(gen_step, async_=async_)
+
+
+@overload
 def get_ancestors_to_cid(
     client: str | P115Client, 
     cid: int = 0, 
@@ -282,7 +435,7 @@ def get_ancestors_to_cid(
     async_: Literal[False, True] = False, 
     **request_kwargs, 
 ) -> list[dict] | Coroutine[Any, Any, list[dict]]:
-    """获取目录对应的 ancestors（祖先信息列表）
+    """获取目录对应的祖先节点列表（只有 id、parent_id 和 name 的信息）
 
     :param client: 115 客户端或 cookies
     :param cid: 目录的 id
@@ -1990,7 +2143,7 @@ def iter_files(
             yield YieldFrom(do_filter(bool, do_map(process, it)), identity=True) # type: ignore
         else:
             yield YieldFrom(do_map(normalize_attr, it), identity=True) # type: ignore
-        if cache and (with_ancestors or with_path):
+        if (with_ancestors or with_path) and cache:
             yield YieldFrom(ensure_attr_path(
                 client, 
                 cache, 
@@ -3293,5 +3446,158 @@ def iter_selected_dirs_using_star(
                         break
         except (StopIteration, StopAsyncIteration):
             pass
+    return run_gen_step_iter(gen_step, async_=async_)
+
+
+@overload
+def iter_files_with_path(
+    client: str | P115Client, 
+    cid: int, 
+    *, 
+    async_: Literal[False] = False, 
+    **request_kwargs, 
+) -> Iterator[dict]:
+    ...
+@overload
+def iter_files_with_path(
+    client: str | P115Client, 
+    cid: int, 
+    *, 
+    async_: Literal[True], 
+    **request_kwargs, 
+) -> AsyncIterator[dict]:
+    ...
+def iter_files_with_path(
+    client: str | P115Client, 
+    cid: int, 
+    *, 
+    async_: Literal[False, True] = False, 
+    **request_kwargs, 
+) -> Iterator[dict] | AsyncIterator[dict]:
+    """遍历目录树，获取文件信息（包含 "path" 和 "posixpath"）
+
+    .. important::
+        相比较于 `iter_files`，这个函数专门针对获取路径的风控问题做了优化
+
+    :param client: 115 客户端或 cookies
+    :param cid: 目录 id
+    :param async_: 是否异步
+    :param request_kwargs: 其它请求参数
+
+    :return: 迭代器，返回此目录内的（仅文件）文件信息
+    """
+    from .export_dir import export_dir, export_dir_parse_iter, parse_export_dir_as_patht_iter
+    if not isinstance(client, P115Client):
+        client = P115Client(client, check_for_relogin=True)
+    def gen_step():
+        do_foreach = async_foreach if async_ else foreach
+        # 首先启动导出目录的后台任务
+        export_id = yield export_dir(client, cid, async_=async_, **request_kwargs)
+        # 名字 到 parent_id 的映射，如果名字不唯一，则 parent_id 设为 0
+        name_to_pid: dict[str, int] = {}
+        # 获取指定目录树下的所有文件节点信息，再根据 parent_id 分组
+        pid_to_files: defaultdict[int, list[dict]] = defaultdict(list)
+        def update_name_to_pid(attr: dict, /):
+            pid = attr["parent_id"]
+            name = attr["name"]
+            pid_to_files[pid].append(attr)
+            if pid in name_to_pid:
+                name_to_pid[name] = 0
+            else:
+                name_to_pid[name] = pid
+        yield do_foreach(
+            update_name_to_pid, 
+            iter_files(
+                client, 
+                cid, 
+                app="android", 
+                cooldown=0.5, 
+                base_url=cycle(("http://proapi.115.com", "https://proapi.115.com")).__next__, 
+                async_=async_, 
+                **request_kwargs, 
+            ), 
+        )
+        # 名字 到 目录路径 的映射，如果名字不唯一，则设为 ()
+        name_to_isuniq: dict[str, bool] = {}
+        # 从导出的目录树文件中获取完整路径，再根据父目录对名字进行分组
+        dirpatht_to_names: dict[tuple[str, ...], list[str]] = defaultdict(list)
+        def update_dirpatht_to_names(patht: list[str], /):
+            dir_patht = tuple(patht[:-1])
+            name = patht[-1]
+            dirpatht_to_names[dir_patht].append(name)
+            if name in name_to_isuniq:
+                name_to_isuniq[name] = False
+            else:
+                name_to_isuniq[name] = True
+        it = export_dir_parse_iter(
+            client, 
+            export_id=export_id, 
+            parse_iter=parse_export_dir_as_patht_iter, 
+            async_=async_, # type: ignore
+            **request_kwargs, 
+        )
+        if async_:
+            root = yield anext(it, None) # type: ignore
+        else:
+            root = next(it, None) # type: ignore
+        if root is None:
+            return
+        yield do_foreach(update_dirpatht_to_names, it)
+        # 尽量从所收集到名字中移除目录
+        for t_patht in islice(dirpatht_to_names, 1, None):
+            dirpatht_to_names[t_patht[:-1]].remove(t_patht[-1])
+        # 对名字列表进行排序然后计算摘要值
+        def hash_names(names: Iterable[str], /) -> str:
+            s = str(sorted(names)).encode("utf-8")
+            return f"{md5(s).hexdigest()}-{len(s)}"
+        # 用唯一出现过的名字，尽量确定所有 parent_id 所对应的路径
+        pid_to_dirpatht: dict[int, tuple[str, ...]] = {}
+        undetermined: dict[str, tuple[str, ...]] = {}
+        for dir_patht, names in dirpatht_to_names.items():
+            if not names:
+                continue
+            for name in names:
+                if (pid := name_to_pid.get(name)) and name_to_isuniq.get(name):
+                    pid_to_dirpatht[pid] = dir_patht
+                    break
+            else:
+                hashed = hash_names(names)
+                if hashed in undetermined:
+                    undetermined[hashed] = ()
+                else:
+                    undetermined[hashed] = dir_patht
+        del name_to_pid, name_to_isuniq, dirpatht_to_names
+        # 假设文件名列表相同，就关联 parent_id 到它的路径（注意：这有可能出错，例如有空目录和某个文件同名时）
+        if len(pid_to_files) > len(pid_to_dirpatht):
+            for pid, files in pid_to_files.items():
+                if pid in pid_to_dirpatht:
+                    continue
+                hashed = hash_names(attr["name"] for attr in files)
+                if t_patht := undetermined.pop(hashed, ()):
+                    pid_to_dirpatht[pid] = t_patht
+        del undetermined
+        # 迭代地返回所有文件节点信息
+        for pid, files in pid_to_files.items():
+            if pid in pid_to_dirpatht:
+                dir_patht = pid_to_dirpatht[pid]
+            else:
+                ancestors: list[dict] = yield get_ancestors(
+                    client, 
+                    files[0], 
+                    async_=async_, # type: ignore
+                    **request_kwargs, 
+                )
+                patht = [""]
+                add_part = patht.append
+                for info in ancestors[1:]:
+                    add_part(info["name"])
+                    dir_patht = pid_to_dirpatht[info["id"]] = tuple(patht)
+            dir_path = joins(dir_patht) + "/"
+            dir_posixpath = "/".join(n.replace("/", "|") for n in dir_patht) + "/"
+            for attr in files:
+                name = attr["name"]
+                attr["path"] = dir_path + escape(name)
+                attr["posixpath"] = dir_posixpath + name.replace("/", "|")
+                yield Yield(attr, identity=True)
     return run_gen_step_iter(gen_step, async_=async_)
 

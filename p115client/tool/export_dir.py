@@ -3,7 +3,7 @@
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __all__ = [
-    "parse_export_dir_as_dict_iter", "parse_export_dir_as_path_iter", 
+    "parse_export_dir_as_dict_iter", "parse_export_dir_as_path_iter", "parse_export_dir_as_patht_iter", 
     "export_dir", "export_dir_result", "export_dir_parse_iter", 
 ]
 __doc__ = "这个模块提供了一些和导出目录树有关的函数"
@@ -271,8 +271,10 @@ def parse_export_dir_as_path_iter(
                 if m is None:
                     stack[depth] += "\n" + line[:-1]
                     continue
-                else:
+                elif depth:
                     yield Yield(stack[depth], identity=True)
+                else:
+                    yield "/" if root == "根目录" else root
                 name = m[1]
                 depth = (len(line) - len(name)) // 2 - 1
                 if escape is not None:
@@ -285,6 +287,95 @@ def parse_export_dir_as_path_iter(
         except (StopIteration, StopAsyncIteration):
             if depth:
                 yield Yield(stack[depth], identity=True)
+        finally:
+            if close_file:
+                if async_:
+                    if callable(aclose := getattr(file, "aclose", None)):
+                        yield aclose
+                    elif callable(close := getattr(file, "close", None)):
+                        yield ensure_async(close, threaded=True)
+                elif callable(close := getattr(file, "close", None)):
+                    close()
+    return run_gen_step_iter(gen_step, async_=async_)
+
+
+@overload
+def parse_export_dir_as_patht_iter(
+    file: bytes | str | PathLike | Iterable[bytes | str], 
+    /, 
+    encoding: str = "utf-16", 
+    close_file: bool = False, 
+    *, 
+    async_: Literal[False] = False, 
+) -> Iterator[list[str]]:
+    ...
+@overload
+def parse_export_dir_as_patht_iter(
+    file: bytes | str | PathLike | Iterable[bytes | str] | AsyncIterable[bytes | str], 
+    /, 
+    encoding: str = "utf-16", 
+    close_file: bool = False, 
+    *, 
+    async_: Literal[True], 
+) -> AsyncIterator[list[str]]:
+    ...
+def parse_export_dir_as_patht_iter(
+    file: bytes | str | PathLike | Iterable[bytes | str] | AsyncIterable[bytes | str], 
+    /, 
+    encoding: str = "utf-16", 
+    close_file: bool = False, 
+    *, 
+    async_: Literal[False, True] = False, 
+) -> Iterator[list[str]] | AsyncIterator[list[str]]:
+    """解析 115 导出的目录树（可通过 P115Client.fs_export_dir 提交导出任务）
+
+    :param file: 文件路径、打开的文件或者迭代器（每次返回一行）
+    :param encoding: 字符编码，对字节数据使用，转换为字符串
+    :param close_file: 结束（包括异常退出）时尝试关闭 `file`
+    :param async_: 是否异步
+
+    :return: 把每一行解析为一个名字列表，并逐次迭代返回
+    """
+    if isinstance(file, (bytes, str, PathLike)):
+        file = open(file, encoding=encoding)
+        close_file = True
+    def gen_step():
+        it = ensure_aiter(file, threaded=True) if async_ else file
+        do_next: Callable = anext if async_ else next # type: ignore
+        root = yield do_next(it, None)
+        if not root:
+            return
+        if not isinstance(root, str):
+            root = str(root, encoding)
+        root = root.removesuffix("\n")[3:]
+        stack = [""]
+        from_top_root = root == "根目录"
+        if not from_top_root:
+            stack.append(root)
+        push = stack.append
+        try:
+            depth = len(stack) - 1
+            while True:
+                line = yield do_next(it)
+                if not isinstance(line, str):
+                    line = str(line, encoding)
+                m = CRE_TREE_PREFIX_match(line)
+                if m is None:
+                    stack[depth] += "\n" + line[:-1]
+                    continue
+                else:
+                    yield Yield(stack[:depth+1], identity=True)
+                name = m[1]
+                depth = (len(line) - len(name)) // 2 - from_top_root
+                if escape is not None:
+                    name = escape(name)
+                try:
+                    stack[depth] = name
+                except IndexError:
+                    push(name)
+        except (StopIteration, StopAsyncIteration):
+            if depth:
+                yield Yield(stack[:depth+1], identity=True)
         finally:
             if close_file:
                 if async_:
@@ -468,7 +559,8 @@ def export_dir_result(
 @overload
 def export_dir_parse_iter(
     client: str | P115Client, 
-    export_file_ids: int | str | Iterable[int | str], 
+    export_file_ids: int | str | Iterable[int | str] = 0, 
+    export_id: int = 0, 
     target_pid: int | str = 0, 
     layer_limit: int = 0, 
     parse_iter: None | Callable[[IO[bytes]], Iterator] = None, 
@@ -485,7 +577,8 @@ def export_dir_parse_iter(
 @overload
 def export_dir_parse_iter(
     client: str | P115Client, 
-    export_file_ids: int | str | Iterable[int | str], 
+    export_file_ids: int | str | Iterable[int | str] = 0, 
+    export_id: int = 0, 
     target_pid: int | str = 0, 
     layer_limit: int = 0, 
     parse_iter: None | Callable[[IO[bytes]], AsyncIterator] = None, 
@@ -501,7 +594,8 @@ def export_dir_parse_iter(
     ...
 def export_dir_parse_iter(
     client: str | P115Client, 
-    export_file_ids: int | str | Iterable[int | str], 
+    export_file_ids: int | str | Iterable[int | str] = 0, 
+    export_id: int = 0, 
     target_pid: int | str = 0, 
     layer_limit: int = 0, 
     parse_iter: None | Callable[[IO[bytes]], Iterator] | Callable[[IO[bytes]], AsyncIterator] = None, 
@@ -518,6 +612,7 @@ def export_dir_parse_iter(
 
     :param client: 115 客户端或 cookies
     :param export_file_ids: 待导出的目录 id 或 路径（如果有多个，需传入可迭代对象）
+    :param export_id: 优先级高于 `export_file_ids`，之前提交的 `export_dir` 任务的 id
     :param target_pid: 导出到的目标目录 id 或 路径
     :param layer_limit: 层级深度，小于等于 0 时不限
     :param parse_iter: 解析打开的二进制文件，返回可迭代对象
@@ -539,14 +634,16 @@ def export_dir_parse_iter(
         else:
             parse_iter = parse_export_dir_as_path_iter
     def gen_step():
-        export_id: int = yield export_dir(
-            client, 
-            export_file_ids=export_file_ids, 
-            target_pid=target_pid, 
-            layer_limit=layer_limit, 
-            async_=async_, 
-            **request_kwargs, 
-        )
+        nonlocal export_id
+        if not export_id:
+            export_id = yield export_dir(
+                client, 
+                export_file_ids=export_file_ids, 
+                target_pid=target_pid, 
+                layer_limit=layer_limit, 
+                async_=async_, 
+                **request_kwargs, 
+            )
         if not show_clock:
             result: dict = yield export_dir_result(
                 client, 
@@ -618,6 +715,5 @@ def export_dir_parse_iter(
                     async_=async_, # type: ignore
                     **request_kwargs, 
                 )
-
     return run_gen_step_iter(gen_step, async_=async_)
 
