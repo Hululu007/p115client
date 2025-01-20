@@ -32,7 +32,8 @@ run(
 
 ```console
 $ p115nano302 -h
-usage: p115nano302 [-h] [-c COOKIES] [-cp COOKIES_PATH] [-p PASSWORD] [-t TOKEN] [-H HOST] [-P PORT] [-cu] [-d] [-uc UVICORN_RUN_CONFIG_PATH] [-v] [-l]
+usage: p115nano302 [-h] [-c COOKIES] [-cp COOKIES_PATH] [-p PASSWORD] [-t TOKEN] [-H HOST] [-P PORT] [-cu] [-d]
+                   [-uc UVICORN_RUN_CONFIG_PATH] [-v] [-l]
 
     ╭───────────────────────── Welcome to 115 nano 302 ────────────────────────────╮
     │                                                                              │
@@ -42,15 +43,18 @@ usage: p115nano302 [-h] [-c COOKIES] [-cp COOKIES_PATH] [-p PASSWORD] [-t TOKEN]
     │                                                                              │
     │                      license     https://www.gnu.org/licenses/gpl-3.0.txt    │
     │                                                                              │
-    │                      version     0.1.0                                       │
+    │                      version     0.1.1                                       │
     │                                                                              │
     ╰──────────────────────────────────────────────────────────────────────────────╯
 
-> 网盘文件支持用 pickcode、id、sha1 或 name 查询
+> 网盘文件支持用 pickcode、id、sha1、name 或 path 查询
+> 指定 is_path=1 或 is_path=true 即可启用 path 查询，会以 \ 作为路径分隔符
 > 分享文件支持用 id 或 name 查询
-> 支持参数 user_id，以指定用户 id，并在实际执行时使用此用户的 cookies 和网盘数据
-> 支持参数 refresh，用于搜索名字时忽略缓存（强制刷新）
-> 支持参数 app，用于指定从此设备的接口获取下载链接
+
+< 支持参数 user_id，以指定用户 id，并在实际执行时使用此用户的 cookies 和网盘数据（未指定时，使用所传入的第 1 个 cookies）
+< 支持参数 refresh，指定 bool 值，用于搜索名字时忽略缓存（强制刷新）
+< 支持参数 is_path，指定 bool 值，要求搜索路径而不是名字（仅限你自己的网盘文件，对于分享链接无效）
+< 支持参数 app，用于指定从此设备的接口获取下载链接（可以不管）
 
 ⏰ 此版本不依赖于 p115client 和 pycryptodome，至少要求 python 3.12
 
@@ -123,6 +127,10 @@ usage: p115nano302 [-h] [-c COOKIES] [-cp COOKIES_PATH] [-p PASSWORD] [-t TOKEN]
         http://localhost:8000/Cosmos.S01E01.1080p.AMZN.WEB-DL.DD+5.1.H.264-iKA.mkv?share_code=sw68md23w8m
         http://localhost:8000?name=Cosmos.S01E01.1080p.AMZN.WEB-DL.DD%2B5.1.H.264-iKA.mkv&share_code=sw68md23w8m&receive_code=q353
         http://localhost:8000?name=Cosmos.S01E01.1080p.AMZN.WEB-DL.DD%2B5.1.H.264-iKA.mkv&share_code=sw68md23w8m
+   10. 用 path 查询网盘中的文件（限制同第 6 条，但需要指定 is_path）
+        http://localhost:8000/a/b/c/movie.mkv?is_path=1
+        http://localhost:8000?/a/b/c/movie.mkv&is_path=1
+        http://localhost:8000?name=/a/b/c/movie.mkv&is_path=1
 
 再推荐一个命令行使用，用于执行 HTTP 请求的工具，类似 wget
 

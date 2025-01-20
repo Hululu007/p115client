@@ -11,15 +11,18 @@ __doc__ = """\
     │                                                                              │
     │                      \x1b[32mlicense     \x1b[4;34mhttps://www.gnu.org/licenses/gpl-3.0.txt\x1b[0m    │
     │                                                                              │
-    │                      \x1b[32mversion     \x1b[1;36m0.1.0\x1b[0m                                       │
+    │                      \x1b[32mversion     \x1b[1;36m0.1.1\x1b[0m                                       │
     │                                                                              │
     ╰──────────────────────────────────────────────────────────────────────────────╯
 
-> 网盘文件支持用 \x1b[3;36mpickcode\x1b[0m、\x1b[3;36mid\x1b[0m、\x1b[3;36msha1\x1b[0m 或 \x1b[3;36mname\x1b[0m 查询
+> 网盘文件支持用 \x1b[3;36mpickcode\x1b[0m、\x1b[3;36mid\x1b[0m、\x1b[3;36msha1\x1b[0m、\x1b[3;36mname\x1b[0m 或 \x1b[3;36mpath\x1b[0m 查询
+> 指定 \x1b[3;36mis_path=1\x1b[0m 或 \x1b[3;36mis_path=true\x1b[0m 即可启用 \x1b[3;36mpath\x1b[0m 查询，会以 \x1b[1m\\\x1b[0m 作为路径分隔符
 > 分享文件支持用 \x1b[3;36mid\x1b[0m 或 \x1b[3;36mname\x1b[0m 查询
-> 支持参数 \x1b[3;36muser_id\x1b[0m，以指定用户 id，并在实际执行时使用此用户的 cookies 和网盘数据
-> 支持参数 \x1b[3;36mrefresh\x1b[0m，用于搜索名字时忽略缓存（强制刷新）
-> 支持参数 \x1b[3;36mapp\x1b[0m，用于指定从此设备的接口获取下载链接
+
+< 支持参数 \x1b[3;36muser_id\x1b[0m，以指定用户 id，并在实际执行时使用此用户的 cookies 和网盘数据（\x1b[1;31m未指定时，使用所传入的第 1 个 cookies\x1b[0m）
+< 支持参数 \x1b[3;36mrefresh\x1b[0m，指定 bool 值，用于搜索名字时忽略缓存（\x1b[1;31m强制刷新\x1b[0m）
+< 支持参数 \x1b[3;36mis_path\x1b[0m，指定 bool 值，要求搜索路径而不是名字（\x1b[1;31m仅限你自己的网盘文件，对于分享链接无效\x1b[0m）
+< 支持参数 \x1b[3;36mapp\x1b[0m，用于指定从此设备的接口获取下载链接（\x1b[1;31m可以不管\x1b[0m）
 
 ⏰ 此版本不依赖于 \x1b[31mp115client\x1b[0m 和 \x1b[31mpycryptodome\x1b[0m，至少要求 \x1b[31mpython \x1b[1m3.12\x1b[0m
 
@@ -92,6 +95,10 @@ __doc__ = """\
         \x1b[4;34mhttp://localhost:8000/Cosmos.S01E01.1080p.AMZN.WEB-DL.DD+5.1.H.264-iKA.mkv?share_code=sw68md23w8m\x1b[0m
         \x1b[4;34mhttp://localhost:8000?name=Cosmos.S01E01.1080p.AMZN.WEB-DL.DD%2B5.1.H.264-iKA.mkv&share_code=sw68md23w8m&receive_code=q353\x1b[0m
         \x1b[4;34mhttp://localhost:8000?name=Cosmos.S01E01.1080p.AMZN.WEB-DL.DD%2B5.1.H.264-iKA.mkv&share_code=sw68md23w8m\x1b[0m
+   10. 用 \x1b[3;36mpath\x1b[0m 查询网盘中的文件（限制同第 6 条，但需要指定 \x1b[3;36mis_path\x1b[0m）
+        \x1b[4;34mhttp://localhost:8000/a/b/c/movie.mkv?is_path=1\x1b[0m
+        \x1b[4;34mhttp://localhost:8000?/a/b/c/movie.mkv&is_path=1\x1b[0m
+        \x1b[4;34mhttp://localhost:8000?name=/a/b/c/movie.mkv&is_path=1\x1b[0m
 
 再推荐一个命令行使用，用于执行 HTTP 请求的工具，类似 \x1b[1;3mwget\x1b[0m
 

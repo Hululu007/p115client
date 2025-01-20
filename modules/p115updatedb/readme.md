@@ -13,7 +13,7 @@ pip install -U p115updatedb
 ### 模块
 
 ```python
-from p115updatedb import updatedb, updatedb_one, updatedb_tree
+from p115updatedb import updatedb_life_iter, updatedb_life, updatedb, updatedb_one, updatedb_tree
 ```
 
 另外也提供了一些工具函数，封装了一些数据库查询
@@ -26,8 +26,8 @@ from p115updatedb.query import *
 
 ```console
 $ p115updatedb -h
-usage: p115updatedb [-h] [-cp COOKIES_PATH] [-f DBFILE] [-st AUTO_SPLITTING_THRESHOLD] [-sst AUTO_SPLITTING_STATISTICS_TIMEOUT] [-nm] [-nr]
-                    [-de] [-v] [-l]
+usage: p115updatedb [-h] [-cp COOKIES_PATH] [-f DBFILE] [-i INTERVAL] [-st AUTO_SPLITTING_THRESHOLD] [-sst AUTO_SPLITTING_STATISTICS_TIMEOUT] [-nm] [-nr] [-de] [-v]
+                    [-l]
                     [dir ...]
 
 遍历 115 网盘的目录信息导出到数据库
@@ -45,6 +45,8 @@ options:
                         cookies 文件保存路径，默认为当前工作目录下的 115-cookies.txt
   -f DBFILE, --dbfile DBFILE
                         sqlite 数据库文件路径，默认为在当前工作目录下的 f'115-{user_id}.db'
+  -i INTERVAL, --interval INTERVAL
+                        两次批量拉取之间的睡眠时间，如果 <= 0，则不睡眠
   -st AUTO_SPLITTING_THRESHOLD, --auto-splitting-threshold AUTO_SPLITTING_THRESHOLD
                         自动拆分的文件数阈值，大于此值时，自动进行拆分，如果 = 0，则总是拆分，如果 < 0，则总是不拆分，默认值 100,000（10 万）
   -sst AUTO_SPLITTING_STATISTICS_TIMEOUT, --auto-splitting-statistics-timeout AUTO_SPLITTING_STATISTICS_TIMEOUT
@@ -53,5 +55,5 @@ options:
   -nr, --not-recursive  不遍历目录树：只拉取顶层目录，不递归子目录
   -de, --disable-event  关闭 event 表的数据收集
   -v, --version         输出版本号
-  -l, --license         输出开源协议
+  -l, --license         输出开源协
 ```

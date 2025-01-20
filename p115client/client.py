@@ -20,6 +20,7 @@ from http.cookiejar import Cookie, CookieJar
 from http.cookies import Morsel
 from inspect import isawaitable
 from itertools import count, cycle, product, repeat
+from math import nan
 from operator import itemgetter
 from os import fsdecode, fstat, isatty, stat, PathLike, path as ospath
 from pathlib import Path, PurePath
@@ -283,22 +284,12 @@ def file_close(file, /, async_: bool = False):
             return deleter(file)
 
 
-def cookies_equal(cookies1, cookies2, /) -> bool:
-    if cookies1 and isinstance(cookies1, str):
-        m = CRE_COOKIES_UID_search(cookies1)
-        if m is None:
-            return False
-        uid1 = m[0]
-    else:
-        return False
-    if cookies2 and isinstance(cookies2, str):
-        m = CRE_COOKIES_UID_search(cookies2)
-        if m is None:
-            return False
-        uid2 = m[0]
-    else:
-        return False
-    return uid1 == uid2
+def cookies_equal(cookies1: str, cookies2: str, /) -> bool:
+    if cookies1 == cookies2:
+        return True
+    cks1 = cookies_str_to_dict(cookies1)
+    cks2 = cookies_str_to_dict(cookies2)
+    return cks1.get("UID", nan) == cks2.get("UID", nan) and cks1.get("SEID", nan) == cks2.get("SEID", nan)
 
 
 def convert_digest(digest, /):
@@ -12956,7 +12947,7 @@ class P115Client:
         partsize: int = 0, 
         upload_directly: None | bool = False, 
         multipart_resume_data: None | MultipartResumeData = None, 
-        make_reporthook: None | Callable[[None | int], Callable[[int], Any] | Generator[int, Any, Any] | AsyncGenerator[int, Any]] = None, 
+        make_reporthook: None | Callable[[None | int], Callable[[int], Any] | Generator[int, Any, Any]] = None, 
         close_file: bool = False, 
         *, 
         async_: Literal[False] = False, 

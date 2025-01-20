@@ -2,16 +2,17 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__version__ = (0, 1, 0)
+__version__ = (0, 1, 1)
 __all__ = ["make_application"]
 __license__ = "GPLv3 <https://www.gnu.org/licenses/gpl-3.0.txt>"
 
 import logging
 
-from collections.abc import Buffer, Mapping
+from collections.abc import Buffer, Callable, Mapping
 from errno import EIO, ENOENT
 from hashlib import sha1 as calc_sha1
 from http import HTTPStatus
+from itertools import cycle
 from re import compile as re_compile
 from string import digits, hexdigits
 from time import time
@@ -153,6 +154,8 @@ def make_application(
     ID_TO_PICKCODE:   LRUDict[tuple[int, int], str] = LRUDict(cache_size)
     SHA1_TO_PICKCODE: LRUDict[tuple[int, str], str] = LRUDict(cache_size)
     NAME_TO_PICKCODE: LRUDict[tuple[int, str], str] = LRUDict(cache_size)
+    DIR_TO_CID: LRUDict[tuple[int, str], int] = LRUDict(cache_size)
+    CID_NAME_TO_PICKCODE: LRUDict[tuple[int, int, str], str] = LRUDict(cache_size)
     SHARE_NAME_TO_ID: LRUDict[tuple[str, str], int] = LRUDict(cache_size)
     if cache_url:
         DOWNLOAD_URL_CACHE: TLRUDict[tuple[int, str, str], Url] = TLRUDict(cache_size)
@@ -282,16 +285,55 @@ def make_application(
         pickcode = SHA1_TO_PICKCODE[(user_id, sha1)] = json["data"]["pick_code"]
         return pickcode
 
-    async def get_pickcode_for_name(name: str, user_id: int = 0, refresh: bool = False) -> str:
+    async def get_pickcode_for_path(
+        path: str, 
+        user_id: int = 0, 
+        refresh: bool = False, 
+        get_base_url: Callable[[], str] = cycle(
+            ("http://web.api.115.com", "http://pro.api.115.com/android", "http://proapi.115.com/android")
+        ).__next__, 
+    ) -> str:
         if user_id:
             cookies = d_cookies[user_id]
         else:
             user_id, cookies = next(iter(d_cookies.items()))
-        if not refresh:
-            if pickcode := NAME_TO_PICKCODE.get((user_id, name), ""):
-                return pickcode
+        path = "/" + path.strip("/")
+        dir_, _, name = path.rpartition("/")
+        if not name:
+            raise FileNotFoundError(ENOENT, path)
+        if dir_:
+            if refresh or not (parent_id := DIR_TO_CID.get((user_id, dir_), 0)):
+                resp = await client.get(
+                    f"{get_base_url()}/files/getid?{urlencode({'path': dir_})}", 
+                    headers={"Cookie": cookies}, 
+                )
+                json = loads(cast(bytes, await resp.read()))
+                parent_id = int(json.get("id") or 0)
+                if not parent_id:
+                    raise FileNotFoundError(ENOENT, json)
+                DIR_TO_CID[(user_id, dir_)] = parent_id
+        else:
+            parent_id = 0
+        if not refresh and (pickcode := CID_NAME_TO_PICKCODE.get((user_id, parent_id, name))):
+            return pickcode
+        pickcode = CID_NAME_TO_PICKCODE[(user_id, parent_id, name)] = await get_pickcode_for_name(
+            name, user_id=user_id, parent_id=parent_id, refresh=None)
+        return pickcode
+
+    async def get_pickcode_for_name(
+        name: str, 
+        user_id: int = 0, 
+        parent_id: int = 0, 
+        refresh: None | bool = False, 
+    ) -> str:
+        if user_id:
+            cookies = d_cookies[user_id]
+        else:
+            user_id, cookies = next(iter(d_cookies.items()))
+        if refresh is False and (pickcode := NAME_TO_PICKCODE.get((user_id, name), "")):
+            return pickcode
         api = "http://web.api.115.com/files/search"
-        payload = {"search_value": name, "limit": 1, "type": 99}
+        payload = {"search_value": name, "limit": 1, "type": 99, "cid": parent_id}
         suffix = name.rpartition(".")[-1]
         if suffix.isalnum():
             payload["suffix"] = suffix
@@ -306,27 +348,31 @@ def make_application(
         info = json["data"][0]
         if info["n"] != name:
             raise FileNotFoundError(ENOENT, f"name not found: {name!r}")
-        pickcode = NAME_TO_PICKCODE[(user_id, name)] = info["pc"]
+        pickcode = info["pc"]
+        if refresh is not None:
+            NAME_TO_PICKCODE[(user_id, name)] = pickcode
         return pickcode
 
     async def share_get_id_for_name(
         share_code: str, 
         receive_code: str, 
         name: str, 
+        parent_id: int = 0, 
         user_id: int = 0, 
-        refresh: bool = False, 
+        refresh: None | bool = False, 
     ) -> int:
         if user_id:
             cookies = d_cookies[user_id]
         else:
             user_id, cookies = next(iter(d_cookies.items()))
-        if not refresh and (id := SHARE_NAME_TO_ID.get((share_code, name), 0)):
+        if refresh is False and (id := SHARE_NAME_TO_ID.get((share_code, name), 0)):
             return id
         api = "http://web.api.115.com/share/search"
         payload = {
             "share_code": share_code, 
             "receive_code": receive_code, 
             "search_value": name, 
+            "cid": parent_id, 
             "limit": 1, 
             "type": 99, 
         }
@@ -344,7 +390,9 @@ def make_application(
         info = json["data"]["list"][0]
         if info["n"] != name:
             raise FileNotFoundError(ENOENT, f"name not found: {name!r}")
-        id = SHARE_NAME_TO_ID[(share_code, name)] = int(info["fid"])
+        id = int(info["fid"])
+        if refresh is not None:
+            SHARE_NAME_TO_ID[(share_code, name)] = id
         return id
 
     async def get_downurl(
@@ -352,6 +400,7 @@ def make_application(
         user_agent: str = "", 
         app: str = "android", 
         user_id: int = 0, 
+        get_base_url: Callable[[], str] = cycle(("http://pro.api.115.com", "http://proapi.115.com")).__next__, 
     ) -> Url:
         if user_id:
             cookies = d_cookies[user_id]
@@ -364,13 +413,13 @@ def make_application(
             return r[1]
         if app == "chrome":
             resp = await client.post(
-                "https://proapi.115.com/app/chrome/downurl", 
+                f"{get_base_url()}/app/chrome/downurl", 
                 content=FormContent([("data", encrypt(f'{{"pickcode":"{pickcode}"}}').decode("utf-8"))]), 
                 headers={"User-Agent": user_agent, "Cookie": cookies}, 
             )
         else:
             resp = await client.post(
-                f"https://proapi.115.com/{app or 'android'}/2.0/ufile/download", 
+                f"{get_base_url()}/{app or 'android'}/2.0/ufile/download", 
                 content=FormContent([("data", encrypt(f'{{"pick_code":"{pickcode}"}}').decode("utf-8"))]), 
                 headers={"User-Agent": user_agent, "Cookie": cookies}, 
             )
@@ -402,6 +451,7 @@ def make_application(
         file_id: int, 
         app: str = "", 
         user_id: int = 0, 
+        get_base_url: Callable[[], str] = cycle(("http://pro.api.115.com", "http://proapi.115.com")).__next__, 
     ) -> Url:
         if user_id:
             cookies = d_cookies[user_id]
@@ -412,12 +462,12 @@ def make_application(
         payload = {"share_code": share_code, "receive_code": receive_code, "file_id": file_id}
         if app:
             resp = await client.get(
-                f"https://proapi.115.com/{app}/2.0/share/downurl?{urlencode(payload)}", 
+                f"{get_base_url()}/{app}/2.0/share/downurl?{urlencode(payload)}", 
                 headers={"Cookie": cookies}, 
             )
         else:
             resp = await client.post(
-                "https://proapi.115.com/app/share/downurl", 
+                f"{get_base_url()}/app/share/downurl", 
                 content=FormContent([("data", encrypt(dumps(payload)).decode("utf-8"))]), 
                 headers={"Cookie": cookies}, 
             )
@@ -471,6 +521,7 @@ def make_application(
         name: str = "", 
         name2: str = "", 
         user_id: int = 0, 
+        is_path: bool = False, 
         refresh: bool = False, 
         app: str = "", 
         sign: str = "", 
@@ -528,6 +579,8 @@ def make_application(
                         pickcode = await get_pickcode_to_id(int(file_name), user_id=user_id)
                     elif len(file_name) == 40 and not file_name.strip(hexdigits):
                         pickcode = await get_pickcode_for_sha1(file_name.upper(), user_id=user_id)
+                    elif is_path:
+                        pickcode = await get_pickcode_for_path(file_name + remains, user_id=user_id, refresh=refresh)
                     else:
                         pickcode = await get_pickcode_for_name(file_name + remains, user_id=user_id, refresh=refresh)
             if not pickcode:

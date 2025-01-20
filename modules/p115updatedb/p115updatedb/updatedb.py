@@ -2,7 +2,7 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__all__ = ["updatedb_life", "updatedb_one", "updatedb_tree", "updatedb"]
+__all__ = ["updatedb_life_iter", "updatedb_life", "updatedb_one", "updatedb_tree", "updatedb"]
 
 import logging
 
@@ -16,7 +16,7 @@ from math import inf, isnan, isinf
 from posixpath import splitext
 from sqlite3 import connect, Connection, Cursor
 from string import digits
-from time import time
+from time import sleep, time
 from typing import cast, Final, NoReturn
 from warnings import warn
 
@@ -30,7 +30,9 @@ from p115client.tool.iterdir import (
     get_id_to_path, iter_stared_dirs, iter_selected_nodes, iter_selected_nodes_using_star_event, 
     iter_selected_nodes_by_category_get, 
 )
-from p115client.tool.life import iter_life_behavior, iter_life_behavior_once, IGNORE_BEHAVIOR_TYPES
+from p115client.tool.life import (
+    iter_life_behavior, iter_life_behavior_once, IGNORE_BEHAVIOR_TYPES, BEHAVIOR_TYPE_TO_NAME, 
+)
 from sqlitetools import execute, find, query, transact, upsert_items, AutoCloseConnection
 
 from .query import (
@@ -82,6 +84,7 @@ CREATE TABLE IF NOT EXISTS data (
     mtime INTEGER NOT NULL DEFAULT 0,  -- 更新时间戳，如果名字、备注被设置（即使值没变），或者（如果自己是目录）进出回收站或增删直接子节点或设置封面，会更新此值，但移动并不更新
     is_collect INTEGER NOT NULL DEFAULT 0 CHECK(is_collect IN (0, 1)), -- 是否已被标记为违规
     is_alive INTEGER NOT NULL DEFAULT 1 CHECK(is_alive IN (0, 1)),   -- 是否存在中（未被移除）
+    extra BLOB DEFAULT NULL,           -- 额外的数据
     updated_at DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+08:00', 'now', '+8 hours')), -- 最近一次更新时间
     _triggered INTEGER NOT NULL DEFAULT 0 -- 是否执行过触发器
 );
@@ -396,7 +399,7 @@ def load_ancestors(
     data: list[dict], 
     all_are_files: bool = False, 
     refresh: bool = False, 
-    dont_star: bool = False, 
+    dont_star: None | bool = False, 
 ) -> list[dict]:
     """加载祖先节点列表
 
@@ -409,66 +412,47 @@ def load_ancestors(
 
     :return: 返回所传入的文件信息列表所对应的祖先节点列表
     """
-    seen = {0}
-    if not all_are_files:
-        seen.update(a["id"] for a in data if a["is_dir"])
-    ancestors: list[dict] = []
-    if dont_star:
-        call = partial(iter_selected_nodes, id_to_dirnode=..., normalize_attr=normalize_attr)
+    if dont_star is None:
+        id_to_dirnode: dict = {}
+        for _ in iter_selected_nodes_by_category_get(
+            client, 
+            {a["parent_id"]: a["id"] for a in data}.values(), 
+            id_to_dirnode=id_to_dirnode, 
+            normalize_attr=normalize_attr, 
+        ):
+            pass
+        ancestors: list[dict] = [
+            {"id": fid, "name": name, "parent_id": pid, "is_dir": 1} 
+            for fid, (name, pid) in id_to_dirnode.items()
+        ]
     else:
-        call = partial(
-            iter_selected_nodes_using_star_event, 
-            app="android", 
-            id_to_dirnode=..., 
-            normalize_attr = lambda event: {
-                "id": int(event["file_id"]), 
-                "parent_id": int(event["parent_id"]), 
-                "name": event["file_name"], 
-                "pickcode": event["pick_code"], 
-                "is_dir": 1, 
-            }, 
-        )
-    while pids := {pid for a in data if (pid := a["parent_id"]) not in seen}:
-        seen |= pids
-        if not refresh:
-            pids.difference_update(iter_existing_id(con, pids, is_alive=False))
-        data = list(call(client, pids))
-        ancestors.extend(data)
+        seen = {0}
+        if not all_are_files:
+            seen.update(a["id"] for a in data if a["is_dir"])
+        ancestors = []
+        if dont_star:
+            call = partial(iter_selected_nodes, id_to_dirnode=..., normalize_attr=normalize_attr)
+        else:
+            call = partial(
+                iter_selected_nodes_using_star_event, 
+                app="android", 
+                id_to_dirnode=..., 
+                normalize_attr = lambda event: {
+                    "id": int(event["file_id"]), 
+                    "parent_id": int(event["parent_id"]), 
+                    "name": event["file_name"], 
+                    "pickcode": event["pick_code"], 
+                    "is_dir": 1, 
+                }, 
+            )
+        while pids := {pid for a in data if (pid := a["parent_id"]) not in seen}:
+            seen |= pids
+            if not refresh:
+                pids.difference_update(iter_existing_id(con, pids, is_alive=False))
+            data = list(call(client, pids))
+            ancestors.extend(data)
     if ancestors:
         sort(ancestors)
-    return ancestors
-
-
-# TODO: 可以把批量拉取文件节点和这个函数结合起来使用，如果 parent_id 在 id_to_dirnode 则忽略，作为 iter_files 的新实现
-def load_ancestors2(
-    con: Connection | Cursor, 
-    /, 
-    client: P115Client, 
-    data: list[dict], 
-    all_are_files: bool = False, 
-    refresh: bool = False, 
-    dont_star: bool = False, 
-) -> list[dict]:
-    """加载祖先节点列表
-
-    :param con: 数据库连接或游标
-    :param client: 115 网盘客户端对象
-    :param data: 文件信息列表
-    :param all_are_files: 说明所有的列表元素都是文件节点，如此可减少一次判断
-    :param refresh: 是否强制刷新，如果为 False，则数据库中已经存在的节点不会被拉取
-
-    :return: 返回所传入的文件信息列表所对应的祖先节点列表
-    """
-    id_to_dirnode: dict = {}
-    for _ in iter_selected_nodes_by_category_get(
-        client, 
-        {a["parent_id"]: a["id"] for a in data}.values(), 
-        id_to_dirnode=id_to_dirnode, 
-        normalize_attr=normalize_attr, 
-    ):
-        pass
-    ancestors = [{"id": fid, "name": name, "parent_id": pid, "is_dir": 1} for fid, (name, pid) in id_to_dirnode.items()]
-    sort(ancestors)
     return ancestors
 
 
@@ -536,7 +520,6 @@ def is_timeouterror(exc: Exception) -> bool:
     return False
 
 
-# TODO: 增加一个新的函数，使用 fs_files 和 cookies 池，当且仅当总文件数小于一定值（比如 11500），则进行采用
 def iterdir(
     client: P115Client, 
     cid: int = 0, 
@@ -628,7 +611,6 @@ def iterdir(
     return count, ancestors, seen, it
 
 
-# TODO: 增加一个参数，用来说明总文件数，以决定采用并发拉取，还是 cookies 池
 def diff_dir(
     con: Connection | Cursor, 
     client: P115Client, 
@@ -787,24 +769,26 @@ def _init_client(
     return client, con
 
 
-# TODO: 增加一个参数，用来输出日志
-# TODO: 增加一个变种，作为迭代器使用，每迭代因此，就执行一次处理
-def updatedb_life(
+def updatedb_life_iter(
     client: str | P115Client, 
     dbfile: None | str | Connection | Cursor = None, 
     from_time: int | float = 0, 
     from_id: int = 0, 
     interval: int | float = 0, 
+    app: str = "android", 
     **request_kwargs, 
-) -> NoReturn:
+) -> Iterator[dict]:
     """持续采集 115 生活日志，以更新数据库
 
     :param client: 115 网盘客户端对象
     :param dbfile: 数据库文件路径，如果为 None，则自动确定
     :param from_time: 开始时间（含），若为 0 则从当前时间开始，若小于 0 则从最早开始
     :param from_id: 开始的事件 id （不含）
-    :param interval: 睡眠时间间隔，如果小于等于 0，则不睡眠
+    :param interval: 睡眠时间间隔，如果 <= 0，则不睡眠
+    :param app: 使用此设备的接口
     :param request_kwargs: 其它 http 请求参数，会传给具体的请求函数，默认的是 httpx，可用参数 request 进行设置
+
+    :return: 迭代器，每当一个事件成功入数据库，就产出它
     """
     client, con = _init_client(client, dbfile)
     for event in iter_life_behavior(
@@ -813,9 +797,10 @@ def updatedb_life(
         from_id=from_id, 
         interval=interval, 
         ignore_types=(), 
-        app="android", 
+        app=app, 
     ):
         type = event["type"]
+        event["event_name"] = BEHAVIOR_TYPE_TO_NAME.get(type, "")
         create_time = int(event["create_time"])
         if type not in IGNORE_BEHAVIOR_TYPES:
             sha1 = event["sha1"]
@@ -880,6 +865,45 @@ def updatedb_life(
             (int(event["id"]), dumps(event), create_time), 
             commit=True, 
         )
+        yield event
+
+
+# TODO: 为 115 生活单独做一个命令行命令
+def updatedb_life(
+    client: str | P115Client, 
+    dbfile: None | str | Connection | Cursor = None, 
+    from_time: int | float = 0, 
+    from_id: int = 0, 
+    interval: int | float = 0, 
+    logger = logger, 
+    app: str = "android", 
+    **request_kwargs, 
+) -> NoReturn:
+    """持续采集 115 生活日志，以更新数据库
+
+    :param client: 115 网盘客户端对象
+    :param dbfile: 数据库文件路径，如果为 None，则自动确定
+    :param from_time: 开始时间（含），若为 0 则从当前时间开始，若小于 0 则从最早开始
+    :param from_id: 开始的事件 id （不含）
+    :param interval: 睡眠时间间隔，如果 <= 0，则不睡眠
+    :param app: 使用此设备的接口
+    :param request_kwargs: 其它 http 请求参数，会传给具体的请求函数，默认的是 httpx，可用参数 request 进行设置
+    """
+    it = updatedb_life_iter(
+        client, 
+        dbfile, 
+        from_time, 
+        from_id, 
+        interval, 
+        app=app, 
+        **request_kwargs, 
+    )
+    if logger is None:
+        for _ in it: pass
+    else:
+        log = logger.info
+        for event in it:
+            log("event occurred: %r", event)
     raise
 
 
@@ -930,29 +954,38 @@ def updatedb_tree(
     """
     client, con = _init_client(client, dbfile)
     to_upsert, to_remove = diff_dir(con, client, id, refresh=refresh, tree=True, **request_kwargs)
+    to_recall: list[dict] = []
     if to_remove and not no_dir_moved:
         pairs = dict(iter_id_to_parent_id(con, to_remove))
         to_remove = []
-        append = list.append
-        for info in list(iter_selected_nodes(client, tuple(pairs.keys()), normalize_attr=None, id_to_dirnode=..., **request_kwargs)):
-            attr = normalize_attr(info)
-            fid = attr["id"]
-            if int(info["aid"]) != 1:
-                append(to_remove, fid)
-            else:
-                append(to_upsert, attr)
-            del pairs[fid]
+        add_to_recall = to_recall.append
+        for attr in iter_selected_nodes_using_star_event(
+            client, 
+            tuple(pairs.keys()), 
+            normalize_attr = lambda event: {
+                "id": int(event["file_id"]), 
+                "parent_id": int(event["parent_id"]), 
+                "name": event["file_name"], 
+                "pickcode": event["pick_code"], 
+                "is_dir": 1, 
+            }, 
+            with_pics=True, 
+            id_to_dirnode=..., 
+            **request_kwargs, 
+        ):
+            add_to_recall(attr)
+            del pairs[attr["id"]]
         if pairs:
             to_remove.extend(pairs)
-    upserted = len(to_upsert)
-    if to_upsert:
-        ancestors = load_ancestors2(
+    upserted = len(to_upsert) + len(to_recall)
+    if upserted:
+        ancestors = load_ancestors(
             con, 
             client, 
-            to_upsert, 
+            to_upsert + to_recall, 
             all_are_files=True, 
             refresh=not no_dir_moved, 
-            dont_star=True, 
+            dont_star=False, 
         )
         if refresh:
             ids = {a["id"] for a in to_upsert}
@@ -961,6 +994,7 @@ def updatedb_tree(
             to_remove.extend(pids)
         upsert_items(con, ancestors, extras={"_triggered": 0}, commit=True)
         upsert_items(con, to_upsert, extras={"_triggered": 0}, commit=True)
+        upsert_items(con, to_recall, extras={"_triggered": 0}, commit=True)
         upserted += len(ancestors)
     if to_remove:
         kill_items(con, to_remove, commit=True)
@@ -975,6 +1009,7 @@ def updatedb(
     auto_splitting_statistics_timeout: None | float = 3, 
     no_dir_moved: bool = True, 
     recursive: bool = True, 
+    interval: int | float = 0, 
     logger = logger, 
     disable_event: bool = False, 
     **request_kwargs, 
@@ -988,6 +1023,7 @@ def updatedb(
     :param auto_splitting_statistics_timeout: 自动拆分任务统计超时，当 recursive 为 True 时生效。如果超过此时间还不能确定目录里面的总的文件和目录数，则视为无穷大
     :param no_dir_moved: 是否无目录被移动，如果为 True，则拉取会快一些
     :param recursive: 是否递归拉取，如果为 True 则拉取目录树，否则只拉取一级目录
+    :param interval: 两次批量拉取之间的睡眠时间，如果 <= 0，则不睡眠
     :param logger: 日志对象，如果为 None，则不输出日志
     :param disable_event: 是否关闭 event 表的数据收集
     :param request_kwargs: 其它 http 请求参数，会传给具体的请求函数，默认的是 httpx，可用参数 request 进行设置
@@ -1059,7 +1095,7 @@ def updatedb(
                     cache_futures[cid] = submit(get_dir_size, cid)
         gen = bfs_gen(iter(top_ids), unpack_iterator=True) # type: ignore
         send = gen.send
-        for id in gen:
+        for i, id in enumerate(gen):
             if id in seen:
                 if logger is not None:
                     logger.warning("[\x1b[1;33mSKIP\x1b[0m] already processed: %s", id)
@@ -1082,7 +1118,10 @@ def updatedb(
             else:
                 need_to_split_tasks = True
             try:
+                if i and interval > 0:
+                    sleep(interval)
                 start = time()
+                logger.info(f"[\x1b[1;37;43mTELL\x1b[0m] \x1b[1m{id}\x1b[0m is running ...")
                 if need_to_split_tasks or not recursive:
                     upserted, removed = updatedb_one(client, con, id, **request_kwargs)
                 else:
@@ -1121,5 +1160,3 @@ def updatedb(
         if need_calc_size:
             executor.shutdown(wait=False, cancel_futures=True)
 
-# TODO: 允许全量拉取使用 cookies 池，仅当文件总数小于等于 6900 时，因此 diff_dir 需要接受一个参数，即预估文件总数（启发值）
-# TODO: 为 115 生活单独做一个命令行命令
