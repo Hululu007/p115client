@@ -176,6 +176,7 @@ def iter_life_behavior_once(
     from_id: int = 0, 
     type: str = "", 
     date: str = "", 
+    first_batch_size = 0, 
     app: str = "web", 
     *, 
     async_: Literal[False] = False, 
@@ -189,6 +190,7 @@ def iter_life_behavior_once(
     from_id: int = 0, 
     type: str = "", 
     date: str = "", 
+    first_batch_size = 0, 
     app: str = "web", 
     *, 
     async_: Literal[True], 
@@ -201,6 +203,7 @@ def iter_life_behavior_once(
     from_id: int = 0, 
     type: str = "", 
     date: str = "", 
+    first_batch_size = 0, 
     app: str = "web", 
     *, 
     async_: Literal[False, True] = False, 
@@ -216,6 +219,7 @@ def iter_life_behavior_once(
     :param from_id: 开始的事件 id （不含）
     :param type: 指定拉取的操作事件名称，若不指定则是全部
     :param date: 日期，格式为 YYYY-MM-DD，若指定则只拉取这一天的数据
+    :param first_batch_size: 首批的拉取数目
     :param app: 使用某个 app （设备）的接口
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
@@ -228,8 +232,10 @@ def iter_life_behavior_once(
         life_behavior_detail = partial(client.life_behavior_detail, **request_kwargs)
     else:
         life_behavior_detail = partial(client.life_behavior_detail_app, app=app, **request_kwargs)
+    if first_batch_size <= 0:
+        first_batch_size = 64 if from_time or from_id else 1000
     def gen_step():
-        payload = {"type": type, "date": date, "limit": 64 if from_time or from_id else 1000, "offset": 0}
+        payload = {"type": type, "date": date, "limit": first_batch_size, "offset": 0}
         seen: set[str] = set()
         seen_add = seen.add
         resp = yield life_behavior_detail(payload, async_=async_)

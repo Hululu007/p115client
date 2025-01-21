@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "p115client"
-version = "0.0.4.5"
+version = "0.0.4.6"
 description = "Python 115 webdisk client."
 authors = ["ChenyangGao <wosiwujm@gmail.com>"]
 license = "MIT"
@@ -29,7 +29,7 @@ include = [
 [tool.poetry.dependencies]
 python = "^3.12"
 ed2k = ">=0.0.2.1"
-http_response = "*"
+http_response = ">=0.0.2.2"
 httpx = "*"
 httpx_request = ">=0.1.2"
 iter_collect = ">=0.0.4"

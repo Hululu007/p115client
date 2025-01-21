@@ -4,13 +4,13 @@
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __all__ = [
     "ID_TO_DIRNODE_CACHE", "P115ID", "unescape_115_charref", "type_of_attr", "get_path_to_cid", 
-    "get_ancestors", "get_ancestors_to_cid", "get_id_to_path", "get_id_to_sha1", "get_id_to_pickcode", 
-    "filter_na_ids", "iter_stared_dirs_raw", "iter_stared_dirs", "ensure_attr_path", 
+    "get_file_count", "get_ancestors", "get_ancestors_to_cid", "get_id_to_path", "get_id_to_sha1", 
+    "get_id_to_pickcode", "iter_nodes_skim", "iter_stared_dirs_raw", "iter_stared_dirs", "ensure_attr_path", 
     "ensure_attr_path_by_category_get", "iterdir_raw", "iterdir", "iter_files", "iter_files_raw", 
     "traverse_files", "iter_dupfiles", "iter_image_files", "iter_dangling_files", "share_extract_payload", 
     "share_iterdir", "share_iter_files", "iter_selected_nodes", "iter_selected_nodes_by_category_get", 
-    "iter_selected_nodes_by_edit", "iter_selected_nodes_using_star_event", "iter_selected_dirs_using_star", 
-    "iter_files_with_path", 
+    "iter_selected_nodes_by_edit", "iter_selected_nodes_by_document", "iter_selected_nodes_using_star_event", 
+    "iter_selected_dirs_using_star", "iter_files_with_path", 
 ]
 __doc__ = "这个模块提供了一些和目录信息罗列有关的函数"
 
@@ -18,13 +18,13 @@ from asyncio import Lock as AsyncLock
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator, Callable, Collection, Coroutine, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from errno import EIO, ENOENT
+from errno import EIO, ENOENT, ENOTDIR
 from functools import partial
 from hashlib import md5
 from itertools import chain, count, cycle, islice, takewhile
 from operator import itemgetter
 from re import compile as re_compile
-from string import hexdigits
+from string import digits, hexdigits
 from threading import Lock
 from time import time
 from types import EllipsisType
@@ -72,14 +72,10 @@ APS_BASE_URLS = (
     "http://aps.115.com", 
     "http://anxia.com/aps", 
     "http://v.anxia.com/aps", 
-    "http://anxia.com/aps", 
-    "http://v.anxia.com/aps", 
-    "http://anxia.com/aps", 
-    "http://v.anxia.com/aps", 
-    "http://aps.115.com", 
 )
 
 _n_get_ancestors = 0
+_n_get_count = 0
 
 
 class DirNode(NamedTuple):
@@ -281,9 +277,127 @@ def get_path_to_cid(
 
 
 @overload
+def get_file_count(
+    client: str | P115Client, 
+    cid: int = 0, 
+    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    *, 
+    async_: Literal[False] = False, 
+    **request_kwargs, 
+) -> int:
+    ...
+@overload
+def get_file_count(
+    client: str | P115Client, 
+    cid: int = 0, 
+    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    *, 
+    async_: Literal[True], 
+    **request_kwargs, 
+) -> Coroutine[Any, Any, int]:
+    ...
+def get_file_count(
+    client: str | P115Client, 
+    cid: int = 0, 
+    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    *, 
+    async_: Literal[False, True] = False, 
+    **request_kwargs, 
+) -> int | Coroutine[Any, Any, int]:
+    """获取文件总数
+
+    :param client: 115 客户端或 cookies
+    :param cid: 目录 id
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param async_: 是否异步
+    :param request_kwargs: 其它请求参数
+
+    :return: 目录内的文件总数（不包括目录）
+    """
+    if not isinstance(client, P115Client):
+        client = P115Client(client, check_for_relogin=True)
+    if id_to_dirnode is None:
+        id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
+    def get_resp():
+        global _n_get_count
+        n = _n_get_count % 25
+        if n < 7:
+            _n_get_count += 1
+            return client.fs_files(
+                {"cid": cid, "limit": 1, "show_dir": 0}, 
+                base_url=WEBAPI_BASE_URLS[n], 
+                async_=async_, 
+                **request_kwargs, 
+            )
+        n -= 7
+        if n < 4:
+            _n_get_count += 1
+            return client.fs_files_app(
+                {"cid": cid, "hide_data": 1, "show_dir": 0}, 
+                base_url=PROAPI_BASE_URLS[n], 
+                async_=async_, 
+                **request_kwargs, 
+            )
+        n -= 4
+        if n < 3:
+            _n_get_count += 1
+            return client.fs_files_aps(
+                {"cid": cid, "limit": 1, "show_dir": 0}, 
+                base_url=APS_BASE_URLS[n], 
+                async_=async_, 
+                **request_kwargs, 
+            )
+        n -= 3
+        if n < 7:
+            _n_get_count += 1
+            return client.fs_category_get(
+                cid, 
+                base_url=WEBAPI_BASE_URLS[n], 
+                async_=async_, 
+                **request_kwargs, 
+            )
+        n -= 7
+        _n_get_count += 1
+        return client.fs_category_get_app(
+            cid, 
+            base_url=PROAPI_BASE_URLS[n], 
+            async_=async_, 
+            **request_kwargs, 
+        )
+    def gen_step():
+        if cid == 0:
+            resp = yield client.fs_space_summury(async_=async_, **request_kwargs)
+            check_response(resp)
+            return sum(v["count"] for k, v in resp["type_summury"].items() if k.isupper())
+        resp = yield get_resp()
+        if not resp:
+            raise FileNotFoundError(ENOENT, cid)
+        check_response(resp)
+        resp["cid"] = cid
+        if "path" in resp:
+            if cid != int(resp["path"][-1]["cid"]):
+                raise NotADirectoryError(ENOTDIR, resp)
+            if id_to_dirnode is not ...:
+                for info in resp["path"][1:]:
+                    id_to_dirnode[int(info["cid"])] = DirNode(info["name"], int(info["pid"]))
+            return int(resp["count"])
+        else:
+            if int(resp["file_category"]):
+                raise NotADirectoryError(ENOTDIR, resp)
+            if id_to_dirnode is not ...:
+                pid = 0
+                for info in resp["paths"][1:]:
+                    node = DirNode(info["file_name"], pid)
+                    id_to_dirnode[(pid := int(info["file_id"]))] = node
+            return int(resp["count"]) - int(resp["folder_count"])
+    return run_gen_step(gen_step, async_=async_)
+
+
+@overload
 def get_ancestors(
     client: str | P115Client, 
     attr: dict, 
+    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -293,6 +407,7 @@ def get_ancestors(
 def get_ancestors(
     client: str | P115Client, 
     attr: dict, 
+    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -301,6 +416,7 @@ def get_ancestors(
 def get_ancestors(
     client: str | P115Client, 
     attr: dict, 
+    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -309,6 +425,7 @@ def get_ancestors(
 
     :param client: 115 客户端或 cookies
     :param attr: 待查询节点的信息（必须有 id 和 parent_id）
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -322,12 +439,13 @@ def get_ancestors(
                 "name": str, # 名字
             }
     """
+    if not isinstance(client, P115Client):
+        client = P115Client(client, check_for_relogin=True)
+    if id_to_dirnode is None:
+        id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
     def get_resp():
         global _n_get_ancestors
-        nonlocal client
-        if not isinstance(client, P115Client):
-            client = P115Client(client, check_for_relogin=True)
-        n = _n_get_ancestors % 30
+        n = _n_get_ancestors % 25
         if n < 7:
             _n_get_ancestors += 1
             return client.fs_files(
@@ -346,7 +464,7 @@ def get_ancestors(
                 **request_kwargs, 
             )
         n -= 4
-        if n < 8:
+        if n < 3:
             _n_get_ancestors += 1
             return client.fs_files_aps(
                 {"cid": attr["parent_id"], "limit": 1}, 
@@ -354,10 +472,10 @@ def get_ancestors(
                 async_=async_, 
                 **request_kwargs, 
             )
-        if attr.get("is_dir"):
+        if attr.get("is_dir", False) or attr.get("is_directory", False):
             _n_get_ancestors = 0
             return get_resp()
-        n -= 8
+        n -= 3
         if n < 7:
             _n_get_ancestors += 1
             return client.fs_category_get(
@@ -379,25 +497,32 @@ def get_ancestors(
             return [{"id": 0, "parent_id": 0, "name": ""}]
         resp = yield get_resp()
         if not resp:
-            raise FileNotFoundError(attr)
+            raise FileNotFoundError(ENOENT, attr)
         check_response(resp)
+        resp["attr"] = attr
+        ancestors: list[dict] = [{"id": 0, "parent_id": 0, "name": ""}]
+        add_ancestor = ancestors.append
+        pid = 0
         if "path" in resp:
-            return [{
-                "parent_id": int(info["pid"]), 
-                "id": int(info["cid"]), 
-                "name": info["name"], 
-            } for info in resp["path"]]
+            if attr["parent_id"] != int(resp["path"][-1]["cid"]):
+                raise FileNotFoundError(ENOENT, resp)
+            for info in resp["path"][1:]:
+                add_ancestor({
+                    "parent_id": pid, 
+                    "id": (pid := int(info["cid"])), 
+                    "name": info["name"], 
+                })
         else:
-            ancestors: list[dict] = []
-            add_ans = ancestors.append
-            pid = 0
             for info in resp["paths"]:
-                add_ans({
+                add_ancestor({
                     "parent_id": pid, 
                     "id": (pid := int(info["file_id"])), 
                     "name": info["file_name"], 
                 })
-            return ancestors
+        if id_to_dirnode is not ...:
+            for ans in ancestors[1:]:
+                id_to_dirnode[ans["id"]] = DirNode(ans["name"], ans["parent_id"])
+        return ancestors
     return run_gen_step(gen_step, async_=async_)
 
 
@@ -810,34 +935,34 @@ def get_id_to_sha1(
 
 
 @overload
-def filter_na_ids(
+def iter_nodes_skim(
     client: str | P115Client, 
     ids: Iterable[int | str], 
     batch_size: int = 50_000, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
-) -> Iterator[int]:
+) -> Iterator[dict]:
     ...
 @overload
-def filter_na_ids(
+def iter_nodes_skim(
     client: str | P115Client, 
     ids: Iterable[int | str], 
     batch_size: int = 50_000, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
-) -> AsyncIterator[int]:
+) -> AsyncIterator[dict]:
     ...
-def filter_na_ids(
+def iter_nodes_skim(
     client: str | P115Client, 
     ids: Iterable[int | str], 
     batch_size: int = 50_000, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
-) -> Iterator[int] | AsyncIterator[int]:
-    """找出一组 id 中无效的，所谓无效就是指不在网盘中，可能已经被删除，也可能从未存在过
+) -> Iterator[dict] | AsyncIterator[dict]:
+    """获取一组节点的简略信息
 
     :param client: 115 客户端或 cookies
     :param ids: 一组文件或目录的 id
@@ -845,27 +970,19 @@ def filter_na_ids(
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
-    :return: 迭代器，筛选出所有无效的 id
+    :return: 迭代器，获取节点的简略信息
     """
     if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     file_skim = client.fs_file_skim
     def gen_step():
-        if isinstance(ids, Sequence):
-            it: Iterator[Iterable[int | str]] = (ids[i:i+batch_size] for i in range(0, len(ids), batch_size))
-        else:
-            ids_it = iter(ids)
-            it = takewhile(bool, (tuple(islice(ids_it, batch_size)) for _ in count()))
-        for batch in it:
+        from .edit import chunked
+        for batch in chunked(ids, batch_size):
             resp = yield file_skim(batch, method="POST", async_=async_, **request_kwargs)
             if resp.get("error") == "文件不存在":
-                yield YieldFrom(map(int, batch), identity=True)
-            else:
-                check_response(resp)
-                yield YieldFrom(
-                    set(map(int, batch)) - {int(a["file_id"]) for a in resp["data"]}, 
-                    identity=True, 
-                )
+                continue
+            check_response(resp)
+            yield YieldFrom(resp["data"], identity=True)
     return run_gen_step_iter(gen_step, async_=async_)
 
 
@@ -2760,11 +2877,11 @@ def iter_dangling_files(
             }
             if pids:
                 if async_:
-                    na_cids.update(filter_na_ids(client, pids, **request_kwargs))
+                    na_cids.update(iter_nodes_skim(client, pids, **request_kwargs))
                 else:
                     yield async_foreach(
                         na_cids.add, 
-                        filter_na_ids(client, pids, async_=True, **request_kwargs), 
+                        iter_nodes_skim(client, pids, async_=True, **request_kwargs), 
                     )
                 ok_cids |= pids - na_cids
             for a, info in zip(t, resp["data"]):
@@ -3220,6 +3337,85 @@ def iter_selected_nodes_by_edit(
 
 
 @overload
+def iter_selected_nodes_by_document(
+    client: str | P115Client, 
+    ids: Iterable[int], 
+    normalize_attr: None | Callable[[dict], dict] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
+    max_workers: None | int = 20, 
+    *, 
+    async_: Literal[False] = False, 
+    **request_kwargs, 
+) -> Iterator[dict]:
+    ...
+@overload
+def iter_selected_nodes_by_document(
+    client: str | P115Client, 
+    ids: Iterable[int], 
+    normalize_attr: None | Callable[[dict], dict] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
+    max_workers: None | int = 20, 
+    *, 
+    async_: Literal[True], 
+    **request_kwargs, 
+) -> AsyncIterator[dict]:
+    ...
+def iter_selected_nodes_by_document(
+    client: str | P115Client, 
+    ids: Iterable[int], 
+    normalize_attr: None | Callable[[dict], dict] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
+    max_workers: None | int = 20, 
+    *, 
+    async_: Literal[False, True] = False, 
+    **request_kwargs, 
+) -> Iterator[dict] | AsyncIterator[dict]:
+    """获取一组 id 的信息
+
+    :param client: 115 客户端或 cookies
+    :param ids: 一组文件或目录的 id
+    :param normalize_attr: 把数据进行转换处理，使之便于阅读
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典，如果为 ...，则忽略
+    :param max_workers: 最大并发数
+    :param async_: 是否异步
+    :param request_kwargs: 其它请求参数
+
+    :return: 迭代器，产生详细的信息
+    """
+    if not isinstance(client, P115Client):
+        client = P115Client(client, check_for_relogin=True)
+    if id_to_dirnode is None:
+        id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
+    get_method = cycle((
+        partial(client.fs_document, base_url="http://webapi.115.com"), 
+        partial(client.fs_document_app, base_url="http://proapi.115.com"), 
+    )).__next__
+    def get_document(info: dict, /):
+        return get_method()(
+            info["pick_code"], 
+            async_=async_, 
+            **request_kwargs, 
+        )
+    def project(resp: dict, /) -> None | dict:
+        if resp.get("code") == 31001 or resp.get("msg_code") == 70005:
+            return None
+        info = resp["data"]
+        if id_to_dirnode is not ...:
+            if not info["file_sha1"]:
+                id_to_dirnode[int(info["file_id"])] = DirNode(info["file_name"], int(info["parent_id"]))
+        if normalize_attr is None:
+            return info
+        return normalize_attr(info)
+    it = iter_nodes_skim(client, ids, async_=async_, **request_kwargs)
+    if async_:
+        return async_filter(None, async_map(project, taskgroup_map( # type: ignore
+            get_document, it, max_workers=max_workers, kwargs=request_kwargs)))
+    else:
+        return filter(None, map(project, threadpool_map(
+            get_document, it, max_workers=max_workers, kwargs=request_kwargs)))
+
+
+@overload
 def iter_selected_nodes_using_star_event(
     client: str | P115Client, 
     ids: Iterable[int], 
@@ -3421,7 +3617,7 @@ def iter_selected_dirs_using_star(
             client, 
             order="user_utime", 
             asc=0, 
-            first_page_size=64, 
+            first_page_size=len(ids), 
             id_to_dirnode=id_to_dirnode, 
             normalize_attr=normalize_attr, 
             app=app, 
@@ -3501,7 +3697,7 @@ def iter_files_with_path(
             pid = attr["parent_id"]
             name = attr["name"]
             pid_to_files[pid].append(attr)
-            if pid in name_to_pid:
+            if name in name_to_pid:
                 name_to_pid[name] = 0
             else:
                 name_to_pid[name] = pid
@@ -3511,24 +3707,16 @@ def iter_files_with_path(
                 client, 
                 cid, 
                 app="android", 
-                cooldown=0.5, 
+                cooldown=1, 
                 base_url=cycle(("http://proapi.115.com", "https://proapi.115.com")).__next__, 
                 async_=async_, 
                 **request_kwargs, 
             ), 
         )
-        # 名字 到 目录路径 的映射，如果名字不唯一，则设为 ()
-        name_to_isuniq: dict[str, bool] = {}
         # 从导出的目录树文件中获取完整路径，再根据父目录对名字进行分组
         dirpatht_to_names: dict[tuple[str, ...], list[str]] = defaultdict(list)
         def update_dirpatht_to_names(patht: list[str], /):
-            dir_patht = tuple(patht[:-1])
-            name = patht[-1]
-            dirpatht_to_names[dir_patht].append(name)
-            if name in name_to_isuniq:
-                name_to_isuniq[name] = False
-            else:
-                name_to_isuniq[name] = True
+            dirpatht_to_names[tuple(patht[:-1])].append(patht[-1])
         it = export_dir_parse_iter(
             client, 
             export_id=export_id, 
@@ -3546,6 +3734,15 @@ def iter_files_with_path(
         # 尽量从所收集到名字中移除目录
         for t_patht in islice(dirpatht_to_names, 1, None):
             dirpatht_to_names[t_patht[:-1]].remove(t_patht[-1])
+        # 收集所有名字到所归属的路径列表
+        name_to_list_dirpatht: dict[str, list[tuple[str, ...]]] = defaultdict(list)
+        for dirpatht, names in dirpatht_to_names.items():
+            for name in names:
+                name_to_list_dirpatht[name].append(dirpatht)
+        # 仅在目录树中出现的名字必是目录，直接予以删除
+        for name in name_to_list_dirpatht.keys() - name_to_pid.keys():
+            for dir_patht in name_to_list_dirpatht["name"]:
+                dirpatht_to_names[dir_patht] = [n for n in dirpatht_to_names[dir_patht] if n != name]
         # 对名字列表进行排序然后计算摘要值
         def hash_names(names: Iterable[str], /) -> str:
             s = str(sorted(names)).encode("utf-8")
@@ -3557,7 +3754,7 @@ def iter_files_with_path(
             if not names:
                 continue
             for name in names:
-                if (pid := name_to_pid.get(name)) and name_to_isuniq.get(name):
+                if (pid := name_to_pid.get(name)) and len(name_to_list_dirpatht.get(name, ())) == 1:
                     pid_to_dirpatht[pid] = dir_patht
                     break
             else:
@@ -3566,7 +3763,18 @@ def iter_files_with_path(
                     undetermined[hashed] = ()
                 else:
                     undetermined[hashed] = dir_patht
-        del name_to_pid, name_to_isuniq, dirpatht_to_names
+                def detect_file(name):
+                    if ext := splitext(name)[-1][1:]:
+                        if ext.strip(digits):
+                            return ext.isalnum()
+                    return False
+                hashed2 = hash_names(filter(detect_file, names))
+                if hashed != hashed2:
+                    if hashed2 in undetermined:
+                        undetermined[hashed2] = ()
+                    else:
+                        undetermined[hashed2] = dir_patht
+        del name_to_pid, name_to_list_dirpatht, dirpatht_to_names
         # 假设文件名列表相同，就关联 parent_id 到它的路径（注意：这有可能出错，例如有空目录和某个文件同名时）
         if len(pid_to_files) > len(pid_to_dirpatht):
             for pid, files in pid_to_files.items():
@@ -3576,22 +3784,49 @@ def iter_files_with_path(
                 if t_patht := undetermined.pop(hashed, ()):
                     pid_to_dirpatht[pid] = t_patht
         del undetermined
+        unbound_pids = pid_to_files.keys() - pid_to_dirpatht.keys()
+        add_pid = unbound_pids.add
+        do_through: Callable = async_through if async_ else through
+        id_to_dirnode: dict[int, DirNode] = {}
+        while unbound_pids:
+            yield do_through(iter_selected_nodes_by_document(
+                client, 
+                unbound_pids, 
+                id_to_dirnode=id_to_dirnode, 
+                async_=async_, # type: ignore
+                **request_kwargs, 
+            ))
+            unbound_pids.clear()
+            for fid, (name, pid) in id_to_dirnode.items():
+                if pid and pid not in id_to_dirnode and pid not in pid_to_dirpatht:
+                    add_pid(pid)
+        for pid in pid_to_files.keys() - pid_to_dirpatht.keys():
+            if pid not in id_to_dirnode:
+                continue
+            pids = [pid]
+            name, pid = id_to_dirnode[pid]
+            names = [name]
+            dir_patht = ()
+            while pid:
+                if pid in pid_to_dirpatht:
+                    dir_patht = pid_to_dirpatht[pid]
+                    break
+                pids.append(pid)
+                name, pid = id_to_dirnode[pid]
+                names.append(name)
+            else:
+                if not pid:
+                    dir_patht = ("",)
+            if dir_patht:
+                pids.reverse()
+                names.reverse()
+                for pid, name in zip(pids, names):
+                    dir_patht = pid_to_dirpatht[pid] = (*dir_patht, name)
         # 迭代地返回所有文件节点信息
         for pid, files in pid_to_files.items():
-            if pid in pid_to_dirpatht:
-                dir_patht = pid_to_dirpatht[pid]
-            else:
-                ancestors: list[dict] = yield get_ancestors(
-                    client, 
-                    files[0], 
-                    async_=async_, # type: ignore
-                    **request_kwargs, 
-                )
-                patht = [""]
-                add_part = patht.append
-                for info in ancestors[1:]:
-                    add_part(info["name"])
-                    dir_patht = pid_to_dirpatht[info["id"]] = tuple(patht)
+            if pid not in pid_to_dirpatht:
+                continue
+            dir_patht = pid_to_dirpatht[pid]
             dir_path = joins(dir_patht) + "/"
             dir_posixpath = "/".join(n.replace("/", "|") for n in dir_patht) + "/"
             for attr in files:

@@ -27,8 +27,8 @@ from p115client.const import CLASS_TO_TYPE, SUFFIX_TO_TYPE
 from p115client.exception import BusyOSError, DataError, P115Warning
 from p115client.tool.fs_files import iter_fs_files, iter_fs_files_threaded
 from p115client.tool.iterdir import (
-    get_id_to_path, iter_stared_dirs, iter_selected_nodes, iter_selected_nodes_using_star_event, 
-    iter_selected_nodes_by_category_get, 
+    get_file_count, get_id_to_path, iter_stared_dirs, iter_selected_nodes, 
+    iter_selected_nodes_using_star_event, iter_selected_nodes_by_category_get, 
 )
 from p115client.tool.life import (
     iter_life_behavior, iter_life_behavior_once, IGNORE_BEHAVIOR_TYPES, BEHAVIOR_TYPE_TO_NAME, 
@@ -1069,19 +1069,9 @@ def updatedb(
         submit = executor.submit
         cache_futures: dict[int, Future] = {}
         kwargs = {**request_kwargs, "timeout": auto_splitting_statistics_timeout}
-        def get_dir_size(cid: int = 0, /) -> int | float:
+        def get_file_count_in_tree(cid: int = 0, /) -> int | float:
             try:
-                if cid:
-                    resp = client.fs_category_get_app(cid, **kwargs)
-                    if not resp:
-                        return 0
-                    check_response(resp)
-                    return int(resp["count"])
-                else:
-                    resp = check_response(client.fs_space_summury(**kwargs))
-                    if not resp["type_summury"]:
-                        return float("inf")
-                    return sum(v["count"] for k, v in resp["type_summury"].items() if k.isupper())
+                return get_file_count(client, cid)
             except Exception as e:
                 if is_timeouterror(e):
                     if logger is not None:
@@ -1092,7 +1082,7 @@ def updatedb(
         if need_calc_size:
             for cid in top_ids:
                 if cid not in cache_futures:
-                    cache_futures[cid] = submit(get_dir_size, cid)
+                    cache_futures[cid] = submit(get_file_count_in_tree, cid)
         gen = bfs_gen(iter(top_ids), unpack_iterator=True) # type: ignore
         send = gen.send
         for i, id in enumerate(gen):
@@ -1155,7 +1145,7 @@ def updatedb(
                     for cid in iter_descendants_fast(con, id, fields=False, ensure_file=False, max_depth=1):
                         send(cid)
                         if need_calc_size and cid not in cache_futures:
-                            cache_futures[cid] = submit(get_dir_size, cid)
+                            cache_futures[cid] = submit(get_file_count_in_tree, cid)
     finally:
         if need_calc_size:
             executor.shutdown(wait=False, cancel_futures=True)

@@ -75,9 +75,11 @@ CRE_COOKIES_UID_search: Final = re_compile(r"(?<=\bUID=)[^\s;]+").search
 CRE_API_match: Final = re_compile(r"http://(web|pro)api.115.com(?=/|\?|#|$)").match
 ED2K_NAME_TRANSTAB: Final = dict(zip(b"/|", ("%2F", "%7C")))
 
-_httpx_request = None
 get_anxia_origin = cycle(("http://anxia.com", "http://v.anxia.com")).__next__
+get_proapi_origin = cycle(("http://proapi.115.com", "https://proapi.115.com")).__next__
+get_webapi_origin = cycle(("http://webapi.115.com", "https://webapi.115.com")).__next__
 _default_k_ec = {"k_ec": ecdh_encode_token(0).decode()}
+_httpx_request = None
 
 
 def make_prefix_generator(
@@ -157,7 +159,7 @@ def complete_webapi(
 def complete_proapi(
     path: str, 
     /, 
-    base_url: str | Callable[[], str] = "", 
+    base_url: bool | str | Callable[[], str] = False, 
     app: str = "", 
 ) -> str:
     if path and not path.startswith("/"):
@@ -166,8 +168,12 @@ def complete_proapi(
         app = "/" + app
     if callable(base_url):
         base_url = base_url()
-    if not base_url:
+    elif base_url is True:
+        base_url = get_proapi_origin()
+    elif base_url is False:
         base_url = "https://proapi.115.com"
+    elif not base_url:
+        base_url = "http://proapi.115.com"
     return f"{base_url}{app}{path}"
 
 
@@ -385,6 +391,12 @@ def check_response(resp: dict | Awaitable[dict], /) -> dict | Coroutine[Any, Any
                 # {"state": false, "errno": 20021, "error": "后缀名不正确，请重新输入"}
                 case 20021:
                     raise OperationalError(errno.ENOTSUP, resp)
+                # {"state": false, "errno": 31001, "error": "所预览的文件不存在。"}
+                case 31001:
+                    raise FileNotFoundError(errno.ENOENT, resp)
+                # {"state": false, "errno": 31004, "error": "文档未上传完整，请上传完成后再进行查看。"}
+                case 31004:
+                    raise FileNotFoundError(errno.ENOENT, resp)
                 # {"state": false, "errno": 50003, "error": "很抱歉，该文件提取码不存在。"}
                 case 50003:
                     raise FileNotFoundError(errno.ENOENT, resp)
@@ -452,7 +464,7 @@ def check_response(resp: dict | Awaitable[dict], /) -> dict | Coroutine[Any, Any
                     raise P115OSError(errno.EFBIG, resp)
                 case 70004:
                     raise IsADirectoryError(errno.EISDIR, resp)
-                case 70005:
+                case 70005 | 70008:
                     raise FileNotFoundError(errno.ENOENT, resp)
         raise P115OSError(errno.EIO, resp)
     if isinstance(resp, dict):
@@ -3104,7 +3116,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "chrome", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -3116,7 +3128,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "chrome", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -3127,7 +3139,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "chrome", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -3840,7 +3852,7 @@ class P115Client:
         payload: list | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -3852,7 +3864,7 @@ class P115Client:
         payload: list | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -3863,7 +3875,7 @@ class P115Client:
         payload: list | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -3915,7 +3927,7 @@ class P115Client:
 
         :payload:
             - cid: int | str
-            - aid: int | str = 1
+            - aid: int | str = 1 💡 area_id。1:网盘文件 7:回收站 120:已删除
         """
         api = complete_webapi("/category/get", base_url=base_url)
         if isinstance(payload, (int, str)):
@@ -3928,7 +3940,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -3940,7 +3952,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -3951,7 +3963,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -3962,7 +3974,7 @@ class P115Client:
 
         :payload:
             - cid: int | str
-            - aid: int | str = 1
+            - aid: int | str = 1 💡 area_id。1:网盘文件 7:回收站 120:已删除
         """
         api = complete_proapi("/2.0/category/get", base_url, app)
         if isinstance(payload, (int, str)):
@@ -4136,7 +4148,7 @@ class P115Client:
         /, 
         pid: int = 0, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -4149,7 +4161,7 @@ class P115Client:
         /, 
         pid: int = 0, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -4161,7 +4173,7 @@ class P115Client:
         /, 
         pid: int = 0, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -4278,7 +4290,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -4290,7 +4302,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -4301,7 +4313,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -4380,7 +4392,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -4392,7 +4404,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -4403,7 +4415,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -4513,7 +4525,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -4525,7 +4537,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -4536,7 +4548,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -4588,6 +4600,9 @@ class P115Client:
 
         GET https://webapi.115.com/files/document
 
+        .. note::
+            即使文件格式不正确或者是一个目录，也可返回一些信息（包括 parent_id）
+
         :payload:
             - pickcode: str
         """
@@ -4602,7 +4617,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -4614,7 +4629,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -4625,7 +4640,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -4633,6 +4648,9 @@ class P115Client:
         """获取图片的各种链接
 
         GET https://proapi.115.com/android/files/document
+
+        .. note::
+            即使文件格式不正确或者是一个目录，也可返回一些信息（包括 parent_id）
 
         :payload:
             - pickcode: str
@@ -4695,7 +4713,7 @@ class P115Client:
         payload: int | str | tuple[int | str] | list | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -4707,7 +4725,7 @@ class P115Client:
         payload: int | str | tuple[int | str] | list | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -4718,7 +4736,7 @@ class P115Client:
         payload: int | str | tuple[int | str] | list | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -5047,8 +5065,8 @@ class P115Client:
             - limit: int = 32 💡 分页大小，目前最大值是 1,150，以前是没限制的
             - offset: int = 0 💡 分页开始的索引，索引从 0 开始计算
 
-            - aid: int | str = 1 💡 area_id，默认即可。如果 aid > 1 或 aid < 0，则只罗列系统文件或目录，比如 "云下载"、"我的接收" 等
-            - asc: 0 | 1 = <default> 💡 是否升序排列。0: 降序 1: 升序
+            - aid: int | str = 1 💡 area_id。1:网盘文件 7:回收站 120:已删除
+            - asc: 0 | 1 = <default> 💡 是否升序排列。0:降序 1:升序
             - code: int | str = <default>
             - count_folders: 0 | 1 = 1 💡 统计文件数和目录数
             - cur: 0 | 1 = <default> 💡 是否只搜索当前目录
@@ -5062,7 +5080,7 @@ class P115Client:
             - min_size: int = 0 💡 最小的文件大小
             - max_size: int = 0 💡 最大的文件大小
             - natsort: 0 | 1 = <default> 💡 是否执行自然排序(natural sorting) 💡 natural sorting
-            - nf: str = <default> 💡 (未知)
+            - nf: str = <default> 💡 不要显示文件（即仅显示目录），但如果 show_dir=0，则此参数无效
             - o: str = <default> 💡 用某字段排序
 
               - "file_name": 文件名
@@ -5128,7 +5146,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -5140,7 +5158,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -5151,7 +5169,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -5174,8 +5192,8 @@ class P115Client:
             - limit: int = 32 💡 分页大小，最大值不一定，看数据量，7,000 应该总是安全的，10,000 有可能报错，但有时也可以 20,000 而成功
             - offset: int = 0 💡 分页开始的索引，索引从 0 开始计算
 
-            - aid: int | str = 1 💡 area_id，默认即可
-            - asc: 0 | 1 = <default> 💡 是否升序排列。0: 降序 1: 升序
+            - aid: int | str = 1 💡 area_id。1:网盘文件 7:回收站 120:已删除
+            - asc: 0 | 1 = <default> 💡 是否升序排列。0:降序 1:升序
             - code: int | str = <default>
             - count_folders: 0 | 1 = 1 💡 统计文件数和目录数
             - cur: 0 | 1 = <default> 💡 是否只搜索当前目录
@@ -5190,6 +5208,7 @@ class P115Client:
             - min_size: int = 0 💡 最小的文件大小
             - max_size: int = 0 💡 最大的文件大小
             - natsort: 0 | 1 = <default> 💡 是否执行自然排序(natural sorting)
+            - nf: str = <default> 💡 不要显示文件（即仅显示目录），但如果 show_dir=0，则此参数无效
             - o: str = <default> 💡 用某字段排序
 
               - "file_name": 文件名
@@ -5250,7 +5269,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -5262,7 +5281,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -5273,7 +5292,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -5290,8 +5309,8 @@ class P115Client:
             - limit: int = 32 💡 分页大小，最大值不一定，看数据量，7,000 应该总是安全的，10,000 有可能报错，但有时也可以 20,000 而成功
             - offset: int = 0 💡 分页开始的索引，索引从 0 开始计算
 
-            - aid: int | str = 1 💡 area_id，默认即可
-            - asc: 0 | 1 = <default> 💡 是否升序排列。0: 降序 1: 升序
+            - aid: int | str = 1 💡 area_id。1:网盘文件 7:回收站 120:已删除
+            - asc: 0 | 1 = <default> 💡 是否升序排列。0:降序 1:升序
             - code: int | str = <default>
             - count_folders: 0 | 1 = 1 💡 统计文件数和目录数
             - cur: 0 | 1 = <default> 💡 是否只搜索当前目录
@@ -5306,6 +5325,7 @@ class P115Client:
             - min_size: int = 0 💡 最小的文件大小
             - max_size: int = 0 💡 最大的文件大小
             - natsort: 0 | 1 = <default> 💡 是否执行自然排序(natural sorting)
+            - nf: str = <default> 💡 不要显示文件（即仅显示目录），但如果 show_dir=0，则此参数无效
             - o: str = <default> 💡 用某字段排序
 
               - "file_name": 文件名
@@ -5407,8 +5427,8 @@ class P115Client:
             - limit: int = 32 💡 分页大小，最大值是 1,200
             - offset: int = 0 💡 分页开始的索引，索引从 0 开始计算
 
-            - aid: int | str = 1 💡 area_id，默认即可
-            - asc: 0 | 1 = <default> 💡 是否升序排列。0: 降序 1: 升序
+            - aid: int | str = 1 💡 area_id。1:网盘文件 7:回收站 120:已删除
+            - asc: 0 | 1 = <default> 💡 是否升序排列。0:降序 1:升序
             - code: int | str = <default>
             - count_folders: 0 | 1 = 1 💡 统计文件数和目录数
             - cur: 0 | 1 = <default> 💡 是否只搜索当前目录
@@ -5928,7 +5948,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -5940,7 +5960,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -5951,7 +5971,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -6095,7 +6115,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -6107,7 +6127,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -6118,7 +6138,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -6248,7 +6268,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -6260,7 +6280,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -6271,7 +6291,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -6436,7 +6456,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -6448,7 +6468,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -6459,7 +6479,7 @@ class P115Client:
         payload: int | str | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -6473,7 +6493,7 @@ class P115Client:
             - limit: int = 32    💡 一页大小，建议控制在 <= 9000，不然会报错
             - offset: int = 0    💡 索引偏移，索引从 0 开始计算
 
-            - aid: int | str = 1 💡 area_id，不知道的话，设置为 1
+            - aid: int | str = 1 💡 area_id。1:网盘文件 7:回收站 120:已删除
             - asc: 0 | 1 = <default> 💡 是否升序排列
             - cur: 0 | 1 = <default> 💡 只罗列当前目录
             - o: str = <default> 💡 用某字段排序
@@ -6722,7 +6742,7 @@ class P115Client:
         payload: str | dict = "", 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -6734,7 +6754,7 @@ class P115Client:
         payload: str | dict = "", 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -6745,7 +6765,7 @@ class P115Client:
         payload: str | dict = "", 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -6867,7 +6887,7 @@ class P115Client:
         payload: dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -6879,7 +6899,7 @@ class P115Client:
         payload: dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -6890,7 +6910,7 @@ class P115Client:
         payload: dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -6921,7 +6941,7 @@ class P115Client:
         /, 
         pid: int = 0, 
         app: str = "chrome", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -6934,7 +6954,7 @@ class P115Client:
         /, 
         pid: int = 0, 
         app: str = "chrome", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -6946,7 +6966,7 @@ class P115Client:
         /, 
         pid: int = 0, 
         app: str = "chrome", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -7035,7 +7055,7 @@ class P115Client:
         payload: dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -7047,7 +7067,7 @@ class P115Client:
         payload: dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -7058,7 +7078,7 @@ class P115Client:
         payload: dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -7140,7 +7160,7 @@ class P115Client:
         payload: dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -7152,7 +7172,7 @@ class P115Client:
         payload: dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -7163,7 +7183,7 @@ class P115Client:
         payload: dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -7277,7 +7297,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -7289,7 +7309,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -7300,7 +7320,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -7308,6 +7328,9 @@ class P115Client:
         """获取音乐信息
 
         GET https://proapi.115.com/android/music/musicplay
+
+        .. note::
+            即使文件格式不正确或者过大（超过 200MB），也可返回一些信息（包括 parent_id），但如果是目录则信息匮乏（但由此也可判定一个目录）
 
         :payload:
             - pickcode: str 💡 提取码
@@ -7429,7 +7452,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -7441,7 +7464,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -7452,7 +7475,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -7539,7 +7562,7 @@ class P115Client:
         payload: tuple[int | str, str] | dict | Iterable[tuple[int | str, str]], 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -7551,7 +7574,7 @@ class P115Client:
         payload: tuple[int | str, str] | dict | Iterable[tuple[int | str, str]], 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -7562,7 +7585,7 @@ class P115Client:
         payload: tuple[int | str, str] | dict | Iterable[tuple[int | str, str]], 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -7638,7 +7661,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -7650,7 +7673,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -7661,7 +7684,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -7781,7 +7804,7 @@ class P115Client:
             下面指定的很多参数其实是一点效果都没有的，具体可以实际验证
 
         :payload:
-            - aid: int | str = 1 💡 area_id，不知道的话，设置为 1
+            - aid: int | str = 1 💡 area_id。1:网盘文件 7:回收站 120:已删除
             - asc: 0 | 1 = <default> 💡 是否升序排列
             - cid: int | str = 0 💡 目录 id
             - count_folders: 0 | 1 = <default> 💡 是否统计目录数，这样就会增加 "folder_count" 和 "file_count" 字段作为统计
@@ -7837,7 +7860,7 @@ class P115Client:
         payload: str | dict = ".", 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -7849,7 +7872,7 @@ class P115Client:
         payload: str | dict = ".", 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -7860,7 +7883,7 @@ class P115Client:
         payload: str | dict = ".", 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -7873,7 +7896,7 @@ class P115Client:
             最多只能取回前 10,000 条数据，也就是 limit + offset <= 10_000
 
         :payload:
-            - aid: int | str = 1 💡 area_id，不知道的话，设置为 1
+            - aid: int | str = 1 💡 area_id。1:网盘文件 7:回收站 120:已删除
             - asc: 0 | 1 = <default> 💡 是否升序排列
             - cid: int | str = 0 💡 目录 id
             - count_folders: 0 | 1 = <default>
@@ -8006,7 +8029,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -8017,7 +8040,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -8027,7 +8050,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -8163,6 +8186,9 @@ class P115Client:
 
         POST https://webapi.115.com/files/star
 
+        .. note::
+            如果其中任何一个 id 目前已经被删除，则会直接返回错误信息
+
         :payload:
             - file_id: int | str 💡 文件或目录 id，多个用逗号 "," 隔开
             - star: 0 | 1 = 1
@@ -8183,7 +8209,7 @@ class P115Client:
         /, 
         star: bool = True, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -8196,7 +8222,7 @@ class P115Client:
         /, 
         star: bool = True, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -8208,7 +8234,7 @@ class P115Client:
         /, 
         star: bool = True, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -8216,6 +8242,9 @@ class P115Client:
         """为文件或目录设置或取消星标
 
         POST https://proapi.115.com/android/files/star
+
+        .. note::
+            如果其中任何一个 id 目前已经被删除，则会直接返回错误信息
 
         :payload:
             - ids: int | str 💡 文件或目录 id，多个用逗号 "," 隔开
@@ -8323,7 +8352,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -8335,7 +8364,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -8346,7 +8375,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -8538,7 +8567,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -8550,7 +8579,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -8561,7 +8590,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -8700,7 +8729,7 @@ class P115Client:
         payload: str | dict = "", 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -8712,7 +8741,7 @@ class P115Client:
         payload: str | dict = "", 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -8723,14 +8752,14 @@ class P115Client:
         payload: str | dict = "", 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *,
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
         """获取 life_list 操作记录明细
 
-        GET https://proapi.115.com/android/1.0/behavior/detail
+        GET https://proapi.115.com/android/behavior/detail
 
         :payload:
             - type: str = "" 💡 操作类型
@@ -8758,7 +8787,7 @@ class P115Client:
             - offset: int = 0
             - date: str = <default>    💡 日期，格式为 YYYY-MM-DD，若指定则只拉取这一天的数据
         """
-        api = complete_proapi("/1.0/behavior/detail", base_url, app)
+        api = complete_proapi("/behavior/detail", base_url, app)
         if isinstance(payload, str):
             payload = {"limit": 32, "offset": 0, "type": payload}
         else:
@@ -9216,7 +9245,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -9227,7 +9256,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -9237,7 +9266,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -10115,6 +10144,8 @@ class P115Client:
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
         api = "http://lixian.115.com/lixianssp/"
+        for k, v in payload.items():
+            payload[k] = str(v)
         if ac:
             payload["ac"] = ac
         payload["app_ver"] = "99.99.99.99"
@@ -11020,7 +11051,7 @@ class P115Client:
         payload: dict, 
         /, 
         app: str = "", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -11032,7 +11063,7 @@ class P115Client:
         payload: dict, 
         /, 
         app: str = "", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -11043,7 +11074,7 @@ class P115Client:
         payload: dict, 
         /, 
         app: str = "", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -11171,7 +11202,7 @@ class P115Client:
         payload: dict, 
         /, 
         app: str = "", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -11183,7 +11214,7 @@ class P115Client:
         payload: dict, 
         /, 
         app: str = "", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -11194,7 +11225,7 @@ class P115Client:
         payload: dict, 
         /, 
         app: str = "", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -11314,7 +11345,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -11326,7 +11357,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -11337,7 +11368,7 @@ class P115Client:
         payload: str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -11406,7 +11437,7 @@ class P115Client:
         payload: int | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -11418,7 +11449,7 @@ class P115Client:
         payload: int | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -11429,7 +11460,7 @@ class P115Client:
         payload: int | dict = 0, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -11500,7 +11531,7 @@ class P115Client:
         payload: dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -11512,7 +11543,7 @@ class P115Client:
         payload: dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -11523,7 +11554,7 @@ class P115Client:
         payload: dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -11604,7 +11635,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -11616,7 +11647,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -11627,7 +11658,7 @@ class P115Client:
         payload: int | str | dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -11883,7 +11914,7 @@ class P115Client:
         /, 
         request: None | Callable = None, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -11896,7 +11927,7 @@ class P115Client:
         /, 
         request: None | Callable = None, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -11908,7 +11939,7 @@ class P115Client:
         /, 
         request: None | Callable = None, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -11993,7 +12024,7 @@ class P115Client:
         payload: dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -12005,7 +12036,7 @@ class P115Client:
         payload: dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -12016,7 +12047,7 @@ class P115Client:
         payload: dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -12358,7 +12389,7 @@ class P115Client:
     def upload_info(
         self, 
         /, 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -12368,7 +12399,7 @@ class P115Client:
     def upload_info(
         self, 
         /, 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -12377,7 +12408,7 @@ class P115Client:
     def upload_info(
         self, 
         /, 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -12429,7 +12460,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -12440,7 +12471,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -12450,7 +12481,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -13368,7 +13399,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -13379,7 +13410,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -13389,7 +13420,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -13637,7 +13668,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -13648,7 +13679,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -13658,7 +13689,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -13675,7 +13706,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -13686,7 +13717,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -13696,7 +13727,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -13911,7 +13942,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -13922,7 +13953,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -13932,7 +13963,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -13950,7 +13981,7 @@ class P115Client:
         payload: dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -13962,7 +13993,7 @@ class P115Client:
         payload: dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -13973,7 +14004,7 @@ class P115Client:
         payload: dict, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -13990,7 +14021,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -14001,7 +14032,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -14011,7 +14042,7 @@ class P115Client:
         self, 
         /, 
         app: str = "android", 
-        base_url: str | Callable[[], str] = "", 
+        base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
