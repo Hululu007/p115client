@@ -13,15 +13,8 @@ from functools import partial
 from itertools import batched, pairwise
 from typing import overload, Any, Literal
 
-from iterutils import run_gen_step
+from iterutils import chunked, run_gen_step
 from p115client import check_response, P115Client
-
-
-def chunked[T](it: Iterable[T], n: int = 1, /) -> Iterator[Sequence[T]]:
-    if isinstance(it, Sequence):
-        yield from (it[i:j] for i, j in pairwise(range(0, len(it)+n, n)))
-    else:
-        yield from batched(it, n)
 
 
 def update_abstract(

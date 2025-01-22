@@ -10,7 +10,7 @@ __all__ = [
     "traverse_files", "iter_dupfiles", "iter_image_files", "iter_dangling_files", "share_extract_payload", 
     "share_iterdir", "share_iter_files", "iter_selected_nodes", "iter_selected_nodes_by_category_get", 
     "iter_selected_nodes_by_edit", "iter_selected_nodes_by_document", "iter_selected_nodes_using_star_event", 
-    "iter_selected_dirs_using_star", "iter_files_with_path", 
+    "iter_selected_dirs_using_star", "iter_files_with_dirname", "iter_files_with_path", 
 ]
 __doc__ = "这个模块提供了一些和目录信息罗列有关的函数"
 
@@ -35,7 +35,7 @@ from weakref import WeakValueDictionary
 from asynctools import async_chain, async_filter, async_map, to_list
 from concurrenttools import taskgroup_map, threadpool_map
 from iterutils import (
-    async_foreach, ensure_aiter, foreach, run_gen_step, run_gen_step_iter, 
+    chunked, async_foreach, ensure_aiter, foreach, run_gen_step, run_gen_step_iter, 
     through, async_through, Yield, YieldFrom, 
 )
 from iter_collect import grouped_mapping, grouped_mapping_async, iter_keyed_dups, iter_keyed_dups_async, SupportsLT
@@ -974,14 +974,15 @@ def iter_nodes_skim(
     """
     if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
-    file_skim = client.fs_file_skim
     def gen_step():
-        from .edit import chunked
+        file_skim = client.fs_file_skim
         for batch in chunked(ids, batch_size):
             resp = yield file_skim(batch, method="POST", async_=async_, **request_kwargs)
             if resp.get("error") == "文件不存在":
                 continue
             check_response(resp)
+            for a in resp["data"]:
+                a["file_name"] = unescape_115_charref(a["file_name"])
             yield YieldFrom(resp["data"], identity=True)
     return run_gen_step_iter(gen_step, async_=async_)
 
@@ -2033,9 +2034,7 @@ def iter_files_raw(
     }
     if suffix:
         payload["suffix"] = suffix
-    elif type == 99:
-        payload["show_dir"] = 0
-    else:
+    elif type != 99:
         payload["type"] = type
     return _iter_fs_files(
         client, 
@@ -3640,6 +3639,158 @@ def iter_selected_dirs_using_star(
                     discard(cid)
                     if not ids:
                         break
+        except (StopIteration, StopAsyncIteration):
+            pass
+    return run_gen_step_iter(gen_step, async_=async_)
+
+
+@overload
+def iter_files_with_dirname(
+    client: str | P115Client, 
+    cid: int = 0, 
+    page_size: int = 0, 
+    suffix: str = "", 
+    type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
+    order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
+    asc: Literal[0, 1] = 1, 
+    cur: Literal[0, 1] = 0, 
+    normalize_attr: Callable[[dict], dict] = normalize_attr, 
+    raise_for_changed_count: bool = False, 
+    app: str = "android", 
+    cooldown: int | float = 0.5, 
+    *, 
+    async_: Literal[False] = False, 
+    **request_kwargs, 
+) -> Iterator[dict]:
+    ...
+@overload
+def iter_files_with_dirname(
+    client: str | P115Client, 
+    cid: int = 0, 
+    page_size: int = 0, 
+    suffix: str = "", 
+    type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
+    order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
+    asc: Literal[0, 1] = 1, 
+    cur: Literal[0, 1] = 0, 
+    normalize_attr: Callable[[dict], dict] = normalize_attr, 
+    raise_for_changed_count: bool = False, 
+    app: str = "android", 
+    cooldown: int | float = 0.5, 
+    *, 
+    async_: Literal[True], 
+    **request_kwargs, 
+) -> AsyncIterator[dict]:
+    ...
+def iter_files_with_dirname(
+    client: str | P115Client, 
+    cid: int = 0, 
+    page_size: int = 0, 
+    suffix: str = "", 
+    type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
+    order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
+    asc: Literal[0, 1] = 1, 
+    cur: Literal[0, 1] = 0, 
+    normalize_attr: Callable[[dict], dict] = normalize_attr, 
+    raise_for_changed_count: bool = False, 
+    app: str = "android", 
+    cooldown: int | float = 0.5, 
+    *, 
+    async_: Literal[False, True] = False, 
+    **request_kwargs, 
+) -> Iterator[dict] | AsyncIterator[dict]:
+    """遍历目录树，获取文件信息（会专门提供一个 "dirname"，就是目录名字，根目录名字为 ""）
+
+    :param client: 115 客户端或 cookies
+    :param cid: 目录 id
+    :param page_size: 分页大小
+    :param suffix: 后缀名（优先级高于 type）
+    :param type: 文件类型
+
+        - 1: 文档
+        - 2: 图片
+        - 3: 音频
+        - 4: 视频
+        - 5: 压缩包
+        - 6: 应用
+        - 7: 书籍
+        - 99: 仅文件
+
+    :param order: 排序
+
+        - "file_name": 文件名
+        - "file_size": 文件大小
+        - "file_type": 文件种类
+        - "user_utime": 修改时间
+        - "user_ptime": 创建时间
+        - "user_otime": 上一次打开时间
+
+    :param asc: 升序排列。0: 否，1: 是
+    :param cur: 仅当前目录。0: 否（将遍历子目录树上所有叶子节点），1: 是
+    :param normalize_attr: 把数据进行转换处理，使之便于阅读
+    :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
+    :param app: 使用某个 app （设备）的接口
+    :param cooldown: 冷却时间，大于 0，则使用此时间间隔执行并发
+    :param async_: 是否异步
+    :param request_kwargs: 其它请求参数
+
+    :return: 迭代器，返回此目录内的（仅文件）文件信息
+    """
+    suffix = suffix.strip(".")
+    if not (type or suffix):
+        raise ValueError("please set the non-zero value of suffix or type")
+    payload: dict = {
+        "asc": asc, "cid": cid, "count_folders": 0, "cur": cur, "o": order, 
+        "offset": 0, "show_dir": 0, 
+    }
+    if suffix:
+        payload["suffix"] = suffix
+    elif type != 99:
+        payload["type"] = type
+    if not isinstance(client, P115Client):
+        client = P115Client(client, check_for_relogin=True)
+    def gen_step():
+        request_kwargs.update(
+            page_size=page_size, 
+            app=app, 
+            raise_for_changed_count=raise_for_changed_count, 
+        )
+        if cooldown <= 0:
+            request_kwargs["async_"] = async_
+            func: Callable = iter_fs_files
+        else:
+            request_kwargs["cooldown"] = cooldown
+            func = iter_fs_files_asynchronized if async_ else iter_fs_files_threaded
+        it = func(client, payload, **request_kwargs)
+        get_next = it.__anext__ if async_ else it.__next__
+        try:
+            pid_to_name = {0: ""}
+            while True:
+                resp = yield get_next
+                files = list(map(normalize_attr, resp["data"]))
+                pids = (pid for a in files if (pid := a["parent_id"]) not in pid_to_name)
+                if async_:
+                    async def request():
+                        async for info in iter_nodes_skim(
+                            client, 
+                            pids, 
+                            async_=True, 
+                            **request_kwargs, 
+                        ):
+                            pid_to_name[int(info["file_id"])] = info["file_name"] 
+                    yield request
+                else:
+                    pid_to_name.update(
+                        (int(info["file_id"]), info["file_name"])
+                        for info in iter_nodes_skim(
+                            client, 
+                            pids, 
+                            **request_kwargs, 
+                        )
+                    )
+                for attr in files:
+                    attr["dirname"] = pid_to_name[attr["parent_id"]]
+                    yield Yield(attr, identity=True)
         except (StopIteration, StopAsyncIteration):
             pass
     return run_gen_step_iter(gen_step, async_=async_)
