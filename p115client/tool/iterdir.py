@@ -3699,7 +3699,7 @@ def iter_files_with_dirname(
     async_: Literal[False, True] = False, 
     **request_kwargs, 
 ) -> Iterator[dict] | AsyncIterator[dict]:
-    """遍历目录树，获取文件信息（会专门提供一个 "dirname"，就是目录名字，根目录名字为 ""）
+    """遍历目录树，获取文件信息（会专门提供一个 "dir_name" 和 "dir_pickcode"，就是目录的名字和提取码，根目录名字和提取码都是 ""）
 
     :param client: 115 客户端或 cookies
     :param cid: 目录 id
@@ -3764,11 +3764,11 @@ def iter_files_with_dirname(
         it = func(client, payload, **request_kwargs)
         get_next = it.__anext__ if async_ else it.__next__
         try:
-            pid_to_name = {0: ""}
+            pid_to_info = {0: {"dir_name": "", "dir_pickcode": ""}}
             while True:
                 resp = yield get_next
                 files = list(map(normalize_attr, resp["data"]))
-                pids = (pid for a in files if (pid := a["parent_id"]) not in pid_to_name)
+                pids = (pid for a in files if (pid := a["parent_id"]) not in pid_to_info)
                 if async_:
                     async def request():
                         async for info in iter_nodes_skim(
@@ -3777,11 +3777,17 @@ def iter_files_with_dirname(
                             async_=True, 
                             **request_kwargs, 
                         ):
-                            pid_to_name[int(info["file_id"])] = info["file_name"] 
+                            pid_to_info[int(info["file_id"])] = {
+                                "dir_name": info["file_name"], 
+                                "dir_pickcode": info["pick_code"], 
+                            }
                     yield request
                 else:
-                    pid_to_name.update(
-                        (int(info["file_id"]), info["file_name"])
+                    pid_to_info.update(
+                        (int(info["file_id"]), {
+                            "dir_name": info["file_name"], 
+                            "dir_pickcode": info["pick_code"], 
+                        })
                         for info in iter_nodes_skim(
                             client, 
                             pids, 
@@ -3789,7 +3795,7 @@ def iter_files_with_dirname(
                         )
                     )
                 for attr in files:
-                    attr["dirname"] = pid_to_name[attr["parent_id"]]
+                    attr.update(pid_to_info[attr["parent_id"]])
                     yield Yield(attr, identity=True)
         except (StopIteration, StopAsyncIteration):
             pass
