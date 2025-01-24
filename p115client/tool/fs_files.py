@@ -132,12 +132,13 @@ def iter_fs_files(
             if payload["offset"] >= count:
                 break
             resp = yield run_gen_step(get_files(payload), async_=async_)
-            if count != (count := int(resp["count"])):
+            if count != int(resp["count"]):
                 message = f"cid={cid} detected count changes during iteration: {count} -> {resp['count']}"
                 if raise_for_changed_count:
                     raise BusyOSError(EBUSY, message)
                 else:
                     warn(message, category=P115Warning)
+                count = int(resp["count"])
     return run_gen_step_iter(gen_step, async_=async_)
 
 
@@ -218,12 +219,13 @@ def iter_fs_files_threaded(
                 yield resp
                 if count < 0:
                     count = int(resp["count"])
-                elif count != (count := int(resp["count"])):
+                elif count != int(resp["count"]):
                     message = f"cid={cid} detected count changes during iteration: {count} -> {resp['count']}"
                     if raise_for_changed_count:
                         raise BusyOSError(EBUSY, message)
                     else:
                         warn(message, category=P115Warning)
+                    count = int(resp["count"])
                 if dq:
                     future, offset = pop()
                 elif not count or offset >= count or offset != resp["offset"] or offset + len(resp["data"]) >= count:
@@ -312,12 +314,13 @@ async def iter_fs_files_asynchronized(
                 yield resp
                 if count < 0:
                     count = int(resp["count"])
-                elif count != (count := int(resp["count"])):
+                elif count != int(resp["count"]):
                     message = f"cid={cid} detected count changes during iteration: {count} -> {resp['count']}"
                     if raise_for_changed_count:
                         raise BusyOSError(EBUSY, message)
                     else:
                         warn(message, category=P115Warning)
+                    count = int(resp["count"])
                 if dq:
                     task, offset = pop()
                 elif not count or offset >= count or offset != resp["offset"] or offset + len(resp["data"]) >= count:

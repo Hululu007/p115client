@@ -1108,14 +1108,17 @@ def _iter_fs_files(
                     for info in resp["path"][1:]:
                         pid, name = int(info["cid"]), info["name"]
                         id_to_dirnode[pid] = DirNode(name, int(info["pid"]))
-                for info in resp["data"]:
-                    attr = _overview_attr(info)
-                    if attr.is_dir:
-                        if id_to_dirnode is not ...:
-                            id_to_dirnode[attr.id] = DirNode(attr.name, attr.parent_id)
-                    elif ensure_file is False:
-                        return
-                    yield Yield(info, identity=True)
+                if ensure_file is None:
+                    yield YieldFrom(resp["data"], identity=True)
+                else:
+                    for info in resp["data"]:
+                        attr = _overview_attr(info)
+                        if attr.is_dir:
+                            if id_to_dirnode is not ...:
+                                id_to_dirnode[attr.id] = DirNode(attr.name, attr.parent_id)
+                        elif ensure_file is False:
+                            return
+                        yield Yield(info, identity=True)
         except (StopAsyncIteration, StopIteration):
             pass
     return run_gen_step_iter(gen_step, async_=async_)
