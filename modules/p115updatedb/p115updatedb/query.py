@@ -21,10 +21,9 @@ from posixpath import join
 from typing import cast, overload, Any, Final, Literal
 from urllib.parse import quote
 
+from iterutils import bfs_gen
 from posixpatht import escape, path_is_dir_form, splits
 from sqlitetools import find, query, transact
-
-from .util import bfs_gen
 
 
 FIELDS: Final = (

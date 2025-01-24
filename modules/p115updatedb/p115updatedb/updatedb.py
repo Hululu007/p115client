@@ -6,12 +6,10 @@ __all__ = ["updatedb_life_iter", "updatedb_life", "updatedb_one", "updatedb_tree
 
 import logging
 
-from collections import deque
 from collections.abc import Iterator, Iterable, Mapping
-from concurrent.futures import Future, ThreadPoolExecutor
 from errno import EBUSY
 from functools import partial
-from itertools import cycle, takewhile
+from itertools import takewhile
 from math import inf, isnan, isinf
 from posixpath import splitext
 from sqlite3 import connect, Connection, Cursor
@@ -21,25 +19,26 @@ from typing import cast, Final, NoReturn
 from warnings import warn
 
 from concurrenttools import run_as_thread
+from iterutils import bfs_gen
 from orjson import dumps
 from p115client import check_response, P115Client
 from p115client.const import CLASS_TO_TYPE, SUFFIX_TO_TYPE
-from p115client.exception import BusyOSError, DataError, P115Warning
+from p115client.exception import BusyOSError, P115Warning
 from p115client.tool.fs_files import iter_fs_files, iter_fs_files_threaded
 from p115client.tool.iterdir import (
     get_file_count, get_id_to_path, iter_stared_dirs, iter_selected_nodes, 
-    iter_selected_nodes_using_star_event, iter_selected_nodes_by_category_get, 
+    iter_selected_nodes_by_document, iter_selected_nodes_using_star_event, 
+    iter_selected_nodes_by_category_get, 
 )
 from p115client.tool.life import (
-    iter_life_behavior, iter_life_behavior_once, IGNORE_BEHAVIOR_TYPES, BEHAVIOR_TYPE_TO_NAME, 
+    iter_life_behavior, IGNORE_BEHAVIOR_TYPES, BEHAVIOR_TYPE_TO_NAME, 
 )
-from sqlitetools import execute, find, query, transact, upsert_items, AutoCloseConnection
+from sqlitetools import execute, find, transact, upsert_items, AutoCloseConnection
 
 from .query import (
-    get_dir_count, get_parent_id, has_id, iter_descendants_fast, iter_existing_id, 
-    iter_id_to_parent_id, iter_parent_id, select_mtime_groups, 
+    get_dir_count, has_id, iter_descendants_fast, iter_existing_id, 
+    iter_id_to_parent_id, select_mtime_groups, 
 )
-from .util import bfs_gen
 
 
 # NOTE: 需要 mtime 的 115 生活事件类型集
@@ -527,7 +526,6 @@ def iterdir(
     first_page_size: int = 0, 
     page_size: int = 0, 
     show_dir: bool = True, 
-    fix_order: bool = True, 
     cooldown: None | int | float = None, 
     **request_kwargs, 
 ) -> tuple[int, list[dict], set[int], Iterator[dict]]:
@@ -538,7 +536,6 @@ def iterdir(
     :param first_page_size: 首次拉取的分页大小，如果 <= 0，自动确定
     :param page_size: 分页大小，如果 <= 0，自动确定
     :param show_dir: 如果为 True，则拉取 cid 所指定目录下直属的文件或目录节点，否则拉取所指定目录下整个子目录树中的所有文件节点（不含目录）
-    :param fix_order: 由于使用 `P115Client.fs_files_app` 时，`fc_mix` 不生效，所以必要时，需要自己去修复顺序
     :param payload: 其它查询参数
     :param request_kwargs: 其它 http 请求参数，会传给具体的请求函数，默认的是 httpx，可用参数 request 进行设置
 
@@ -555,12 +552,10 @@ def iterdir(
     ancestors: list[dict] = []
     def iterate():
         nonlocal count
-        dirs: deque[dict] = deque()
-        push, pop = dirs.append, dirs.popleft
         if cooldown:
             it = iter_fs_files_threaded(
                 client, 
-                {"cid": cid, "show_dir": int(show_dir)}, 
+                {"cid": cid, "show_dir": int(show_dir), "fc_mix": 1}, 
                 page_size=page_size, 
                 app="android", 
                 raise_for_changed_count=True, 
@@ -570,7 +565,7 @@ def iterdir(
         else:
             it = iter_fs_files(
                 client, 
-                {"cid": cid, "show_dir": int(show_dir)}, 
+                {"cid": cid, "show_dir": int(show_dir), "fc_mix": 1}, 
                 first_page_size=first_page_size, 
                 page_size=page_size, 
                 app="android", 
@@ -585,27 +580,15 @@ def iterdir(
             if not n:
                 count = int(resp["count"])
                 yield
-            if fix_order:
-                for attr in map(normalize_attr, resp["data"]):
-                    fid = cast(int, attr["id"])
-                    if fid in seen:
-                        raise BusyOSError(
-                            EBUSY, 
-                            f"duplicate id found, means that some unpulled items have been updated: cid={cid}", 
-                        )
-                    seen_add(fid)
-                    if attr["is_dir"]:
-                        push(attr)
-                    else:
-                        if dirs:
-                            mtime = attr["mtime"]
-                            while dirs and dirs[0]["mtime"] >= mtime:
-                                yield pop()
-                        yield attr
-            else:
-                yield from map(normalize_attr, resp["data"])
-        if dirs:
-            yield from dirs
+            for attr in map(normalize_attr, resp["data"]):
+                fid = cast(int, attr["id"])
+                if fid in seen:
+                    raise BusyOSError(
+                        EBUSY, 
+                        f"duplicate id found, means that some unpulled items have been updated: cid={cid}", 
+                    )
+                seen_add(fid)
+                yield attr
     it = iterate()
     next(it)
     return count, ancestors, seen, it
@@ -959,18 +942,17 @@ def updatedb_tree(
         pairs = dict(iter_id_to_parent_id(con, to_remove))
         to_remove = []
         add_to_recall = to_recall.append
-        # TODO: 由于目录如果已经被删除，打星标时会报错，因此下面的方法并不实际，需要重新研究
-        for attr in iter_selected_nodes_using_star_event(
+        for attr in iter_selected_nodes_by_document(
             client, 
             tuple(pairs.keys()), 
-            normalize_attr = lambda event: {
-                "id": int(event["file_id"]), 
-                "parent_id": int(event["parent_id"]), 
-                "name": event["file_name"], 
-                "pickcode": event["pick_code"], 
-                "is_dir": 1, 
+            normalize_attr = lambda info: {
+                "id": int(info["file_id"]), 
+                "parent_id": int(info["parent_id"]), 
+                "name": info["file_name"], 
+                "pickcode": info["pick_code"], 
+                "is_dir": not info["file_sha1"], 
+                "is_collect": int(info["is_collect"]), 
             }, 
-            with_pics=True, 
             id_to_dirnode=..., 
             **request_kwargs, 
         ):
@@ -1066,88 +1048,75 @@ def updatedb(
     seen_add = seen.add
     need_calc_size = recursive and auto_splitting_threshold > 0
     if need_calc_size:
-        executor = ThreadPoolExecutor(max_workers=1)
-        submit = executor.submit
-        cache_futures: dict[int, Future] = {}
         kwargs = {**request_kwargs, "timeout": auto_splitting_statistics_timeout}
         def get_file_count_in_tree(cid: int = 0, /) -> int | float:
             try:
-                return get_file_count(client, cid)
+                return get_file_count(client, cid, **kwargs)
             except Exception as e:
                 if is_timeouterror(e):
                     if logger is not None:
                         logger.info("[\x1b[1;37;43mSTAT\x1b[0m] \x1b[1m%d\x1b[0m, too big, since statistics timeout, consider the size as \x1b[1;3minf\x1b[0m", id)
                     return float("inf")
                 raise
-    try:
-        if need_calc_size:
-            for cid in top_ids:
-                if cid not in cache_futures:
-                    cache_futures[cid] = submit(get_file_count_in_tree, cid)
-        gen = bfs_gen(iter(top_ids), unpack_iterator=True) # type: ignore
-        send = gen.send
-        for i, id in enumerate(gen):
-            if id in seen:
-                if logger is not None:
-                    logger.warning("[\x1b[1;33mSKIP\x1b[0m] already processed: %s", id)
-                continue
-            if auto_splitting_threshold == 0:
-                need_to_split_tasks = True
-            elif auto_splitting_threshold < 0:
-                need_to_split_tasks = False
-            elif recursive:
-                count = cache_futures[id].result()
-                if count <= 0:
-                    seen_add(id)
-                    continue
-                need_to_split_tasks = count > auto_splitting_threshold
-                if logger is not None:
-                    if need_to_split_tasks:
-                        logger.info(f"[\x1b[1;37;41mTELL\x1b[0m] \x1b[1m{id}\x1b[0m, \x1b[1;31mbig\x1b[0m ({count:,.0f} > {auto_splitting_threshold:,d}), will be pulled in \x1b[1;4;5;31mmulti batches\x1b[0m")
-                    else:
-                        logger.info(f"[\x1b[1;37;42mTELL\x1b[0m] \x1b[1m{id}\x1b[0m, \x1b[1;32mfit\x1b[0m ({count:,.0f} <= {auto_splitting_threshold:,d}), will be pulled in \x1b[1;4;5;32mone batch\x1b[0m")
-            else:
-                need_to_split_tasks = True
-            try:
-                if i and interval > 0:
-                    sleep(interval)
-                start = time()
-                logger.info(f"[\x1b[1;37;43mTELL\x1b[0m] \x1b[1m{id}\x1b[0m is running ...")
-                if need_to_split_tasks or not recursive:
-                    upserted, removed = updatedb_one(client, con, id, **request_kwargs)
-                else:
-                    upserted, removed = updatedb_tree(client, con, id, no_dir_moved=no_dir_moved, **request_kwargs)
-            except FileNotFoundError:
-                kill_items(con, id, commit=True)
-                if logger is not None:
-                    logger.warning("[\x1b[1;33mSKIP\x1b[0m] not found: %s", id)
-            except NotADirectoryError:
-                if logger is not None:
-                    logger.warning("[\x1b[1;33mSKIP\x1b[0m] not a directory: %s", id)
-            except BusyOSError:
-                if logger is not None:
-                    logger.warning("[\x1b[1;35mREDO\x1b[0m] directory is busy updating: %s", id)
-                send(id)
-            except:
-                if logger is not None:
-                    logger.exception("[\x1b[1;31mFAIL\x1b[0m] %s", id)
-                raise
-            else:
-                if logger is not None:
-                    logger.info(
-                        "[\x1b[1;32mGOOD\x1b[0m] \x1b[1m%s\x1b[0m, upsert: %d, remove: %d, cost: %.6f s", 
-                        id, 
-                        upserted, 
-                        removed, 
-                        time() - start, 
-                    )
+    gen = bfs_gen(iter(top_ids), unpack_iterator=True) # type: ignore
+    send = gen.send
+    for i, id in enumerate(gen):
+        if id in seen:
+            if logger is not None:
+                logger.warning("[\x1b[1;33mSKIP\x1b[0m] already processed: %s", id)
+            continue
+        if auto_splitting_threshold == 0:
+            need_to_split_tasks = True
+        elif auto_splitting_threshold < 0:
+            need_to_split_tasks = False
+        elif recursive:
+            count = get_file_count_in_tree(id)
+            if count <= 0:
                 seen_add(id)
-                if recursive and need_to_split_tasks:
-                    for cid in iter_descendants_fast(con, id, fields=False, ensure_file=False, max_depth=1):
-                        send(cid)
-                        if need_calc_size and cid not in cache_futures:
-                            cache_futures[cid] = submit(get_file_count_in_tree, cid)
-    finally:
-        if need_calc_size:
-            executor.shutdown(wait=False, cancel_futures=True)
+                continue
+            need_to_split_tasks = count > auto_splitting_threshold
+            if logger is not None:
+                if need_to_split_tasks:
+                    logger.info(f"[\x1b[1;37;41mTELL\x1b[0m] \x1b[1m{id}\x1b[0m, \x1b[1;31mbig\x1b[0m ({count:,.0f} > {auto_splitting_threshold:,d}), will be pulled in \x1b[1;4;5;31mmulti batches\x1b[0m")
+                else:
+                    logger.info(f"[\x1b[1;37;42mTELL\x1b[0m] \x1b[1m{id}\x1b[0m, \x1b[1;32mfit\x1b[0m ({count:,.0f} <= {auto_splitting_threshold:,d}), will be pulled in \x1b[1;4;5;32mone batch\x1b[0m")
+        else:
+            need_to_split_tasks = True
+        try:
+            if i and interval > 0:
+                sleep(interval)
+            start = time()
+            logger.info(f"[\x1b[1;37;43mTELL\x1b[0m] \x1b[1m{id}\x1b[0m is running ...")
+            if need_to_split_tasks or not recursive:
+                upserted, removed = updatedb_one(client, con, id, **request_kwargs)
+            else:
+                upserted, removed = updatedb_tree(client, con, id, no_dir_moved=no_dir_moved, **request_kwargs)
+        except FileNotFoundError:
+            kill_items(con, id, commit=True)
+            if logger is not None:
+                logger.warning("[\x1b[1;33mSKIP\x1b[0m] not found: %s", id)
+        except NotADirectoryError:
+            if logger is not None:
+                logger.warning("[\x1b[1;33mSKIP\x1b[0m] not a directory: %s", id)
+        except BusyOSError:
+            if logger is not None:
+                logger.warning("[\x1b[1;35mREDO\x1b[0m] directory is busy updating: %s", id)
+            send(id)
+        except:
+            if logger is not None:
+                logger.exception("[\x1b[1;31mFAIL\x1b[0m] %s", id)
+            raise
+        else:
+            if logger is not None:
+                logger.info(
+                    "[\x1b[1;32mGOOD\x1b[0m] \x1b[1m%s\x1b[0m, upsert: %d, remove: %d, cost: %.6f s", 
+                    id, 
+                    upserted, 
+                    removed, 
+                    time() - start, 
+                )
+            seen_add(id)
+            if recursive and need_to_split_tasks:
+                for cid in iter_descendants_fast(con, id, fields=False, ensure_file=False, max_depth=1):
+                    send(cid)
 

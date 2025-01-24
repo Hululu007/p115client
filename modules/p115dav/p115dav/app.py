@@ -18,7 +18,7 @@ from datetime import datetime
 from errno import ENOENT, EBUSY
 from http import HTTPStatus
 from io import BytesIO
-from itertools import dropwhile
+from itertools import cycle, dropwhile
 from math import isinf, isnan
 from pathlib import Path
 from posixpath import split as splitpath, splitext
@@ -199,7 +199,7 @@ def make_application(
     debug: bool = False, 
     wsgidav_config: dict = {}, 
     only_webdav: bool = False, 
-    allow_incomplete: bool = False, 
+    check_for_relogin: bool = False, 
 ) -> Application:
     from a2wsgi import WSGIMiddleware
     from asynctools import to_list
@@ -219,7 +219,6 @@ def make_application(
     from p115client import check_response, CLASS_TO_TYPE, SUFFIX_TO_TYPE, P115Client, P115URL
     from p115client.exception import AuthenticationError, BusyOSError, P115Warning
     from p115client.tool import get_id_to_path, get_id_to_pickcode, get_id_to_sha1, share_iterdir, P115ID
-    from p115client.tool.pool import call_wrap_with_cookies_pool, cookies_pool
     from path_predicate import MappingPath
     from posixpatht import escape, normpath, path_is_dir_form, splits
     from property import locked_cacheproperty
@@ -279,11 +278,7 @@ def make_application(
 
     put_task = QUEUE.put_nowait
     get_task = QUEUE.get
-    fs_files: Callable
-    fs_files_aps: Callable
-    get_cookies: Callable
     client: P115Client
-    dummy_client: P115Client = P115Client("")
     con: Connection
     loop: AbstractEventLoop
 
@@ -706,60 +701,31 @@ LIMIT 1;""", (share_code, id))
         return next(share_info_to_path_gen(share_code, path, ensure_file, parent_id), None)
 
     async def iterdir(
-        cid: int, 
+        cid: int = 0, 
         first_page_size: int = 0, 
+        page_size: int = 10_000, 
+        get_base_url=cycle((
+            "http://webapi.115.com", 
+            "http://proapi.115.com", 
+            "https://webapi.115.com", 
+            "https://proapi.115.com", 
+            "http://webapi.115.com", 
+            "http://proapi.115.com", 
+            "http://v.anxia.com/webapi", 
+            "http://webapi.115.com", 
+            "http://proapi.115.com", 
+            "http://anxia.com/webapi", 
+        )).__next__
     ) -> tuple[int, list[dict], AsyncIterator[AttrDict]]:
-        if first_page_size <= 0:
-            first_page_size = 1150
-        payload = {
-            "asc": 0, "cid": cid, "cur": 1, "custom_order": 1, "fc_mix": 0, "limit": first_page_size, 
-            "o": "user_utime", "offset": 0, "show_dir": 1, 
-        }
-        resp = await fs_files(payload, async_=True)
-        check_response(resp)
-        if cid and int(resp["path"][-1]["cid"]) != cid:
-            raise FileNotFoundError(ENOENT, {"id": cid})
-        count = resp["count"]
-        ancestors = [{"id": "0", "parent_id": "0", "name": ""}]
-        ancestors.extend(
-            {"id": a["cid"], "parent_id": a["pid"], "name": a["name"]} 
-            for a in resp["path"][1:]
-        )
-        async def iter():
-            nonlocal resp
-            offset = 0
-            while True:
-                update_cache(ancestors[1:])
-                data = resp["data"]
-                for attr in map(normalize_attr, data):
-                    yield attr
-                offset += len(data)
-                if offset >= resp["count"]:
-                    break
-                payload["offset"] = offset
-                resp = await fs_files(payload, async_=True)
-                check_response(resp)
-                if cid and int(resp["path"][-1]["cid"]) != cid:
-                    raise FileNotFoundError(ENOENT, {"cid": cid})
-                ancestors[1:] = (
-                    {"id": a["cid"], "parent_id": a["pid"], "name": a["name"]} 
-                    for a in resp["path"][1:]
-                )
-                if count != resp["count"]:
-                    raise BusyOSError(EBUSY, f"count changes during iteration: {cid}")
-        return count, ancestors, iter()
-
-    async def iterdir_limited(cid: int = 0, /) -> tuple[int, list[dict], AsyncIterator[AttrDict]]:
-        payload = {
-            "asc": 1, "cid": cid, "count_folders": 1, "cur": 1, "fc_mix": 0, "limit": 10_000, 
-            "offset": 0, "show_dir": 1, 
-        }
         ancestors = [{"id": "0", "parent_id": "0", "name": ""}]
         count = 0
-        folder_count = 0
-        async def request(params={}, /) -> dict:
-            nonlocal count, folder_count
-            resp = await fs_files_aps({**payload, **params}, base_url=True, async_=True)
+        async def get_data():
+            nonlocal count
+            base_url = get_base_url()
+            if "proapi" in base_url:
+                resp = await client.fs_files_app(payload, base_url=base_url, async_=True)
+            else:
+                resp = await client.fs_files(payload, base_url=base_url, async_=True)
             check_response(resp)
             if cid and int(resp["path"][-1]["cid"]) != cid:
                 raise FileNotFoundError(ENOENT, {"id": cid})
@@ -768,47 +734,30 @@ LIMIT 1;""", (share_code, id))
                 for a in resp["path"][1:]
             )
             if count == 0:
-                count = int(resp["count"])
-                folder_count = int(resp.get("folder_count", 0))
-            elif count != int(resp["count"]) or folder_count != int(resp.get("folder_count", 0)):
+                count = resp["count"]
+            elif count != resp["count"]:
                 raise BusyOSError(EBUSY, f"count changes during iteration: {cid}")
             return resp["data"]
-        data = await request()
+        if first_page_size <= 0:
+            first_page_size = page_size
+        payload = {
+            "asc": 0, "cid": cid, "cur": 1, "fc_mix": 1, "limit": first_page_size, 
+            "o": "user_utime", "offset": 0, "show_dir": 1, 
+        }
+        data = await get_data()
+        payload["limit"] = page_size
         async def iter():
             nonlocal data
-            file_count = count - folder_count
-            n = 0
-            for n, attr in enumerate(map(normalize_attr, data), 1):
-                yield attr
-            if count > len(data):
-                if folder_count > len(data):
-                    special_dirs = frozenset(("我的接收", "云下载", "手机相册", "我的时光记录"))
-                    diff = folder_count - len(data)
-                    if not cid:
-                        for info in data:
-                            if info["n"] in special_dirs:
-                                diff += 1
-                            else:
-                                break
-                    data = await request({"asc": 0, "limit": diff})
-                    for n, attr in enumerate(map(normalize_attr, dropwhile(lambda a: a["n"] in special_dirs, data)), n + 1):
-                        yield attr
-                    if n < folder_count:
-                        warn(f"lost {folder_count - n} directories: cid={cid}", category=P115Warning)
-                    n = folder_count
-                    data = await request({"show_dir": 0})
-                    for n, attr in enumerate(map(normalize_attr, data), n + 1):
-                        yield attr
-                elif folder_count:
-                    data = await request({"show_dir": 0, "limit": count - len(data), "offset": len(data) - folder_count})
-                    for n, attr in enumerate(map(normalize_attr, data), n + 1):
-                        yield attr
-                if n < count:
-                    data = await request({"show_dir": 0, "asc": 0, "limit": count - n})
-                    for n, attr in enumerate(map(normalize_attr, data), n + 1):
-                        yield attr
-                    if n < count:
-                        warn(f"lost {count - n} files: cid={cid}", category=P115Warning)
+            offset = 0
+            while True:
+                update_cache(ancestors[1:])
+                for attr in map(normalize_attr, data):
+                    yield attr
+                offset += len(data)
+                if offset >= count:
+                    break
+                payload["offset"] = offset
+                data = await get_data()
         return count, ancestors, iter()
 
     async def update_file_list_partial(cid: int, file_list: dict):
@@ -895,7 +844,7 @@ LIMIT 1;""", (share_code, id))
                         for attr in file_list["children"] if attr["type"] == 2
                     ), default=0)
                     will_full_update = earliest_thumb_ts > 0 and earliest_thumb_ts - time() < 600
-            if not will_full_update and not allow_incomplete:
+            if not will_full_update:
                 file_list = cast(dict, file_list)
                 if isnan(ttl) or isinf(ttl) or ttl < 0:
                     return file_list
@@ -906,10 +855,7 @@ LIMIT 1;""", (share_code, id))
                 await update_file_list_partial(cid, file_list)
                 return file_list
             try:
-                if allow_incomplete:
-                    count, ancestors, it = await iterdir_limited(cid)
-                else:
-                    count, ancestors, it = await iterdir(cid)
+                count, ancestors, it = await iterdir(cid)
             except FileNotFoundError:
                 put_task(("UPDATE data SET parent_id=NULL WHERE id=?;", cid))
                 raise
@@ -1086,32 +1032,15 @@ VALUES (:share_code, :id, :parent_id, :sha1, :name, :path, :is_dir)"""
 
     @app.lifespan
     async def register_client(app: Application):
-        nonlocal client, fs_files, fs_files_aps, get_cookies
+        nonlocal client
         client = P115Client(
             cookies_path, 
             app="alipaymini", 
-            check_for_relogin=True, 
+            check_for_relogin=check_for_relogin, 
         )
-        cookies_rotation_file = f"115-{client.user_id}-cookies-rotation.txt"
-        try:
-            initial_cookies = [c for l in open(cookies_rotation_file, encoding="latin-1") if (c := l.strip())]
-        except Exception:
-            initial_cookies = []
-        get_cookies = cookies_pool(client, "harmony", initial_cookies, cooldown_time=2)
-        deque = getattr(get_cookies, "deque")
-        fs_files = call_wrap_with_cookies_pool(
-            get_cookies, 
-            base_url_seq=("http://webapi.115.com", "https://webapi.115.com"), 
-        )
-        fs_files_aps = call_wrap_with_cookies_pool(get_cookies, func=P115Client("").fs_files_aps)
-        try:
-            async with client.async_session:
-                app.services.register(P115Client, instance=client)
-                yield
-        finally:
-            with open(cookies_rotation_file, "w", encoding="latin-1") as file:
-                for t in deque:
-                    print(t[0], file=file)
+        async with client.async_session:
+            app.services.register(P115Client, instance=client)
+            yield
 
     @app.lifespan
     async def register_connection(app: Application):
@@ -1336,14 +1265,8 @@ END;
                 return ret
             id_to_dirnode: dict[int, tuple[str, int]] = {}
             try:
-                call = call_wrap_with_cookies_pool(
-                    get_cookies, 
-                    get_id_to_path, 
-                    check=False, 
-                    base_url_seq=("http://webapi.115.com", "https://webapi.115.com"), 
-                )
-                return update_cache_for_p115id(await call(
-                    dummy_client, 
+                return update_cache_for_p115id(await get_id_to_path(
+                    client, 
                     path, 
                     ensure_file=ensure_file, 
                     id_to_dirnode=id_to_dirnode, 

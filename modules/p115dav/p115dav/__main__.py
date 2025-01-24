@@ -176,9 +176,9 @@ parser.add_argument("-fs", "--fast-strm", action="store_true", help="""快速实
 """)
 parser.add_argument("-H", "--host", default="", help="ip 或 hostname，默认值：'0.0.0.0'")
 parser.add_argument("-P", "--port", default=8000, type=int, help="端口号，默认值：8000，如果为 0 则自动确定")
+parser.add_argument("-cl", "--check-for-relogin", action="store_true", help="当风控时，自动重新扫码登录")
 parser.add_argument("-cu", "--cache-url", action="store_true", help="缓存下载链接")
 parser.add_argument("-d", "--debug", action="store_true", help="启用 debug 模式，输出详细的错误信息")
-parser.add_argument("-ai", "--allow-imcomplete", action="store_true", help="当一个目录内，可罗列元素过多时，允许丢弃一部分")
 parser.add_argument("-ass", "--load-libass", action="store_true", help="加载 libass.js，实现 ass/ssa 字幕特效")
 parser.add_argument("-ow", "--only-webdav", action="store_true", help="禁用网页版，只有 webdav 可用")
 parser.add_argument("-uc", "--uvicorn-run-config-path", help="uvicorn 启动时的配置文件路径，会作为关键字参数传给 `uvicorn.run`，支持 JSON、YAML 或 TOML 格式，会根据扩展名确定，不能确定时视为 JSON")
@@ -313,7 +313,7 @@ def main(argv: None | list[str] | Namespace = None, /):
         debug=args.debug, 
         wsgidav_config=wsgidav_config, 
         only_webdav=args.only_webdav, 
-        allow_incomplete=args.allow_imcomplete, 
+        check_for_relogin=args.check_for_relogin, 
     )
     uvicorn.run(app, **run_config)
 
