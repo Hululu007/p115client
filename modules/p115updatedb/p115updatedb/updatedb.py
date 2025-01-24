@@ -959,6 +959,7 @@ def updatedb_tree(
         pairs = dict(iter_id_to_parent_id(con, to_remove))
         to_remove = []
         add_to_recall = to_recall.append
+        # TODO: 由于目录如果已经被删除，打星标时会报错，因此下面的方法并不实际，需要重新研究
         for attr in iter_selected_nodes_using_star_event(
             client, 
             tuple(pairs.keys()), 

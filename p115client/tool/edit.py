@@ -90,6 +90,9 @@ def update_star(
 ):
     """批量给文件或目录设置星标
 
+    .. note::
+        如果一批中有任何一个 id 已经被删除，则这一批直接失败报错
+
     :param client: 115 客户端或 cookies
     :param ids: 一组文件或目录的 id
     :param star: 是否设置星标

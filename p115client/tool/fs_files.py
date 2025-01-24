@@ -100,8 +100,8 @@ def iter_fs_files(
     if isinstance(payload, (int, str)):
         payload = {"cid": payload}
     payload = {
-        "asc": 0, "cid": 0, "custom_order": 1, "fc_mix": 1, "o": "user_utime", 
-        "offset": 0, "limit": first_page_size, "show_dir": 1, **payload, 
+        "asc": 0, "cid": 0, "fc_mix": 1, "o": "user_utime", "offset": 0, 
+        "limit": first_page_size, "show_dir": 1, **payload, 
     }
     cid = int(payload["cid"])
     if app in ("", "web", "desktop", "harmony"):
@@ -172,8 +172,8 @@ def iter_fs_files_threaded(
     if isinstance(payload, (int, str)):
         payload = {"cid": payload}
     payload = {
-        "asc": 1, "cid": 0, "custom_order": 1, "fc_mix": 1, "o": "user_ctime", 
-        "offset": 0, "limit": page_size, "show_dir": 1, **payload, 
+        "asc": 1, "cid": 0, "fc_mix": 1, "o": "user_ctime", "offset": 0, 
+        "limit": page_size, "show_dir": 1, **payload, 
     }
     cid = int(payload["cid"])
     request_kwargs["async_"] = False
@@ -267,8 +267,8 @@ async def iter_fs_files_asynchronized(
     if isinstance(payload, (int, str)):
         payload = {"cid": payload}
     payload = {
-        "asc": 1, "cid": 0, "custom_order": 1, "fc_mix": 1, "o": "user_ctime", 
-        "offset": 0, "limit": page_size, "show_dir": 1, **payload, 
+        "asc": 1, "cid": 0, "fc_mix": 1, "o": "user_ctime", "offset": 0, 
+        "limit": page_size, "show_dir": 1, **payload, 
     }
     cid = int(payload["cid"])
     request_kwargs["async_"] = True

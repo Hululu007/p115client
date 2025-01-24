@@ -20,7 +20,7 @@ parser.add_argument("top_dirs", metavar="dir", nargs="*", help="""\
 """)
 parser.add_argument("-cp", "--cookies-path", default="", help="cookies 文件保存路径，默认为当前工作目录下的 115-cookies.txt")
 parser.add_argument("-f", "--dbfile", default="", help="sqlite 数据库文件路径，默认为在当前工作目录下的 f'115-{user_id}.db'")
-parser.add_argument("-i", "--interval", type=float, help="两次批量拉取之间的睡眠时间，如果 <= 0，则不睡眠")
+parser.add_argument("-i", "--interval", type=float, default=0, help="两次批量拉取之间的睡眠时间，如果 <= 0，则不睡眠")
 parser.add_argument("-st", "--auto-splitting-threshold", type=int, default=100_000, help="自动拆分的文件数阈值，大于此值时，自动进行拆分，如果 = 0，则总是拆分，如果 < 0，则总是不拆分，默认值 100,000（10 万）")
 parser.add_argument("-sst", "--auto-splitting-statistics-timeout", type=float, default=3, help="自动拆分前的执行文件数统计的超时时间（秒），大于此值时，视为文件数无穷大，如果 <= 0，视为永不超时，默认值 3")
 parser.add_argument("-nm", "--no-dir-moved", action="store_true", help="声明没有目录被移动或改名（但可以有目录被新增或删除），这可以加快批量拉取时的速度")

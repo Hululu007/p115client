@@ -15,7 +15,7 @@ from collections.abc import (
 )
 from datetime import date, datetime, timedelta
 from functools import partial
-from hashlib import sha1
+from hashlib import md5, sha1
 from http.cookiejar import Cookie, CookieJar
 from http.cookies import Morsel
 from inspect import isawaitable
@@ -3041,7 +3041,7 @@ class P115Client:
 
         :return: 下载链接
         """
-        if use_web_api or app in ("web", "desktop", "harmony"):
+        if use_web_api:
             resp = self.download_url_web(
                 pickcode, 
                 async_=async_, 
@@ -3170,7 +3170,7 @@ class P115Client:
                 "User-Agent": next((v for k, v in headers if k.lower() == "user-agent" and v), "")}
         else:
             headers = request_kwargs["headers"] = {"User-Agent": ""}
-        def parse(resp, content: bytes) -> dict:
+        def parse(_, content: bytes, /) -> dict:
             json = json_loads(content)
             if json["state"]:
                 json["data"] = json_loads(rsa_decode(json["data"]))
@@ -3234,7 +3234,7 @@ class P115Client:
                 "User-Agent": next((v for k, v in headers if k.lower() == "user-agent" and v), "")}
         else:
             headers = request_kwargs["headers"] = {"User-Agent": ""}
-        def parse(resp, content: bytes) -> dict:
+        def parse(resp, content: bytes, /) -> dict:
             json = json_loads(content)
             if "Set-Cookie" in resp.headers:
                 if isinstance(resp.headers, Mapping):
@@ -3307,6 +3307,9 @@ class P115Client:
         /, 
         pickcode: str, 
         path: str, 
+        use_web_api: bool = False, 
+        app: str = "android", 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> P115URL:
@@ -3317,6 +3320,9 @@ class P115Client:
         /, 
         pickcode: str, 
         path: str, 
+        use_web_api: bool = False, 
+        app: str = "android", 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, P115URL]:
@@ -3326,6 +3332,9 @@ class P115Client:
         /, 
         pickcode: str, 
         path: str, 
+        use_web_api: bool = False, 
+        app: str = "android", 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> P115URL | Coroutine[Any, Any, P115URL]:
@@ -3339,11 +3348,19 @@ class P115Client:
         :return: 下载链接
         """
         path = path.rstrip("/")
-        resp = self.extract_download_url_web(
-            {"pick_code": pickcode, "full_name": path.lstrip("/")}, 
-            async_=async_, 
-            **request_kwargs, 
-        )
+        if use_web_api:
+            resp = self.extract_download_url_web(
+                {"pick_code": pickcode, "full_name": path.lstrip("/")}, 
+                async_=async_, 
+                **request_kwargs, 
+            )
+        else:
+            resp = self.extract_download_url_app(
+                {"pick_code": pickcode, "full_name": path.lstrip("/")}, 
+                app=app, 
+                async_=async_, 
+                **request_kwargs, 
+            )
         def get_url(resp: dict) -> P115URL:
             from posixpath import basename
             data = check_response(resp)["data"]
@@ -3360,6 +3377,65 @@ class P115Client:
             return async_request()
         else:
             return get_url(cast(dict, resp))
+
+    @overload
+    def extract_download_url_app(
+        self, 
+        payload: dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def extract_download_url_app(
+        self, 
+        payload: dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def extract_download_url_app(
+        self, 
+        payload: dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取压缩包中文件的下载链接
+
+        GET https://proapi.115.com/android/2.0/ufile/extract_down_file
+
+        :payload:
+            - pick_code: str
+            - full_name: str
+        """
+        api = complete_proapi("/2.0/ufile/extract_down_file", base_url, app)
+        request_headers = request_kwargs.get("headers")
+        headers = request_kwargs.get("headers")
+        if headers:
+            if isinstance(headers, Mapping):
+                headers = ItemsView(headers)
+            headers = request_kwargs["headers"] = {
+                "User-Agent": next((v for k, v in headers if k.lower() == "user-agent" and v), "")}
+        else:
+            headers = request_kwargs["headers"] = {"User-Agent": ""}
+        def parse(_, content: bytes, /) -> dict:
+            json = json_loads(content)
+            json["headers"] = headers
+            return json
+        request_kwargs.setdefault("parse", parse)
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
     def extract_download_url_web(
@@ -3410,7 +3486,7 @@ class P115Client:
                 "User-Agent": next((v for k, v in headers if k.lower() == "user-agent" and v), "")}
         else:
             headers = request_kwargs["headers"] = {"User-Agent": ""}
-        def parse(resp, content: bytes):
+        def parse(resp, content: bytes, /) -> dict:
             json = json_loads(content)
             if "Set-Cookie" in resp.headers:
                 if isinstance(resp.headers, Mapping):
@@ -3526,6 +3602,91 @@ class P115Client:
                     for path in paths
                 )
             return self.extract_add_file(data, async_=async_, **request_kwargs)
+
+    @overload
+    def extract_folders(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def extract_folders(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def extract_folders(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取压缩文件的文件列表（简略信息）
+
+        GET https://webapi.115.com/files/extract_folders
+
+        :payload:
+            - pick_code: str
+            - full_dir_name: str
+        """
+        api = complete_webapi("/files/extract_folders", base_url=base_url)
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def extract_folders_post(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def extract_folders_post(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def extract_folders_post(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取压缩文件的文件列表是否可批量下载（最高支持1万的文件操作数量）
+
+        POST https://webapi.115.com/files/extract_folders
+
+        :payload:
+            - pick_code: str
+            - full_dir_name: str  💡 多个用逗号 "," 隔开
+            - full_file_name: str 💡 多个用逗号 "," 隔开
+        """
+        api = complete_webapi("/files/extract_folders", base_url=base_url)
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
     def extract_info(
@@ -3714,6 +3875,56 @@ class P115Client:
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
+    def extract_push_app(
+        self, 
+        payload: str | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def extract_push_app(
+        self, 
+        payload: str | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def extract_push_app(
+        self, 
+        payload: str | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """推送一个解压缩任务给服务器，完成后，就可以查看压缩包的文件列表了
+
+        .. warning::
+            只能云解压 20GB 以内文件，不支持云解压分卷压缩包，只支持 .zip、.rar 和 .7z 等
+
+        POST https://proapi.115.com/android/2.0/ufile/push_extract
+
+        :payload:
+            - pick_code: str
+            - secret: str = "" 💡 解压密码
+        """
+        api = complete_proapi("/2.0/ufile/push_extract", base_url, app)
+        if isinstance(payload, str):
+            payload = {"pick_code": payload}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
     def extract_push_progress(
         self, 
         payload: str | dict, 
@@ -3752,6 +3963,52 @@ class P115Client:
             - pick_code: str
         """
         api = complete_webapi("/files/push_extract", base_url=base_url)
+        if isinstance(payload, str):
+            payload = {"pick_code": payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def extract_push_progress_app(
+        self, 
+        payload: str | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def extract_push_progress_app(
+        self, 
+        payload: str | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def extract_push_progress_app(
+        self, 
+        payload: str | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """查询解压缩任务的进度
+
+        GET https://proapi.115.com/android/2.0/ufile/push_extract
+
+        :payload:
+            - pick_code: str
+        """
+        api = complete_proapi("/2.0/ufile/push_extract", base_url, app)
         if isinstance(payload, str):
             payload = {"pick_code": payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
@@ -4230,6 +4487,44 @@ class P115Client:
         return self._fs_edit_set(payload, "fid_cover", fid_cover, async_=async_, **request_kwargs)
 
     @overload
+    def fs_cover_set_app(
+        self, 
+        payload: int | str | Iterable[int | str] | list[tuple] | dict, 
+        /, 
+        fid_cover: int | str, 
+        app: str = "android", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_cover_set_app(
+        self, 
+        payload: int | str | Iterable[int | str] | list[tuple] | dict, 
+        /, 
+        fid_cover: int | str, 
+        app: str = "android", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_cover_set_app(
+        self, 
+        payload: int | str | Iterable[int | str] | list[tuple] | dict, 
+        /, 
+        fid_cover: int | str = 0, 
+        app: str = "android", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """修改封面，可以设置目录的封面，此接口是对 `fs_edit` 的封装
+        """
+        return self._fs_edit_set_app(payload, "fid_cover", fid_cover, app=app, async_=async_, **request_kwargs)
+
+    @overload
     def fs_delete(
         self, 
         payload: int | str | dict | Iterable[int | str], 
@@ -4477,6 +4772,47 @@ class P115Client:
         return self._fs_edit_set(payload, "file_desc", desc, async_=async_, **request_kwargs)
 
     @overload
+    def fs_desc_set_app(
+        self, 
+        payload: int | str | Iterable[int | str] | list[tuple] | dict, 
+        /, 
+        desc: str = "", 
+        app: str = "android", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_desc_set_app(
+        self, 
+        payload: int | str | Iterable[int | str] | list[tuple] | dict, 
+        /, 
+        desc: str = "", 
+        app: str = "android", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_desc_set_app(
+        self, 
+        payload: int | str | Iterable[int | str] | list[tuple] | dict, 
+        /, 
+        desc: str = "", 
+        app: str = "android", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """为文件或目录设置备注，最多允许 65535 个字节 (64 KB 以内)，此接口是对 `fs_edit` 的封装
+
+        .. hint::
+            修改文件备注会更新文件的更新时间，即使什么也没改或者改为空字符串
+        """
+        return self._fs_edit_set_app(payload, "file_desc", desc, app=app, async_=async_, **request_kwargs)
+
+    @overload
     def fs_dir_getid(
         self, 
         payload: str | dict, 
@@ -4703,6 +5039,7 @@ class P115Client:
             - file_label: int | str = <default> 💡 标签 id，多个用逗号 "," 隔开
             - fid_cover: int | str = <default> 💡 封面图片的文件 id，多个用逗号 "," 隔开，如果要删除，值设为 0 即可
             - show_play_long: 0 | 1 = <default> 💡 文件名称显示时长
+            - ...
         """
         api = complete_webapi("/files/edit", base_url=base_url)
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
@@ -4756,7 +5093,7 @@ class P115Client:
             - file_label: int | str = <default> 💡 标签 id，多个用逗号 "," 隔开
             - fid_cover: int | str = <default> 💡 封面图片的文件 id，多个用逗号 "," 隔开，如果要删除，值设为 0 即可
             - show_play_long: 0 | 1 = <default> 💡 文件名称显示时长
-            - (其它各种参数)
+            - ...
         """
         api = complete_proapi("/files/update", base_url, app)
         if isinstance(payload, (int, str)):
@@ -4816,6 +5153,56 @@ class P115Client:
         return self.fs_edit(payload, async_=async_, **request_kwargs)
 
     @overload
+    def _fs_edit_set_app(
+        self, 
+        payload: int | str | Iterable[int | str] | list[tuple] | dict, 
+        /, 
+        attr: str, 
+        default: Any = "", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def _fs_edit_set_app(
+        self, 
+        payload: int | str | Iterable[int | str] | list[tuple] | dict, 
+        /, 
+        attr: str, 
+        default: Any = "", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def _fs_edit_set_app(
+        self, 
+        payload: int | str | Iterable[int | str] | list[tuple] | dict, 
+        /, 
+        attr: str, 
+        default: Any = "", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """批量设置文件或目录（备注、标签等），此接口是对 `fs_edit` 的封装
+        """
+        if isinstance(payload, (int, str)):
+            payload = [("file_id", payload), (attr, default)]
+        elif isinstance(payload, list):
+            if not any(a[0] == attr for a in payload):
+                payload.append((attr, default))
+        elif isinstance(payload, dict):
+            payload.setdefault(attr, default)
+        else:
+            payload = [(f"file_id[{i}]", fid) for i, fid in enumerate(payload)]
+            if not payload:
+                return {"state": False, "message": "no op"}
+            payload.append((attr, default))
+        return self.fs_edit(payload, async_=async_, **request_kwargs)
+
+    @overload
     def fs_export_dir(
         self, 
         payload: int | str | dict, 
@@ -4863,6 +5250,56 @@ class P115Client:
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
+    def fs_export_dir_app(
+        self, 
+        payload: int | str | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_export_dir_app(
+        self, 
+        payload: int | str | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_export_dir_app(
+        self, 
+        payload: int | str | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """导出目录树
+
+        POST https://proapi.115.com/android/2.0/ufile/export_dir
+
+        :payload:
+            - file_ids: int | str   💡 多个用逗号 "," 隔开
+            - target: str = "U_1_0" 💡 导出目录树到这个目录
+            - layer_limit: int = <default> 💡 层级深度，自然数
+        """
+        api = complete_proapi("/2.0/ufile/export_dir", base_url, app)
+        if isinstance(payload, (int, str)):
+            payload = {"target": "U_1_0", "file_ids": payload}
+        else:
+            payload = {"target": "U_1_0", **payload}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
     def fs_export_dir_status(
         self, 
         payload: int | str | dict = 0, 
@@ -4901,6 +5338,52 @@ class P115Client:
             - export_id: int | str = 0 💡 任务 id
         """
         api = complete_webapi("/files/export_dir", base_url=base_url)
+        if isinstance(payload, (int, str)):
+            payload = {"export_id": payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_export_dir_status_app(
+        self, 
+        payload: int | str | dict = 0, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_export_dir_status_app(
+        self, 
+        payload: int | str | dict = 0, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_export_dir_status_app(
+        self, 
+        payload: int | str | dict = 0, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取导出目录树的完成情况
+
+        GET https://proapi.115.com/android/2.0/ufile/export_dir
+
+        :payload:
+            - export_id: int | str = 0 💡 任务 id
+        """
+        api = complete_proapi("/2.0/ufile/export_dir", base_url, app)
         if isinstance(payload, (int, str)):
             payload = {"export_id": payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
@@ -5060,6 +5543,11 @@ class P115Client:
             - 相同的目录名：转存可以导致同一目录下有多个相同名字的目录
             - 相同的文件名：转存、离线和上传等，可以导致同一目录下有多个相同名字的文件
 
+        .. hint::
+            如果文件或目录被置顶，会在整个文件列表的最前面
+
+            在根目录下且 fc_mix=0 且是特殊名字 ("我的接收", "手机相册", "云下载", "我的时光记录")，会在整个文件列表的最前面但在置顶之后，这时可从返回信息的 "sys_count" 字段知道数目
+
         :payload:
             - cid: int | str = 0 💡 目录 id
             - limit: int = 32 💡 分页大小，目前最大值是 1,150，以前是没限制的
@@ -5070,7 +5558,7 @@ class P115Client:
             - code: int | str = <default>
             - count_folders: 0 | 1 = 1 💡 统计文件数和目录数
             - cur: 0 | 1 = <default> 💡 是否只搜索当前目录
-            - custom_order: 0 | 1 = <default> 💡 启用自定义排序，如果指定了 "asc"、"fc_mix"、"o" 中其一，则此参数会被自动设置为 1 
+            - custom_order: 0 | 1 = <default> 💡 启用自定义排序，如果指定了 "asc"、"fc_mix"、"o" 中其一，则此参数会被自动设置为 1
             - date: str = <default> 💡 筛选日期
             - fc_mix: 0 | 1 = <default> 💡 是否目录和文件混合，如果为 0 则目录在前（目录置顶）
             - fields: str = <default>
@@ -5185,7 +5673,15 @@ class P115Client:
             如果 `app` 为 "wechatmini" 或 "alipaymini"，则相当于 `P115Client.fs_files_app2`
 
         .. caution::
-            这个接口有些问题，当 custom_order=1 时，则 fc_mix 无论怎么设置，都和 fc_mix=0 的效果相同（即目录总是置顶）
+            这个接口有些问题，当 custom_order=1 时：
+            
+                1. 如果设定 limit=1 可能会报错
+                2. fc_mix 无论怎么设置，都和 fc_mix=0 的效果相同（即目录总是置顶），但设置为 custom_order=2 就好了
+
+        .. hint::
+            置顶无效。
+
+            在根目录下且 fc_mix=0 且是特殊名字 ("我的接收", "手机相册", "云下载", "我的时光记录")，会在整个文件列表的最前面，这时可从返回信息的 "sys_count" 字段知道数目
 
         :payload:
             - cid: int | str = 0 💡 目录 id
@@ -5197,10 +5693,11 @@ class P115Client:
             - code: int | str = <default>
             - count_folders: 0 | 1 = 1 💡 统计文件数和目录数
             - cur: 0 | 1 = <default> 💡 是否只搜索当前目录
-            - custom_order: 0 | 1 = <default> 💡 启用自定义排序，如果指定了 "asc"、"fc_mix"、"o" 中其一，则此参数会被自动设置为 1 
+            - custom_order: 0 | 1 | 2 = <default> 💡 启用自定义排序，如果指定了 "asc"、"fc_mix"、"o" 中其一，则此参数会被自动设置为 2
             - date: str = <default> 💡 筛选日期
             - fc_mix: 0 | 1 = <default> 💡 是否目录和文件混合，如果为 0 则目录在前（目录置顶）
             - fields: str = <default>
+            - for: str = <default> 💡 文件格式，例如 "doc"
             - format: str = "json" 💡 返回格式，默认即可
             - hide_data: str = <default>
             - is_q: 0 | 1 = <default>
@@ -5209,14 +5706,15 @@ class P115Client:
             - max_size: int = 0 💡 最大的文件大小
             - natsort: 0 | 1 = <default> 💡 是否执行自然排序(natural sorting)
             - nf: str = <default> 💡 不要显示文件（即仅显示目录），但如果 show_dir=0，则此参数无效
-            - o: str = <default> 💡 用某字段排序
+            - o: str = <default> 💡 用某字段排序（未定义的值会被视为 "user_utime"）
 
               - "file_name": 文件名
               - "file_size": 文件大小
               - "file_type": 文件种类
+              - "user_etime": 事件时间（无效，效果相当于 "user_utime"）
               - "user_utime": 修改时间
-              - "user_ptime": 创建时间
-              - "user_otime": 上一次打开时间
+              - "user_ptime": 创建时间（无效，效果相当于 "user_utime"）
+              - "user_otime": 上一次打开时间（无效，效果相当于 "user_utime"）
 
             - r_all: 0 | 1 = <default>
             - record_open_time: 0 | 1 = 1 💡 是否要记录目录的打开时间
@@ -5224,7 +5722,7 @@ class P115Client:
             - show_dir: 0 | 1 = 1
             - snap: 0 | 1 = <default>
             - source: str = <default>
-            - sys_dir: int | str = <default> 💡 似乎和接收列表有关，值为 0 时会罗列 "/我的接收" 目录
+            - sys_dir: int | str = <default>
             - star: 0 | 1 = <default> 💡 是否星标文件
             - stdir: 0 | 1 = <default>
             - suffix: str = <default> 💡 后缀名（优先级高于 `type`）
@@ -5260,7 +5758,7 @@ class P115Client:
                 "record_open_time": 1, "show_dir": 1, "cid": 0, **payload, 
             }
         if payload.keys() & frozenset(("asc", "fc_mix", "o")):
-            payload["custom_order"] = 1
+            payload["custom_order"] = 2
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -5304,6 +5802,12 @@ class P115Client:
         .. hint::
             如果要遍历获取所有文件，需要指定 show_dir=0 且 cur=0（或不指定 cur），这个接口并没有 type=99 时获取所有文件的意义
 
+        .. caution::
+            这个接口有些问题，当 custom_order=1 时：
+
+                1. 如果设定 limit=1 可能会报错
+                2. fc_mix 无论怎么设置，都和 fc_mix=0 的效果相同（即目录总是置顶），设置为 custom_order=2 也没用
+
         :payload:
             - cid: int | str = 0 💡 目录 id
             - limit: int = 32 💡 分页大小，最大值不一定，看数据量，7,000 应该总是安全的，10,000 有可能报错，但有时也可以 20,000 而成功
@@ -5314,10 +5818,11 @@ class P115Client:
             - code: int | str = <default>
             - count_folders: 0 | 1 = 1 💡 统计文件数和目录数
             - cur: 0 | 1 = <default> 💡 是否只搜索当前目录
-            - custom_order: 0 | 1 = <default> 💡 启用自定义排序，如果指定了 "asc"、"fc_mix"、"o" 中其一，则此参数会被自动设置为 1 
+            - custom_order: 0 | 1 | 2 = <default> 💡 启用自定义排序，如果指定了 "asc"、"fc_mix"、"o" 中其一，则此参数会被自动设置为 2
             - date: str = <default> 💡 筛选日期
             - fc_mix: 0 | 1 = <default> 💡 是否目录和文件混合，如果为 0 则目录在前（目录置顶）
             - fields: str = <default>
+            - for: str = <default> 💡 文件格式，例如 "doc"
             - format: str = "json" 💡 返回格式，默认即可
             - hide_data: str = <default>
             - is_q: 0 | 1 = <default>
@@ -5326,14 +5831,15 @@ class P115Client:
             - max_size: int = 0 💡 最大的文件大小
             - natsort: 0 | 1 = <default> 💡 是否执行自然排序(natural sorting)
             - nf: str = <default> 💡 不要显示文件（即仅显示目录），但如果 show_dir=0，则此参数无效
-            - o: str = <default> 💡 用某字段排序
+            - o: str = <default> 💡 用某字段排序（未定义的值会被视为 "user_utime"）
 
               - "file_name": 文件名
               - "file_size": 文件大小
               - "file_type": 文件种类
+              - "user_etime": 事件时间（无效，效果相当于 "user_utime"）
               - "user_utime": 修改时间
-              - "user_ptime": 创建时间
-              - "user_otime": 上一次打开时间
+              - "user_ptime": 创建时间（无效，效果相当于 "user_utime"）
+              - "user_otime": 上一次打开时间（无效，效果相当于 "user_utime"）
 
             - r_all: 0 | 1 = <default>
             - record_open_time: 0 | 1 = 1 💡 是否要记录目录的打开时间
@@ -5377,7 +5883,7 @@ class P115Client:
                 "record_open_time": 1, "show_dir": 1, "cid": 0, **payload, 
             }
         if payload.keys() & frozenset(("asc", "fc_mix", "o")):
-            payload["custom_order"] = 1
+            payload["custom_order"] = 2
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -5432,7 +5938,7 @@ class P115Client:
             - code: int | str = <default>
             - count_folders: 0 | 1 = 1 💡 统计文件数和目录数
             - cur: 0 | 1 = <default> 💡 是否只搜索当前目录
-            - custom_order: 0 | 1 = <default> 💡 启用自定义排序，如果指定了 "asc"、"fc_mix"、"o" 中其一，则此参数会被自动设置为 1 
+            - custom_order: 0 | 1 = <default> 💡 启用自定义排序，如果指定了 "asc"、"fc_mix"、"o" 中其一，则此参数会被自动设置为 1
             - date: str = <default> 💡 筛选日期
             - fc_mix: 0 | 1 = <default> 💡 是否目录和文件混合，如果为 0 则目录在前（目录置顶）
             - fields: str = <default>
@@ -5840,7 +6346,61 @@ class P115Client:
         elif isinstance(payload, dict):
             payload = {"hidden": 1, **payload}
         else:
-            payload = {f"f[{i}]": f for i, f in enumerate(payload)}
+            payload = {f"fid[{i}]": f for i, f in enumerate(payload)}
+            if not payload:
+                return {"state": False, "message": "no op"}
+            payload["hidden"] = 1
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_hide_app(
+        self, 
+        payload: int | str | Iterable[int | str] | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_hide_app(
+        self, 
+        payload: int | str | Iterable[int | str] | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_hide_app(
+        self, 
+        payload: int | str | Iterable[int | str] | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """隐藏或者取消隐藏某些文件或目录
+
+        POST https://proapi.115.com/android/files/hiddenfiles
+
+        :payload:
+            - fid: int | str 💡 文件或目录的 id，多个用逗号 "," 隔开
+            - hidden: 0 | 1 = 1
+        """
+        api = complete_proapi("/files/hiddenfiles", base_url, app)
+        if isinstance(payload, (int, str)):
+            payload = {"hidden": 1, "fid[0]": payload}
+        elif isinstance(payload, dict):
+            payload = {"hidden": 1, **payload}
+        else:
+            payload = cast(dict, {"fid": ",".join(map(str, payload))})
             if not payload:
                 return {"state": False, "message": "no op"}
             payload["hidden"] = 1
@@ -5849,7 +6409,7 @@ class P115Client:
     @overload
     def fs_hidden_switch(
         self, 
-        payload: str | dict, 
+        payload: int | str | dict, 
         /, 
         base_url: bool | str | Callable[[], str] = False, 
         *, 
@@ -5860,7 +6420,7 @@ class P115Client:
     @overload
     def fs_hidden_switch(
         self, 
-        payload: str | dict, 
+        payload: int | str | dict, 
         /, 
         base_url: bool | str | Callable[[], str] = False, 
         *, 
@@ -5870,7 +6430,7 @@ class P115Client:
         ...
     def fs_hidden_switch(
         self, 
-        payload: str | dict = "", 
+        payload: int | str | dict, 
         /, 
         base_url: bool | str | Callable[[], str] = False, 
         *, 
@@ -5887,11 +6447,65 @@ class P115Client:
             - valid_type: int = 1
         """
         api = complete_api("/?ct=hiddenfiles&ac=switching", base_url=base_url)
-        if isinstance(payload, str):
+        if isinstance(payload, (int, str)):
             payload = {"valid_type": 1, "show": 1, "safe_pwd": payload}
         else:
             payload = {"valid_type": 1, "show": 1, "safe_pwd": "", **payload}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_hidden_switch_app(
+        self, 
+        payload: int | str | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_hidden_switch_app(
+        self, 
+        payload: int | str | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_hidden_switch_app(
+        self, 
+        payload: int | str | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """切换隐藏模式
+
+        GET https://proapi.115.com/android/files/hiddenswitch
+
+        .. caution::
+            直接调用这个接口，似乎并不能直接进入隐藏模式，需要先调用如下接口验证一下密码
+
+            > POST https://passportapi.115.com/app/1.0/android/1.0/user/security_key_check
+
+        :payload:
+            - safe_pwd: str = "" 💡 密码，如果需要进入隐藏模式，请传递此参数（值为密码的 md5 摘要）
+            - show: 0 | 1 = 1    💡 0: 退出 1:进入
+        """
+        api = complete_proapi("/files/hiddenswitch", base_url, app)
+        if isinstance(payload, (int, str)):
+            payload = {"show": 1, "safe_pwd": md5(str(payload).encode("ascii")).hexdigest()}
+        else:
+            payload = {"show": 1, "safe_pwd": "", **payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
     def fs_history(
@@ -6052,6 +6666,161 @@ class P115Client:
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
+    def fs_history_delete(
+        self, 
+        payload: int | str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_history_delete(
+        self, 
+        payload: int | str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_history_delete(
+        self, 
+        payload: int | str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """删除历史记录
+
+        POST https://webapi.115.com/history/delete
+
+        :payload:
+            - id: int | str 💡 多个用逗号 "," 隔开
+            - with_file: 0 | 1 = 0
+        """
+        api = complete_webapi("/history/delete", base_url=base_url)
+        if isinstance(payload, (int, str)):
+            payload = {"with_file": 0, "id": payload}
+        else:
+            payload = {"with_file": 0, **payload}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_history_delete_app(
+        self, 
+        payload: int | str | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_history_delete_app(
+        self, 
+        payload: int | str | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_history_delete_app(
+        self, 
+        payload: int | str | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """删除历史记录
+
+        POST https://proapi.115.com/android/history/delete
+
+        :payload:
+            - id: int | str 💡 多个用逗号 "," 隔开
+            - with_file: 0 | 1 = 0
+        """
+        api = complete_proapi("/history/delete", base_url, app)
+        if isinstance(payload, (int, str)):
+            payload = {"with_file": 0, "id": payload}
+        else:
+            payload = {"with_file": 0, **payload}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_history_clean_app(
+        self, 
+        payload: int | str | dict = 0, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_history_clean_app(
+        self, 
+        payload: int | str | dict = 0, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_history_clean_app(
+        self, 
+        payload: int | str | dict = 0, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """清空历史记录
+
+        POST https://proapi.115.com/android/history/clean
+
+        :payload:
+            - type: int | str = 0 💡 类型（？？表示还未搞清楚），多个用逗号 "," 隔开
+
+              - 全部: 0
+              - ？？: 1
+              - ？？: 2
+              - 播放视频: 3
+              - 上传: 4
+              - ？？: 5
+              - ？？: 6
+              - 接收: 7
+              - 移入: 8
+
+            - with_file: 0 | 1 = 0
+        """
+        api = complete_proapi("/history/clean", base_url, app)
+        if isinstance(payload, (int, str)):
+            payload = {"with_file": 0, "type": payload}
+        else:
+            payload = {"with_file": 0, "type": 0, **payload}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
     def fs_history_list(
         self, 
         payload: int | str | dict = 0, 
@@ -6094,11 +6863,11 @@ class P115Client:
 
               - 全部: 0
               - ？？: 1
-              - ？？: 2
+              - 离线下载: 2
               - 播放视频: 3
               - 上传: 4
               - ？？: 5
-              - ？？: 6
+              - ？？: 6（似乎和离线下载有关）
               - 接收: 7
               - 移入: 8
         """
@@ -6155,11 +6924,11 @@ class P115Client:
 
               - 全部: 0
               - ？？: 1
-              - ？？: 2
+              - 离线下载: 2
               - 播放视频: 3
               - 上传: 4
               - ？？: 5
-              - ？？: 6
+              - ？？: 6（似乎和离线下载有关）
               - 接收: 7
               - 移入: 8
         """
@@ -6558,9 +7327,10 @@ class P115Client:
     @overload
     def fs_label_add(
         self, 
+        payload: str | Iterable[str] | dict | list[tuple], 
         /, 
-        *lables: str, 
         base_url: bool | str | Callable[[], str] = False, 
+        *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
     ) -> dict:
@@ -6568,18 +7338,20 @@ class P115Client:
     @overload
     def fs_label_add(
         self, 
+        payload: str | Iterable[str] | dict | list[tuple], 
         /, 
-        *lables: str, 
         base_url: bool | str | Callable[[], str] = False, 
+        *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
         ...
     def fs_label_add(
         self, 
+        payload: str | Iterable[str] | dict | list[tuple], 
         /, 
-        *lables: str, 
         base_url: bool | str | Callable[[], str] = False, 
+        *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
@@ -6587,12 +7359,68 @@ class P115Client:
 
         POST https://webapi.115.com/label/add_multi
 
-        :param lables: 可传入多个 label 描述，每个 label 的格式都是 "{label_name}" 或 "{label_name}\x07{color}"，例如 "tag\x07#FF0000"（中间有个 "\\x07"）
+        :payload:
+            - name[] 💡 格式为 "{label_name}" 或 "{label_name}\x07{color}"，例如 "tag\x07#FF0000"（中间有个 "\\x07"）
+            - ...
         """
         api = complete_webapi("/label/add_multi", base_url=base_url)
-        payload = [("name[]", label) for label in lables if label]
-        if not payload:
-            return {"state": False, "message": "no op"}
+        if isinstance(payload, str):
+            payload = [("name[]", payload)]
+        elif not isinstance(payload, dict) or not isinstance(payload, list) and payload and not isinstance(payload[0], tuple):
+            payload = [("name[]", label) for label in payload if label]
+            if not payload:
+                return {"state": False, "message": "no op"}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_label_add_app(
+        self, 
+        payload: str | Iterable[str] | dict | list[tuple], 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_label_add_app(
+        self, 
+        payload: str | Iterable[str] | dict | list[tuple], 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_label_add_app(
+        self, 
+        payload: str | Iterable[str] | dict | list[tuple], 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """添加标签（可以接受多个）
+
+        POST https://proapi.115.com/android/label/add_multi
+
+        :payload:
+            - name[] 💡 格式为 "{label_name}" 或 "{label_name}\x07{color}"，例如 "tag\x07#FF0000"（中间有个 "\\x07"）
+            - ...
+        """
+        api = complete_proapi("/label/add_multi", base_url, app)
+        if isinstance(payload, str):
+            payload = [("name[]", payload)]
+        elif not isinstance(payload, dict) or not isinstance(payload, list) and payload and not isinstance(payload[0], tuple):
+            payload = [("name[]", label) for label in payload if label]
+            if not payload:
+                return {"state": False, "message": "no op"}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -6639,6 +7467,52 @@ class P115Client:
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
+    def fs_label_del_app(
+        self, 
+        payload: int | str | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_label_del_app(
+        self, 
+        payload: int | str | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_label_del_app(
+        self, 
+        payload: int | str | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """删除标签
+
+        POST https://proapi.115.com/android/label/delete
+
+        :payload:
+            - id: int | str 💡 标签 id，多个用逗号 "," 隔开
+        """
+        api = complete_proapi("/label/delete", base_url, app)
+        if isinstance(payload, (int, str)):
+            payload = {"id": payload}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
     def fs_label_edit(
         self, 
         payload: dict, 
@@ -6680,6 +7554,53 @@ class P115Client:
             - sort: int = <default>  💡 序号
         """
         api = complete_webapi("/label/edit", base_url=base_url)
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_label_edit_app(
+        self, 
+        payload: dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_label_edit_app(
+        self, 
+        payload: dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_label_edit_app(
+        self, 
+        payload: dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """编辑标签
+
+        POST https://proapi.115.com/android/label/edit
+
+        :payload:
+            - id: int | str 💡 标签 id
+            - name: str = <default>  💡 标签名
+            - color: str = <default> 💡 标签颜色，支持 css 颜色语法
+            - sort: int = <default>  💡 序号
+        """
+        api = complete_proapi("/label/edit", base_url, app)
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -6828,8 +7749,55 @@ class P115Client:
 
         .. attention::
             这个接口会把标签列表进行替换，而不是追加
+
+        .. hint::
+            为单个文件或目录，设置一个不存在的标签 id，比如 1，会清空标签，但可产生事件（批量设置时无事件，可能是 bug）
+
+            .. code:: python
+                client.fs_label_set(id, 1)
         """
         return self._fs_edit_set(payload, "file_label", label, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_label_set_app(
+        self, 
+        payload: int | str | Iterable[int | str] | list[tuple] | dict, 
+        /, 
+        label: int | str = "", 
+        app: str = "android", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_label_set_app(
+        self, 
+        payload: int | str | Iterable[int | str] | list[tuple] | dict, 
+        /, 
+        label: int | str = "", 
+        app: str = "android", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_label_set_app(
+        self, 
+        payload: int | str | Iterable[int | str] | list[tuple] | dict, 
+        /, 
+        label: int | str = "", 
+        app: str = "android", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """为文件或目录设置标签，此接口是对 `fs_edit_app` 的封装
+
+        .. attention::
+            这个接口会把标签列表进行替换，而不是追加
+        """
+        return self._fs_edit_set_app(payload, "file_label", label, app=app, async_=async_, **request_kwargs)
 
     @overload
     def fs_label_batch(
@@ -7201,6 +8169,49 @@ class P115Client:
         api = complete_proapi("/files/move", base_url, app)
         payload = dict(payload, user_id=self.user_id)
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_move_progress(
+        self, 
+        payload: int | str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_move_progress(
+        self, 
+        payload: int | str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_move_progress(
+        self, 
+        payload: int | str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """移动任务的进度
+
+        GET https://webapi.115.com/files/move_progress
+
+        :payload:
+            - move_proid: str = <default> 💡 任务 id
+        """
+        api = complete_webapi("/files/move_progress", base_url=base_url)
+        if isinstance(payload, (int, str)):
+            payload = {"move_proid": payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
     def fs_music(
@@ -7901,6 +8912,7 @@ class P115Client:
             - cid: int | str = 0 💡 目录 id
             - count_folders: 0 | 1 = <default>
             - date: str = <default> 💡 筛选日期
+            - fc: 0 | 1 = <default>
             - fc_mix: 0 | 1 = <default> 💡 是否目录和文件混合，如果为 0 则目录在前（目录置顶）
             - file_label: int | str = <default> 💡 标签 id
             - format: str = "json" 💡 输出格式（不用管）
@@ -7932,6 +8944,8 @@ class P115Client:
               - 6: 应用
               - 7: 书籍
               - 99: 仅文件
+
+            - version: str = <default> 💡 版本号，比如 3.1
         """
         api = complete_proapi("/files/search", base_url, app)
         if isinstance(payload, str):
@@ -8025,6 +9039,44 @@ class P115Client:
         return self._fs_edit_set(payload, "show_play_long", int(show), async_=async_, **request_kwargs)
 
     @overload
+    def fs_show_play_long_set_app(
+        self, 
+        payload: int | str | Iterable[int | str] | list[tuple] | dict, 
+        /, 
+        show: bool = True, 
+        app: str = "android", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_show_play_long_set_app(
+        self, 
+        payload: int | str | Iterable[int | str] | list[tuple] | dict, 
+        /, 
+        show: bool = True, 
+        app: str = "android", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_show_play_long_set_app(
+        self, 
+        payload: int | str | Iterable[int | str] | list[tuple] | dict, 
+        /, 
+        show: bool = True, 
+        app: str = "android", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """为目录设置显示时长，此接口是对 `fs_edit` 的封装
+        """
+        return self._fs_edit_set_app(payload, "show_play_long", int(show), app=app, async_=async_, **request_kwargs)
+
+    @overload
     def fs_space_info(
         self, 
         /, 
@@ -8057,9 +9109,9 @@ class P115Client:
     ) -> dict | Coroutine[Any, Any, dict]:
         """获取使用空间的统计数据（较为简略，如需更详细，请用 `P115Client.fs_index_info()`）
 
-        GET https://proapi.115.com/android/1.0/user/space_info
+        GET https://proapi.115.com/android/user/space_info
         """
-        api = complete_proapi("/1.0/user/space_info", base_url, app)
+        api = complete_proapi("/user/space_info", base_url, app)
         return self.request(url=api, async_=async_, **request_kwargs)
 
     @overload
@@ -8297,6 +9349,149 @@ class P115Client:
         return self.request(url=api, async_=async_, **request_kwargs)
 
     @overload
+    def fs_supervision(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_supervision(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_supervision(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """通过 pickcode 获取文件信息
+
+        POST https://webapi.115.com/files/supervision
+
+        :payload:
+            - pickcode: str
+            - preview_type: str = "file" 💡 file:文件 doc:文档 video:视频 music:音乐 pic:图片
+            - module: int = 10
+        """
+        api = complete_webapi("/files/supervision", base_url=base_url)
+        if isinstance(payload, str):
+            payload = {"preview_type": "file", "module": 10, "pickcode": payload}
+        else:
+            payload = {"preview_type": "file", "module": 10, **payload}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_supervision_app(
+        self, 
+        payload: str | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_supervision_app(
+        self, 
+        payload: str | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_supervision_app(
+        self, 
+        payload: str | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """通过 pickcode 获取文件信息
+
+        POST https://proapi.115.com/android/files/supervision
+
+        :payload:
+            - pickcode: str
+            - preview_type: str = "file" 💡 file:文件 doc:文档 video:视频 music:音乐 pic:图片
+            - module: int = 10
+        """
+        api = complete_proapi("/files/supervision", base_url, app)
+        if isinstance(payload, str):
+            payload = {"preview_type": "file", "module": 10, "pickcode": payload}
+        else:
+            payload = {"preview_type": "file", "module": 10, **payload}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_sys_dir(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_sys_dir(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_sys_dir(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取系统目录（在根目录下，使用 `fs_files` 接口罗列时，数目体现在返回值的 `sys_count` 字段）
+
+        GET https://proapi.115.com/android/files/getpackage
+
+        :payload:
+            - sys_dir: int 💡 0:我的接收 1:手机相册 2:云下载 3:我的时光记录 4,10,20,21,22,30,40,50,60,70:(未知)
+        """
+        api = complete_proapi("/files/getpackage", base_url, app)
+        if isinstance(payload, int):
+            payload = {"sys_dir": payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
     def fs_video(
         self, 
         payload: str | dict, 
@@ -8400,7 +9595,7 @@ class P115Client:
             payload = {"pickcode": payload, "user_id": self.user_id}
         else:
             payload.setdefault("user_id", self.user_id)
-        def parse(resp, content: bytes) -> dict:
+        def parse(_, content: bytes, /) -> dict:
             json = json_loads(content)
             if json["state"] or json.get("errno") == 409:
                 json["data"] = json_loads(rsa_decode(json["data"]))
@@ -9070,7 +10265,7 @@ class P115Client:
             - limit: int = 1_000
             - check_num: int = <default> 💡 选中记录数
             - del_data: str = <default> 💡 JSON array，删除时传给接口数据
-            - end_time: int = <default>
+            - end_time: int = <default> 💡 结束时间戳
             - file_behavior_type: int | str = <default> 💡 筛选类型，有多个则用逗号 ',' 隔开
 
                 - 💡 0: 所有
@@ -9100,7 +10295,7 @@ class P115Client:
                 - 💡 3: <UNKNOWN>
                 - 💡 4: account_security
 
-            - start_time: int = <default>
+            - start_time: int = <default> 💡 开始时间戳
             - tab_type: int = <default>
             - total_count: int = <default> 💡 列表所有项数
             - type: int = <default> 💡 类型
@@ -9203,7 +10398,7 @@ class P115Client:
     ) -> None | dict | Coroutine[Any, Any, None | dict]:
         """获取当前的登录设备的信息，如果为 None，也不代表当前的 cookies 被下线，只能说明有更晚的登录到同一设备
         """
-        def parse(resp, content: bytes) -> None | dict:
+        def parse(_, content: bytes, /) -> None | dict:
             login_devices = json_loads(content)
             if not login_devices["state"]:
                 return None
@@ -9695,7 +10890,7 @@ class P115Client:
         GET https://my.115.com/?ct=guide&ac=status
         """
         api = complete_api("/?ct=guide&ac=status", "my", base_url=base_url)
-        def parse(resp, content: bytes) -> bool:
+        def parse(_, content: bytes, /) -> bool:
             try:
                 return json_loads(content)["state"]
             except:
@@ -10154,7 +11349,7 @@ class P115Client:
             "User-Agent": "Mozilla/5.0 115disk/99.99.99.99 115Browser/99.99.99.99 115wangpan_android/99.99.99.99", 
         }
         request_kwargs["ecdh_encrypt"] = False
-        def parse(resp, content: bytes) -> dict:
+        def parse(_, content: bytes, /) -> dict:
             json = json_loads(content)
             if data := json.get("data"):
                 try:
@@ -10559,6 +11754,41 @@ class P115Client:
         GET https://lixian.115.com/lixian/?ct=lixian&ac=get_quota_info
         """
         api = complete_lixian_api("?ct=lixian&ac=get_quota_info", base_url=base_url)
+        return self.request(url=api, async_=async_, **request_kwargs)
+
+    @overload
+    def offline_quota_package_array(
+        self, 
+        /, 
+        base_url: None | bool | str | Callable[[], str] = None, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def offline_quota_package_array(
+        self, 
+        /, 
+        base_url: None | bool | str | Callable[[], str] = None, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def offline_quota_package_array(
+        self, 
+        /, 
+        base_url: None | bool | str | Callable[[], str] = None, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取当前离线配额信息（详细）
+
+        GET https://lixian.115.com/lixian/?ct=lixian&ac=get_quota_package_array
+        """
+        api = complete_lixian_api("?ct=lixian&ac=get_quota_package_array", base_url=base_url)
         return self.request(url=api, async_=async_, **request_kwargs)
 
     @overload
@@ -14187,6 +15417,56 @@ class P115Client:
             - all: 0 | 1 = 1
         """
         api = complete_webapi("/usershare/list", base_url=base_url)
+        if isinstance(payload, (int, str)):
+            payload = {"all": 1, "limit": 1150, "offset": payload}
+        else:
+            payload = {"all": 1, "limit": 1150, "offset": 0, **payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def usershare_list_app(
+        self, 
+        payload: int | str | dict = 0, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def usershare_list_app(
+        self, 
+        payload: int | str | dict = 0, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def usershare_list_app(
+        self, 
+        payload: int | str | dict = 0, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """共享列表
+
+        GET https://proapi.115.com/android/2.0/usershare/list
+
+        :payload:
+            - offset: int = 0
+            - limit: int = 1150
+            - all: 0 | 1 = 1
+        """
+        api = complete_proapi("/2.0/usershare/list", base_url, app)
         if isinstance(payload, (int, str)):
             payload = {"all": 1, "limit": 1150, "offset": payload}
         else:

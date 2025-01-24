@@ -782,7 +782,7 @@ LIMIT 1;""", (share_code, id))
                 yield attr
             if count > len(data):
                 if folder_count > len(data):
-                    special_dirs = frozenset(("我的接收", "自动备份", "云下载", "手机相册", "我的时光记录", "我的留恋", "云收藏"))
+                    special_dirs = frozenset(("我的接收", "云下载", "手机相册", "我的时光记录"))
                     diff = folder_count - len(data)
                     if not cid:
                         for info in data:
