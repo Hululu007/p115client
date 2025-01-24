@@ -82,6 +82,7 @@ def life_show(
 def iter_life_list(
     client: str | P115Client, 
     start_time: int | float = 0, 
+    app: str = "web", 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -91,6 +92,7 @@ def iter_life_list(
 def iter_life_list(
     client: str | P115Client, 
     start_time: int | float = 0, 
+    app: str = "web", 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -99,6 +101,7 @@ def iter_life_list(
 def iter_life_list(
     client: str | P115Client, 
     start_time: int | float = 0, 
+    app: str = "web", 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -110,6 +113,7 @@ def iter_life_list(
 
     :param client: 115 客户端或 cookies
     :param start_time: 开始时间（不含），若为 0 则从上 1 秒开始
+    :param app: 使用某个 app （设备）的接口
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -117,7 +121,7 @@ def iter_life_list(
     """
     if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
-    life_list = partial(client.life_list, **request_kwargs)
+    life_list = partial(client.life_list, app=app, **request_kwargs)
     life_behavior_detail = partial(client.life_behavior_detail_app, **request_kwargs)
     def gen_step():
         nonlocal start_time
@@ -178,6 +182,7 @@ def iter_life_behavior_once(
     date: str = "", 
     first_batch_size = 0, 
     app: str = "web", 
+    cooldown: int | float = 0, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -192,6 +197,7 @@ def iter_life_behavior_once(
     date: str = "", 
     first_batch_size = 0, 
     app: str = "web", 
+    cooldown: int | float = 0, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -205,6 +211,7 @@ def iter_life_behavior_once(
     date: str = "", 
     first_batch_size = 0, 
     app: str = "web", 
+    cooldown: int | float = 0, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -221,6 +228,7 @@ def iter_life_behavior_once(
     :param date: 日期，格式为 YYYY-MM-DD，若指定则只拉取这一天的数据
     :param first_batch_size: 首批的拉取数目
     :param app: 使用某个 app （设备）的接口
+    :param cooldown: 冷却时间，大于 0 时，两次接口调用之间至少间隔这么多秒
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -228,7 +236,7 @@ def iter_life_behavior_once(
     """
     if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
-    if app in ("web", "desktop", "harmony"):
+    if app in ("", "web", "desktop", "harmony"):
         life_behavior_detail = partial(client.life_behavior_detail, **request_kwargs)
     else:
         life_behavior_detail = partial(client.life_behavior_detail_app, app=app, **request_kwargs)
@@ -238,6 +246,7 @@ def iter_life_behavior_once(
         payload = {"type": type, "date": date, "limit": first_batch_size, "offset": 0}
         seen: set[str] = set()
         seen_add = seen.add
+        ts_last_call = time()
         resp = yield life_behavior_detail(payload, async_=async_)
         events = check_response(resp)["data"]["list"]
         payload["limit"] = 1000
@@ -254,6 +263,12 @@ def iter_life_behavior_once(
             if offset >= int(resp["data"]["count"]):
                 return
             payload["offset"] = offset
+            if cooldown > 0 and (delta := ts_last_call + cooldown - time()) > 0:
+                if async_:
+                    yield async_sleep(delta)
+                else:
+                    sleep(delta)
+            ts_last_call = time()
             resp = yield life_behavior_detail(payload, async_=async_)
             events = check_response(resp)["data"]["list"]
     return run_gen_step_iter(gen_step, async_=async_)
@@ -264,10 +279,11 @@ def iter_life_behavior(
     client: str | P115Client, 
     from_time: int | float = 0, 
     from_id: int = 0, 
-    interval: int | float = 0, 
     type: str = "", 
     ignore_types: None | Container[int] = IGNORE_BEHAVIOR_TYPES, 
     app: str = "web", 
+    cooldown: int | float = 0, 
+    interval: int | float = 0, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -278,10 +294,11 @@ def iter_life_behavior(
     client: str | P115Client, 
     from_time: int | float = 0, 
     from_id: int = 0, 
-    interval: int | float = 0, 
     type: str = "", 
     ignore_types: None | Container[int] = IGNORE_BEHAVIOR_TYPES, 
     app: str = "web", 
+    cooldown: int | float = 0, 
+    interval: int | float = 0, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -291,10 +308,11 @@ def iter_life_behavior(
     client: str | P115Client, 
     from_time: int | float = 0, 
     from_id: int = 0, 
-    interval: int | float = 0, 
     type: str = "", 
     ignore_types: None | Container[int] = IGNORE_BEHAVIOR_TYPES, 
     app: str = "web", 
+    cooldown: int | float = 0, 
+    interval: int | float = 0, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -307,9 +325,10 @@ def iter_life_behavior(
     :param client: 115 客户端或 cookies
     :param from_time: 开始时间（含），若为 0 则从当前时间开始，若小于 0 则从最早开始
     :param from_id: 开始的事件 id （不含）
-    :param interval: 睡眠时间间隔，如果小于等于 0，则不睡眠
     :param type: 指定拉取的操作事件名称
     :param ignore_types: 一组要被忽略的操作事件类型代码，仅当 `type` 为空时生效
+    :param cooldown: 冷却时间，大于 0 时，两次接口调用之间至少间隔这么多秒
+    :param interval: 两个批量拉取之间的睡眠时间间隔，如果小于等于 0，则不睡眠
     :param app: 使用某个 app （设备）的接口
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
@@ -331,7 +350,16 @@ def iter_life_behavior(
                     yield async_sleep(interval)
                 else:
                     sleep(interval)
-            it = iter_life_behavior_once(client, from_time, from_id, type, app=app, async_=async_, **request_kwargs)
+            it = iter_life_behavior_once(
+                client, 
+                from_time, 
+                from_id, 
+                type=type, 
+                app=app, 
+                cooldown=cooldown, 
+                async_=async_, 
+                **request_kwargs, 
+            )
             try:
                 sub_first_loop = True
                 while True:
@@ -356,6 +384,7 @@ def iter_life_behavior_list(
     type: str = "", 
     ignore_types: None | Container[int] = IGNORE_BEHAVIOR_TYPES, 
     app: str = "web", 
+    cooldown: int | float = 0, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -369,6 +398,7 @@ def iter_life_behavior_list(
     type: str = "", 
     ignore_types: None | Container[int] = IGNORE_BEHAVIOR_TYPES, 
     app: str = "web", 
+    cooldown: int | float = 0, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -381,6 +411,7 @@ def iter_life_behavior_list(
     type: str = "", 
     ignore_types: None | Container[int] = IGNORE_BEHAVIOR_TYPES, 
     app: str = "web", 
+    cooldown: int | float = 0, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -396,6 +427,7 @@ def iter_life_behavior_list(
     :param type: 指定拉取的操作事件名称
     :param ignore_types: 一组要被忽略的操作事件类型代码，仅当 `type` 为空时生效
     :param app: 使用某个 app （设备）的接口
+    :param cooldown: 冷却时间，大于 0 时，两次接口调用之间至少间隔这么多秒
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -410,7 +442,16 @@ def iter_life_behavior_list(
         while True:
             ls: list[dict] = []
             push = ls.append
-            it = iter_life_behavior_once(client, from_time, from_id, type, app=app, async_=async_, **request_kwargs)
+            it = iter_life_behavior_once(
+                client, 
+                from_time, 
+                from_id, 
+                type=type, 
+                app=app, 
+                cooldown=cooldown, 
+                async_=async_, 
+                **request_kwargs, 
+            )
             try:
                 first_loop = True
                 while True:

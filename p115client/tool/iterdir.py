@@ -8,8 +8,8 @@ __all__ = [
     "get_id_to_pickcode", "iter_nodes_skim", "iter_stared_dirs_raw", "iter_stared_dirs", "ensure_attr_path", 
     "ensure_attr_path_by_category_get", "iterdir_raw", "iterdir", "iter_files", "iter_files_raw", 
     "traverse_files", "iter_dupfiles", "iter_image_files", "iter_dangling_files", "share_extract_payload", 
-    "share_iterdir", "share_iter_files", "iter_selected_nodes", "iter_selected_nodes_by_category_get", 
-    "iter_selected_nodes_by_edit", "iter_selected_nodes_by_document", "iter_selected_nodes_using_star_event", 
+    "share_iterdir", "share_iter_files", "iter_selected_nodes", "iter_selected_nodes_by_pickcode", 
+    "iter_selected_nodes_using_category_get", "iter_selected_nodes_using_edit", "iter_selected_nodes_using_star_event", 
     "iter_selected_dirs_using_star", "iter_files_with_dirname", "iter_files_with_path", 
 ]
 __doc__ = "这个模块提供了一些和目录信息罗列有关的函数"
@@ -1441,7 +1441,7 @@ def ensure_attr_path[D: dict](
                             **request_kwargs, 
                         ))
                     else:
-                        yield do_through(iter_selected_nodes_by_edit(
+                        yield do_through(iter_selected_nodes_using_edit(
                             client, 
                             find_ids, 
                             normalize_attr=None, 
@@ -3113,6 +3113,7 @@ def share_iter_files(
 def iter_selected_nodes(
     client: str | P115Client, 
     ids: Iterable[int], 
+    ignore_deleted: bool = True, 
     normalize_attr: None | Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     max_workers: None | int = 20, 
@@ -3125,6 +3126,7 @@ def iter_selected_nodes(
 def iter_selected_nodes(
     client: str | P115Client, 
     ids: Iterable[int], 
+    ignore_deleted: bool = True, 
     normalize_attr: None | Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     max_workers: None | int = 20, 
@@ -3136,6 +3138,7 @@ def iter_selected_nodes(
 def iter_selected_nodes(
     client: str | P115Client, 
     ids: Iterable[int], 
+    ignore_deleted: bool = True, 
     normalize_attr: None | Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     max_workers: None | int = 20, 
@@ -3147,6 +3150,7 @@ def iter_selected_nodes(
 
     :param client: 115 客户端或 cookies
     :param ids: 一组文件或目录的 id
+    :param ignore_deleted: 忽略已经被删除的
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典，如果为 ...，则忽略
     :param max_workers: 最大并发数
@@ -3159,17 +3163,20 @@ def iter_selected_nodes(
         client = P115Client(client, check_for_relogin=True)
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
+    get_base_url = cycle(("http://webapi.115.com", "https://webapi.115.com")).__next__
+    request_kwargs.setdefault("base_url", get_base_url)
     def project(resp: dict, /) -> None | dict:
         if resp.get("code") == 20018:
             return None
         check_response(resp)
         info = resp["data"][0]
-        if id_to_dirnode is not ...:
+        was_deleted = int(info.get("aid") or info.get("area_id") or 1) != 1
+        if ignore_deleted and was_deleted:
+            return None
+        if id_to_dirnode is not ... and not was_deleted:
             attr = _overview_attr(info)
             if attr.is_dir:
                 id_to_dirnode[attr.id] = DirNode(attr.name, attr.parent_id)
-        if int(info.get("aid") or info.get("area_id")) != 1:
-            return None
         if normalize_attr is None:
             return info
         return normalize_attr(info)
@@ -3183,11 +3190,12 @@ def iter_selected_nodes(
 
 
 @overload
-def iter_selected_nodes_by_category_get(
+def iter_selected_nodes_by_pickcode(
     client: str | P115Client, 
     ids: Iterable[int], 
+    ignore_deleted: bool = True, 
+    normalize_attr: None | Callable[[dict], dict] = None, 
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
-    app: str = "web", 
     max_workers: None | int = 20, 
     *, 
     async_: Literal[False] = False, 
@@ -3195,22 +3203,24 @@ def iter_selected_nodes_by_category_get(
 ) -> Iterator[dict]:
     ...
 @overload
-def iter_selected_nodes_by_category_get(
+def iter_selected_nodes_by_pickcode(
     client: str | P115Client, 
     ids: Iterable[int], 
+    ignore_deleted: bool = True, 
+    normalize_attr: None | Callable[[dict], dict] = None, 
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
-    app: str = "web", 
-    max_workers: None | int = 20, 
+    max_workers: None | int = 20,  
     *, 
     async_: Literal[True], 
     **request_kwargs, 
 ) -> AsyncIterator[dict]:
     ...
-def iter_selected_nodes_by_category_get(
+def iter_selected_nodes_by_pickcode(
     client: str | P115Client, 
     ids: Iterable[int], 
+    ignore_deleted: bool = True, 
+    normalize_attr: None | Callable[[dict], dict] = None, 
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
-    app: str = "web", 
     max_workers: None | int = 20, 
     *, 
     async_: Literal[False, True] = False, 
@@ -3220,8 +3230,9 @@ def iter_selected_nodes_by_category_get(
 
     :param client: 115 客户端或 cookies
     :param ids: 一组文件或目录的 id
+    :param ignore_deleted: 忽略已经被删除的
+    :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典，如果为 ...，则忽略
-    :param app: 使用某个 app （设备）的接口
     :param max_workers: 最大并发数
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
@@ -3232,43 +3243,49 @@ def iter_selected_nodes_by_category_get(
         client = P115Client(client, check_for_relogin=True)
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
-    if app in ("", "web", "desktop", "harmony"):
-        func: Callable = partial(client.fs_category_get, async_=async_, **request_kwargs)
+    if ignore_deleted:
+        get_method = cycle((
+            partial(client.fs_document, base_url="http://webapi.115.com"), 
+            partial(client.fs_document_app, base_url="http://proapi.115.com"), 
+        )).__next__
     else:
-        func = partial(client.fs_category_get_app, app=app, async_=async_, **request_kwargs)
-    def call(id, /):
-        def parse(_, content: bytes):
-            resp = loads(content)
-            if resp:
-                resp["id"] = id
-                resp["parent_id"] = int(resp["paths"][-1]["file_id"])
-                resp["name"] = resp["file_name"]
-                resp["is_dir"] = not resp["sha1"]
-            return resp
-        return func(id, parse=parse)
+        get_method = cycle((
+            partial(client.fs_document, base_url="http://webapi.115.com"), 
+            partial(client.fs_document_app, base_url="http://proapi.115.com"), 
+            partial(client.fs_supervision, base_url="http://webapi.115.com"), 
+            partial(client.fs_supervision_app, base_url="http://proapi.115.com"), 
+        )).__next__
+    def get_document(info: dict, /):
+        return get_method()(
+            info["pick_code"], 
+            async_=async_, 
+            **request_kwargs, 
+        )
     def project(resp: dict, /) -> None | dict:
-        if not resp:
+        was_deleted = resp.get("code") == 31001 or resp.get("msg_code") == 70005
+        if ignore_deleted and was_deleted:
             return None
-        check_response(resp)
-        if id_to_dirnode is not ...:
-            pid = 0
-            for info in resp["paths"][1:]:
-                fid = int(info["file_id"])
-                id_to_dirnode[fid] = DirNode(info["file_name"], pid)
-                pid = fid
-            if resp["is_dir"]:
-                id_to_dirnode[resp["id"]] = DirNode(resp["name"], pid)
-        return resp
+        if not resp["state"] and not was_deleted:
+            check_response(resp)
+        info = resp["data"]
+        if not info or not info["file_id"]:
+            return None
+        if id_to_dirnode is not ... and not info["file_sha1"] and not was_deleted:
+            id_to_dirnode[int(info["file_id"])] = DirNode(info["file_name"], int(info["parent_id"]))
+        if normalize_attr is None:
+            return info
+        return normalize_attr(info)
+    it = iter_nodes_skim(client, ids, async_=async_, **request_kwargs)
     if async_:
         return async_filter(None, async_map(project, taskgroup_map( # type: ignore
-            call, ids, max_workers=max_workers)))
+            get_document, it, max_workers=max_workers, kwargs=request_kwargs)))
     else:
         return filter(None, map(project, threadpool_map(
-            call, ids, max_workers=max_workers)))
+            get_document, it, max_workers=max_workers, kwargs=request_kwargs)))
 
 
 @overload
-def iter_selected_nodes_by_edit(
+def iter_selected_nodes_using_edit(
     client: str | P115Client, 
     ids: Iterable[int], 
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
@@ -3279,7 +3296,7 @@ def iter_selected_nodes_by_edit(
 ) -> Iterator[dict]:
     ...
 @overload
-def iter_selected_nodes_by_edit(
+def iter_selected_nodes_using_edit(
     client: str | P115Client, 
     ids: Iterable[int], 
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
@@ -3289,7 +3306,7 @@ def iter_selected_nodes_by_edit(
     **request_kwargs, 
 ) -> AsyncIterator[dict]:
     ...
-def iter_selected_nodes_by_edit(
+def iter_selected_nodes_using_edit(
     client: str | P115Client, 
     ids: Iterable[int], 
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
@@ -3313,6 +3330,8 @@ def iter_selected_nodes_by_edit(
         client = P115Client(client, check_for_relogin=True)
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
+    get_base_url = cycle(("http://proapi.115.com", "https://proapi.115.com")).__next__
+    request_kwargs.setdefault("base_url", get_base_url)
     def project(resp: dict, /) -> None | dict:
         if resp.get("error") == "文件不存在/数据库错误了":
             return None
@@ -3336,10 +3355,9 @@ def iter_selected_nodes_by_edit(
 
 
 @overload
-def iter_selected_nodes_by_document(
+def iter_selected_nodes_using_category_get(
     client: str | P115Client, 
     ids: Iterable[int], 
-    normalize_attr: None | Callable[[dict], dict] = None, 
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     max_workers: None | int = 20, 
     *, 
@@ -3348,10 +3366,9 @@ def iter_selected_nodes_by_document(
 ) -> Iterator[dict]:
     ...
 @overload
-def iter_selected_nodes_by_document(
+def iter_selected_nodes_using_category_get(
     client: str | P115Client, 
     ids: Iterable[int], 
-    normalize_attr: None | Callable[[dict], dict] = None, 
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     max_workers: None | int = 20, 
     *, 
@@ -3359,10 +3376,9 @@ def iter_selected_nodes_by_document(
     **request_kwargs, 
 ) -> AsyncIterator[dict]:
     ...
-def iter_selected_nodes_by_document(
+def iter_selected_nodes_using_category_get(
     client: str | P115Client, 
     ids: Iterable[int], 
-    normalize_attr: None | Callable[[dict], dict] = None, 
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     max_workers: None | int = 20, 
     *, 
@@ -3373,7 +3389,6 @@ def iter_selected_nodes_by_document(
 
     :param client: 115 客户端或 cookies
     :param ids: 一组文件或目录的 id
-    :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典，如果为 ...，则忽略
     :param max_workers: 最大并发数
     :param async_: 是否异步
@@ -3386,32 +3401,40 @@ def iter_selected_nodes_by_document(
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
     get_method = cycle((
-        partial(client.fs_document, base_url="http://webapi.115.com"), 
-        partial(client.fs_document_app, base_url="http://proapi.115.com"), 
+        partial(client.fs_category_get, base_url="http://webapi.115.com"), 
+        partial(client.fs_category_get_app, base_url="http://proapi.115.com"), 
+        partial(client.fs_category_get, base_url="https://webapi.115.com"), 
+        partial(client.fs_category_get_app, base_url="https://proapi.115.com"), 
     )).__next__
-    def get_document(info: dict, /):
-        return get_method()(
-            info["pick_code"], 
-            async_=async_, 
-            **request_kwargs, 
-        )
+    def call(id, /):
+        def parse(_, content: bytes):
+            resp = loads(content)
+            if resp:
+                resp["id"] = id
+                resp["parent_id"] = int(resp["paths"][-1]["file_id"])
+                resp["name"] = resp["file_name"]
+                resp["is_dir"] = not resp["sha1"]
+            return resp
+        return get_method()(id, parse=parse, async_=async_, **request_kwargs)
     def project(resp: dict, /) -> None | dict:
-        if resp.get("code") == 31001 or resp.get("msg_code") == 70005:
+        if not resp:
             return None
-        info = resp["data"]
+        check_response(resp)
         if id_to_dirnode is not ...:
-            if not info["file_sha1"]:
-                id_to_dirnode[int(info["file_id"])] = DirNode(info["file_name"], int(info["parent_id"]))
-        if normalize_attr is None:
-            return info
-        return normalize_attr(info)
-    it = iter_nodes_skim(client, ids, async_=async_, **request_kwargs)
+            pid = 0
+            for info in resp["paths"][1:]:
+                fid = int(info["file_id"])
+                id_to_dirnode[fid] = DirNode(info["file_name"], pid)
+                pid = fid
+            if resp["is_dir"]:
+                id_to_dirnode[resp["id"]] = DirNode(resp["name"], pid)
+        return resp
     if async_:
         return async_filter(None, async_map(project, taskgroup_map( # type: ignore
-            get_document, it, max_workers=max_workers, kwargs=request_kwargs)))
+            call, ids, max_workers=max_workers)))
     else:
         return filter(None, map(project, threadpool_map(
-            get_document, it, max_workers=max_workers, kwargs=request_kwargs)))
+            call, ids, max_workers=max_workers)))
 
 
 @overload
@@ -3422,6 +3445,7 @@ def iter_selected_nodes_using_star_event(
     normalize_attr: None | bool | Callable[[dict], dict] = True, 
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
+    cooldown: int | float = 0, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -3435,6 +3459,7 @@ def iter_selected_nodes_using_star_event(
     normalize_attr: None | bool | Callable[[dict], dict] = True, 
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
+    cooldown: int | float = 0, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -3447,11 +3472,15 @@ def iter_selected_nodes_using_star_event(
     normalize_attr: None | bool | Callable[[dict], dict] = True, 
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
+    cooldown: int | float = 0, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
 ) -> Iterator[dict] | AsyncIterator[dict]:
     """通过打星标来获取一组 id 的信息
+
+    .. caution::
+        如果 id 已经被删除，则打星标时会报错
 
     :param client: 115 客户端或 cookies
     :param ids: 一组文件或目录的 id
@@ -3459,6 +3488,7 @@ def iter_selected_nodes_using_star_event(
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典，如果为 ...，则忽略
     :param app: 使用某个 app （设备）的接口
+    :param cooldown: 冷却时间，大于 0 时，两次接口调用之间至少间隔这么多秒
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -3490,12 +3520,18 @@ def iter_selected_nodes_using_star_event(
         ids = set(ids)
         yield life_show(client, async_=async_, **request_kwargs)
         yield update_star(client, ids, async_=async_, **request_kwargs)
+        if app in ("", "web", "desktop", "harmony"):
+            get_base_url = cycle(("http://webapi.115.com", "https://webapi.115.com")).__next__
+        else:
+            get_base_url = cycle(("http://proapi.115.com", "https://proapi.115.com")).__next__
+        request_kwargs.setdefault("base_url", get_base_url)
         discard = ids.discard
         it = iter_life_behavior_once(
             client, 
             from_time=ts, 
             type="star_file", 
             app=app, 
+            cooldown=cooldown, 
             async_=async_, 
             **request_kwargs, 
         )
@@ -3505,6 +3541,7 @@ def iter_selected_nodes_using_star_event(
                 from_time=ts, 
                 type="star_image_file", 
                 app=app, 
+                cooldown=cooldown, 
                 async_=async_, 
                 **request_kwargs, 
             )
@@ -3564,6 +3601,7 @@ def iter_selected_dirs_using_star(
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
     app: str = "web", 
+    already_stared: bool = False, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -3576,6 +3614,7 @@ def iter_selected_dirs_using_star(
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
     app: str = "web", 
+    already_stared: bool = False, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -3587,17 +3626,22 @@ def iter_selected_dirs_using_star(
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
     app: str = "web", 
+    already_stared: bool = False, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
 ) -> Iterator[dict] | AsyncIterator[dict]:
     """通过打星标来获取一组 id 的信息（仅支持目录）
 
+    .. caution::
+        如果 id 已经被删除，则打星标时会报错
+
     :param client: 115 客户端或 cookies
     :param ids: 一组目录的 id（如果包括文件，则会被忽略）
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param app: 使用某个 app （设备）的接口
+    :param already_stared: 说明所有 id 都已经打过星标，不用再次打星标
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -3609,7 +3653,8 @@ def iter_selected_dirs_using_star(
         nonlocal ids
         ts = int(time())
         ids = set(ids)
-        yield update_star(client, ids, async_=async_, **request_kwargs)
+        if not already_stared:
+            yield update_star(client, ids, async_=async_, **request_kwargs)
         yield update_desc(client, ids, async_=async_, **request_kwargs)
         discard = ids.discard
         it = iter_stared_dirs(
@@ -3699,7 +3744,7 @@ def iter_files_with_dirname(
     async_: Literal[False, True] = False, 
     **request_kwargs, 
 ) -> Iterator[dict] | AsyncIterator[dict]:
-    """遍历目录树，获取文件信息（会专门提供一个 "dir_name" 和 "dir_pickcode"，就是目录的名字和提取码，根目录名字和提取码都是 ""）
+    """遍历目录树，获取文件信息（包含 "dir_name" 和 "dir_pickcode"，即目录的名字和提取码，根目录名字和提取码都是 ""）
 
     :param client: 115 客户端或 cookies
     :param cid: 目录 id
@@ -3830,7 +3875,7 @@ def iter_files_with_path(
     """遍历目录树，获取文件信息（包含 "path" 和 "posixpath"）
 
     .. important::
-        相比较于 `iter_files`，这个函数专门针对获取路径的风控问题做了优化
+        相比较于 `iter_files`，这个函数专门针对获取路径的风控问题做了优化，会用到 导出目录树，尝试进行匹配，不能唯一确定的，会再用其它办法获取路径
 
     :param client: 115 客户端或 cookies
     :param cid: 目录 id
@@ -3864,7 +3909,7 @@ def iter_files_with_path(
                 client, 
                 cid, 
                 app="android", 
-                cooldown=1, 
+                cooldown=0.5, 
                 base_url=cycle(("http://proapi.115.com", "https://proapi.115.com")).__next__, 
                 async_=async_, 
                 **request_kwargs, 
@@ -3946,10 +3991,11 @@ def iter_files_with_path(
         do_through: Callable = async_through if async_ else through
         id_to_dirnode: dict[int, DirNode] = {}
         while unbound_pids:
-            yield do_through(iter_selected_nodes_by_document(
+            yield do_through(iter_selected_nodes_by_pickcode(
                 client, 
                 unbound_pids, 
                 id_to_dirnode=id_to_dirnode, 
+                ignore_deleted=False, 
                 async_=async_, # type: ignore
                 **request_kwargs, 
             ))

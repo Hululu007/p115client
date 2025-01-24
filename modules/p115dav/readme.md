@@ -14,9 +14,14 @@ pip install -U p115dav
 
 ```console
 $ p115dav -h
-usage: p115dav [-h] [-cp COOKIES_PATH] [-o STRM_ORIGIN] [-t TTL] [-p1 PREDICATE] [-t1 {ignore,ignore-file,expr,lambda,stmt,module,file,re}] [-p2 STRM_PREDICATE]
-               [-t2 {filter,filter-file,expr,lambda,stmt,module,file,re}] [-fs] [-H HOST] [-P PORT] [-cu] [-d] [-ai] [-ass] [-ow] [-uc UVICORN_RUN_CONFIG_PATH]
-               [-wc WSGIDAV_CONFIG_PATH] [-wu [WSGIDAV_USERNAME_PASSWORD ...]] [-l] [-v]
+usage: p115dav [-h] [-cp COOKIES_PATH] [-o STRM_ORIGIN] [-t TTL]
+               [-p1 PREDICATE]
+               [-t1 {ignore,ignore-file,expr,lambda,stmt,module,file,re}]
+               [-p2 STRM_PREDICATE]
+               [-t2 {filter,filter-file,expr,lambda,stmt,module,file,re}]
+               [-fs] [-H HOST] [-P PORT] [-cl] [-cu] [-d] [-ass] [-ow]
+               [-uc UVICORN_RUN_CONFIG_PATH] [-wc WSGIDAV_CONFIG_PATH]
+               [-wu [WSGIDAV_USERNAME_PASSWORD ...]] [-l] [-v]
                [dbfile]
 
     🕸️ 115 网盘 WebDAV 和 302 直链程序 🕷️
@@ -87,10 +92,10 @@ options:
                         
   -H HOST, --host HOST  ip 或 hostname，默认值：'0.0.0.0'
   -P PORT, --port PORT  端口号，默认值：8000，如果为 0 则自动确定
+  -cl, --check-for-relogin
+                        当风控时，自动重新扫码登录
   -cu, --cache-url      缓存下载链接
   -d, --debug           启用 debug 模式，输出详细的错误信息
-  -ai, --allow-imcomplete
-                        当一个目录内，可罗列元素过多时，允许丢弃一部分
   -ass, --load-libass   加载 libass.js，实现 ass/ssa 字幕特效
   -ow, --only-webdav    禁用网页版，只有 webdav 可用
   -uc UVICORN_RUN_CONFIG_PATH, --uvicorn-run-config-path UVICORN_RUN_CONFIG_PATH

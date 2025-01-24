@@ -27,8 +27,8 @@ from p115client.exception import BusyOSError, P115Warning
 from p115client.tool.fs_files import iter_fs_files, iter_fs_files_threaded
 from p115client.tool.iterdir import (
     get_file_count, get_id_to_path, iter_stared_dirs, iter_selected_nodes, 
-    iter_selected_nodes_by_document, iter_selected_nodes_using_star_event, 
-    iter_selected_nodes_by_category_get, 
+    iter_selected_nodes_by_pickcode, iter_selected_nodes_using_star_event, 
+    iter_selected_nodes_using_category_get, 
 )
 from p115client.tool.life import (
     iter_life_behavior, IGNORE_BEHAVIOR_TYPES, BEHAVIOR_TYPE_TO_NAME, 
@@ -413,7 +413,7 @@ def load_ancestors(
     """
     if dont_star is None:
         id_to_dirnode: dict = {}
-        for _ in iter_selected_nodes_by_category_get(
+        for _ in iter_selected_nodes_using_category_get(
             client, 
             {a["parent_id"]: a["id"] for a in data}.values(), 
             id_to_dirnode=id_to_dirnode, 
@@ -443,6 +443,7 @@ def load_ancestors(
                     "pickcode": event["pick_code"], 
                     "is_dir": 1, 
                 }, 
+                cooldown=0.5, 
             )
         while pids := {pid for a in data if (pid := a["parent_id"]) not in seen}:
             seen |= pids
@@ -942,7 +943,7 @@ def updatedb_tree(
         pairs = dict(iter_id_to_parent_id(con, to_remove))
         to_remove = []
         add_to_recall = to_recall.append
-        for attr in iter_selected_nodes_by_document(
+        for attr in iter_selected_nodes_by_pickcode(
             client, 
             tuple(pairs.keys()), 
             normalize_attr = lambda info: {

@@ -8250,6 +8250,7 @@ class P115Client:
 
         :payload:
             - pickcode: str 💡 提取码
+            - download: int = <default>
         """
         api = complete_webapi("/files/music", base_url=base_url)
         if isinstance(payload, str):
