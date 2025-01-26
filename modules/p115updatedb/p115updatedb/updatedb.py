@@ -633,7 +633,8 @@ def diff_dir(
         count, ancestors, seen, data_it = iterdir(client, id, first_page_size=128, show_dir=False, **request_kwargs)
     else:
         count, ancestors, seen, data_it = iterdir(client, id, first_page_size=16, **request_kwargs)
-    remains, groups = future.result()
+    groups = future.result()
+    remains = sum(len(g[1]) for g in groups)
     upsert_add = upsert_list.append
     remove_extend = remove_list.extend
     result = upsert_list, remove_list
@@ -931,7 +932,7 @@ def updatedb_tree(
     :param client: 115 网盘客户端对象
     :param dbfile: 数据库文件路径，如果为 None，则自动确定
     :param id: 要拉取的顶层目录 id
-    :param no_dir_moved: 是否无目录被移动，如果为 True，则拉取会快一些
+    :param no_dir_moved: 是否无目录被移动或改名，如果为 True，则拉取会快一些
     :param request_kwargs: 其它 http 请求参数，会传给具体的请求函数，默认的是 httpx，可用参数 request 进行设置
 
     :return: 2 元组，1) 已更替的数据列表，2) 已移除的 id 列表
@@ -1005,9 +1006,9 @@ def updatedb(
     :param top_dirs: 要拉取的顶层目录集，可以是目录 id 或路径
     :param auto_splitting_threshold: 自动拆分任务时，仅当目录里面的总的文件和目录数大于此值才拆分任务，当 recursive 为 True 时生效
     :param auto_splitting_statistics_timeout: 自动拆分任务统计超时，当 recursive 为 True 时生效。如果超过此时间还不能确定目录里面的总的文件和目录数，则视为无穷大
-    :param no_dir_moved: 是否无目录被移动，如果为 True，则拉取会快一些
+    :param no_dir_moved: 是否无目录被移动或改名，如果为 True，则拉取会快一些
     :param recursive: 是否递归拉取，如果为 True 则拉取目录树，否则只拉取一级目录
-    :param interval: 两次批量拉取之间的睡眠时间，如果 <= 0，则不睡眠
+    :param interval: 两个任务之间的睡眠时间，如果 <= 0，则不睡眠
     :param logger: 日志对象，如果为 None，则不输出日志
     :param disable_event: 是否关闭 event 表的数据收集
     :param request_kwargs: 其它 http 请求参数，会传给具体的请求函数，默认的是 httpx，可用参数 request 进行设置

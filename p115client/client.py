@@ -2181,13 +2181,13 @@ class P115Client:
                         if cookies_equal(cookies, cookies_new):
                             m = CRE_COOKIES_UID_search(cookies)
                             uid = "" if m is None else m[0]
-                            warn(f"relogin to refresh cookies: UID={uid!r} app={self.login_app()!r}", category=P115Warning)
                             need_read_cookies = cookies_mtime_new > cookies_mtime
                             if need_read_cookies:
                                 cookies_new = self._read_cookies()
                             if i and cookies_equal(cookies_old, cookies_new):
                                 raise
                             if not (need_read_cookies and cookies_new):
+                                warn(f"relogin to refresh cookies: UID={uid!r} app={self.login_app()!r}", category=P115Warning)
                                 yield self.login_another_app(replace=True, async_=async_) # type: ignore
                     finally:
                         lock.release()

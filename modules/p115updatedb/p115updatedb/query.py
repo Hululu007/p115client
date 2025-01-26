@@ -792,27 +792,26 @@ def select_mtime_groups(
     parent_id: int = 0, 
     /, 
     tree: bool = False, 
-) -> tuple[int, list[tuple[int, set[int]]]]:
+) -> list[tuple[int, set[int]]]:
     """获取某个目录之下的节点（不含此节点本身），按 mtime 进行分组，相同 mtime 的 id 归入同一组
 
     :param con: 数据库连接或游标
     :param parent_id: 父目录的 id
     :param tree: 是否拉取目录树，如果为 True，则拉取全部后代的文件节点（不含目录节点），如果为 False，则只拉取子节点（含目录节点）
 
-    :return: 字典，表示相同 mtime 的 id 的集合，所以 key 是 mtime，value 是一组 id 的集合
+    :return: 元组的列表（逆序排列），每个元组第 1 个元素是 mtime，第 2 个元素是相同 mtime 的 id 的集合
     """
     if tree:
         it = iter_descendants_fast(con, parent_id, fields=("id", "mtime"), ensure_file=True, to_dict=False)
     else:
         it = iter_descendants_fast(con, parent_id, fields=("id", "mtime"), max_depth=1, to_dict=False)
     d: dict[int, set[int]] = {}
-    n = 0
-    for n, (id, mtime) in enumerate(it, 1):
+    for id, mtime in it:
         try:
             d[mtime].add(id)
         except KeyError:
             d[mtime] = {id}
-    return n, sorted(d.items(), reverse=True)
+    return sorted(d.items(), reverse=True)
 
 
 def dump_to_alist(

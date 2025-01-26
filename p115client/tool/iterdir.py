@@ -998,6 +998,7 @@ def _iter_fs_files(
     ensure_file: None | bool = None, 
     app: str = "web", 
     cooldown: int | float = 0, 
+    max_workers: None | int = None, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -1014,6 +1015,7 @@ def _iter_fs_files(
     ensure_file: None | bool = None, 
     app: str = "web", 
     cooldown: int | float = 0, 
+    max_workers: None | int = None, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -1029,6 +1031,7 @@ def _iter_fs_files(
     ensure_file: None | bool = None, 
     app: str = "web", 
     cooldown: int | float = 0, 
+    max_workers: None | int = None, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -1048,6 +1051,7 @@ def _iter_fs_files(
 
     :param app: 使用某个 app （设备）的接口
     :param cooldown: 冷却时间，大于 0，则使用此时间间隔执行并发
+    :param max_workers: 最大工作线程数
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -1078,7 +1082,7 @@ def _iter_fs_files(
             page_size=page_size, 
             raise_for_changed_count=raise_for_changed_count, 
         )
-        if cooldown <= 0:
+        if cooldown <= 0 or max_workers == 1:
             it = iter_fs_files(
                 client, 
                 payload, 
@@ -1091,6 +1095,7 @@ def _iter_fs_files(
                 client, 
                 payload, 
                 cooldown=cooldown, 
+                max_workers=max_workers, 
                 **request_kwargs, 
             )
         else:
@@ -1098,6 +1103,7 @@ def _iter_fs_files(
                 client, 
                 payload, 
                 cooldown=cooldown, 
+                max_workers=max_workers, 
                 **request_kwargs, 
             )
         do_next = anext if async_ else next
@@ -1135,6 +1141,7 @@ def iter_stared_dirs_raw(
     raise_for_changed_count: bool = False, 
     app: str = "web", 
     cooldown: int | float = 0, 
+    max_workers: None | int = None, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -1151,6 +1158,7 @@ def iter_stared_dirs_raw(
     raise_for_changed_count: bool = False, 
     app: str = "web", 
     cooldown: int | float = 0, 
+    max_workers: None | int = None, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -1166,6 +1174,7 @@ def iter_stared_dirs_raw(
     raise_for_changed_count: bool = False, 
     app: str = "web", 
     cooldown: int | float = 0, 
+    max_workers: None | int = None, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -1189,6 +1198,7 @@ def iter_stared_dirs_raw(
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param app: 使用某个 app （设备）的接口
     :param cooldown: 冷却时间，大于 0，则使用此时间间隔执行并发
+    :param max_workers: 最大工作线程数
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -1207,7 +1217,8 @@ def iter_stared_dirs_raw(
         ensure_file=False, 
         app=app, 
         cooldown=cooldown, 
-        async_=async_, 
+        max_workers=max_workers, 
+        async_=async_, # type: ignore
         **request_kwargs, 
     )
 
@@ -1672,6 +1683,7 @@ def iterdir_raw(
     ensure_file: None | bool = None, 
     app: str = "web", 
     cooldown: int | float = 0, 
+    max_workers: None | int = None, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -1692,6 +1704,7 @@ def iterdir_raw(
     ensure_file: None | bool = None, 
     app: str = "web", 
     cooldown: int | float = 0, 
+    max_workers: None | int = None, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -1711,6 +1724,7 @@ def iterdir_raw(
     ensure_file: None | bool = None, 
     app: str = "web", 
     cooldown: int | float = 0, 
+    max_workers: None | int = None, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -1743,6 +1757,7 @@ def iterdir_raw(
 
     :param app: 使用某个 app （设备）的接口
     :param cooldown: 冷却时间，大于 0，则使用此时间间隔执行并发
+    :param max_workers: 最大工作线程数
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -1761,6 +1776,7 @@ def iterdir_raw(
         ensure_file=ensure_file, 
         app=app, 
         cooldown=cooldown, 
+        max_workers=max_workers, 
         async_=async_, # type: ignore
         **request_kwargs, 
     )
@@ -1785,6 +1801,7 @@ def iterdir(
     ensure_file: None | bool = None, 
     app: str = "web", 
     cooldown: int | float = 0, 
+    max_workers: None | int = None, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -1809,6 +1826,7 @@ def iterdir(
     ensure_file: None | bool = None, 
     app: str = "web", 
     cooldown: int | float = 0, 
+    max_workers: None | int = None, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -1832,6 +1850,7 @@ def iterdir(
     ensure_file: None | bool = None, 
     app: str = "web", 
     cooldown: int | float = 0, 
+    max_workers: None | int = None, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -1868,6 +1887,7 @@ def iterdir(
 
     :param app: 使用某个 app （设备）的接口
     :param cooldown: 冷却时间，大于 0，则使用此时间间隔执行并发
+    :param max_workers: 最大工作线程数
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
@@ -1896,6 +1916,7 @@ def iterdir(
             ensure_file=ensure_file, 
             app=app, 
             cooldown=cooldown, 
+            max_workers=max_workers, 
             async_=async_, # type: ignore
             **request_kwargs, 
         )
@@ -1952,6 +1973,7 @@ def iter_files_raw(
     raise_for_changed_count: bool = False, 
     app: str = "web", 
     cooldown: int | float = 0, 
+    max_workers: None | int = None, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -1972,6 +1994,7 @@ def iter_files_raw(
     raise_for_changed_count: bool = False, 
     app: str = "web", 
     cooldown: int | float = 0, 
+    max_workers: None | int = None, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -1991,6 +2014,7 @@ def iter_files_raw(
     raise_for_changed_count: bool = False, 
     app: str = "web", 
     cooldown: int | float = 0, 
+    max_workers: None | int = None, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -2028,6 +2052,7 @@ def iter_files_raw(
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param app: 使用某个 app （设备）的接口
     :param cooldown: 冷却时间，大于 0，则使用此时间间隔执行并发
+    :param max_workers: 最大工作线程数
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -2054,7 +2079,8 @@ def iter_files_raw(
         ensure_file=True, 
         app=app, 
         cooldown=cooldown, 
-        async_=async_, 
+        max_workers=max_workers, 
+        async_=async_, # type: ignore
         **request_kwargs, 
     )
 
@@ -2079,6 +2105,7 @@ def iter_files(
     raise_for_changed_count: bool = False, 
     app: str = "web", 
     cooldown: int | float = 0, 
+    max_workers: None | int = None, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -2104,6 +2131,7 @@ def iter_files(
     raise_for_changed_count: bool = False, 
     app: str = "web", 
     cooldown: int | float = 0, 
+    max_workers: None | int = None, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -2128,6 +2156,7 @@ def iter_files(
     raise_for_changed_count: bool = False, 
     app: str = "web", 
     cooldown: int | float = 0, 
+    max_workers: None | int = None, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -2170,6 +2199,7 @@ def iter_files(
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param app: 使用某个 app （设备）的接口
     :param cooldown: 冷却时间，大于 0，则使用此时间间隔执行并发
+    :param max_workers: 最大工作线程数
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -2236,6 +2266,7 @@ def iter_files(
             raise_for_changed_count=raise_for_changed_count, 
             app=app, 
             cooldown=cooldown, 
+            max_workers=max_workers, 
             async_=async_, # type: ignore
             **request_kwargs, 
         )
@@ -2304,6 +2335,7 @@ def traverse_files(
     raise_for_changed_count: bool = False, 
     app: str = "web", 
     cooldown: int | float = 0, 
+    max_workers: None | int = None, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -2328,6 +2360,7 @@ def traverse_files(
     raise_for_changed_count: bool = False, 
     app: str = "web", 
     cooldown: int | float = 0, 
+    max_workers: None | int = None, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -2351,6 +2384,7 @@ def traverse_files(
     raise_for_changed_count: bool = False, 
     app: str = "web", 
     cooldown: int | float = 0, 
+    max_workers: None | int = None, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -2407,6 +2441,7 @@ def traverse_files(
             raise_for_changed_count=raise_for_changed_count, 
             app=app, 
             cooldown=cooldown, 
+            max_workers=max_workers, 
             async_=async_, # type: ignore
             **request_kwargs, 
         )
@@ -2508,6 +2543,7 @@ def traverse_files(
                                 raise_for_changed_count=raise_for_changed_count, 
                                 app=app, 
                                 cooldown=cooldown, 
+                                max_workers=max_workers, 
                                 async_=async_, # type: ignore
                                 **request_kwargs, 
                             ))
