@@ -23,7 +23,8 @@ from p115client.client import get_status_code
 from p115client.exception import BusyOSError, DataError, P115Warning
 
 
-get_proapi_origin: Final = cycle(("https://proapi.115.com", "http://pro.api.115.com")).__next__
+get_webapi_origin: Final = cycle(("http://webapi.115.com", "https://webapi.115.com")).__next__
+get_proapi_origin: Final = cycle(("http://proapi.115.com", "https://proapi.115.com")).__next__
 
 
 def is_timeouterror(exc: BaseException, /) -> bool:
@@ -105,6 +106,7 @@ def iter_fs_files(
     }
     cid = int(payload["cid"])
     if app in ("", "web", "desktop", "harmony"):
+        request_kwargs.setdefault("base_url", get_webapi_origin)
         fs_files = partial(client.fs_files, async_=async_, **request_kwargs)
     else:
         request_kwargs.setdefault("base_url", get_proapi_origin)
@@ -180,6 +182,7 @@ def iter_fs_files_threaded(
     request_kwargs["async_"] = False
     if app in ("", "web", "desktop", "harmony"):
         page_size = min(page_size, 1150)
+        request_kwargs.setdefault("base_url", get_webapi_origin)
         fs_files = partial(client.fs_files, **request_kwargs)
     else:
         request_kwargs.setdefault("base_url", get_proapi_origin)
@@ -276,6 +279,7 @@ async def iter_fs_files_asynchronized(
     request_kwargs["async_"] = True
     if app in ("", "web", "desktop", "harmony"):
         page_size = min(page_size, 1150)
+        request_kwargs.setdefault("base_url", get_webapi_origin)
         fs_files = partial(client.fs_files, **request_kwargs)
     else:
         request_kwargs.setdefault("base_url", get_proapi_origin)

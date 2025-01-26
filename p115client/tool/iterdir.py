@@ -1310,6 +1310,7 @@ def ensure_attr_path[D: dict](
     with_ancestors: bool = False, 
     with_path: bool = True, 
     use_star: bool = False, 
+    life_event_cooldown: int | float = 0.5, 
     escape: None | Callable[[str], str] = escape, 
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
@@ -1327,6 +1328,7 @@ def ensure_attr_path[D: dict](
     with_ancestors: bool = False, 
     with_path: bool = True, 
     use_star: bool = False, 
+    life_event_cooldown: int | float = 0.5, 
     escape: None | Callable[[str], str] = escape, 
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
@@ -1343,6 +1345,7 @@ def ensure_attr_path[D: dict](
     with_ancestors: bool = False, 
     with_path: bool = True, 
     use_star: bool = False, 
+    life_event_cooldown: int | float = 0.5, 
     escape: None | Callable[[str], str] = escape, 
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
@@ -1359,6 +1362,7 @@ def ensure_attr_path[D: dict](
     :param with_ancestors: 文件信息中是否要包含 "ancestors"
     :param with_path: 文件信息中是否要包含 "path"
     :param use_star: 获取目录信息时，是否允许使用星标
+    :param life_event_cooldown: 冷却时间，大于 0 时，两次拉取操作事件的接口调用之间至少间隔这么多秒
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
     :param app: 使用某个 app （设备）的接口
@@ -1439,18 +1443,19 @@ def ensure_attr_path[D: dict](
                             find_ids, 
                             normalize_attr=None, 
                             id_to_dirnode=id_to_dirnode, 
+                            cooldown=life_event_cooldown, 
                             app=app, 
-                            async_=async_, 
+                            async_=async_, # type: ignore
                             **request_kwargs, 
                         ))
                     else:
-                        yield do_through(iter_selected_nodes_using_edit(
+                        yield do_through(iter_selected_nodes_by_pickcode(
                             client, 
                             find_ids, 
                             normalize_attr=None, 
                             id_to_dirnode=id_to_dirnode, 
-                            app=app, 
-                            async_=async_, 
+                            ignore_deleted=None, 
+                            async_=async_, # type: ignore
                             **request_kwargs, 
                         ))
                 except Exception as e:
@@ -2230,6 +2235,7 @@ def iter_files(
             id_to_dirnode=id_to_dirnode, 
             raise_for_changed_count=raise_for_changed_count, 
             app=app, 
+            cooldown=cooldown, 
             async_=async_, # type: ignore
             **request_kwargs, 
         )
@@ -3221,7 +3227,7 @@ def iter_selected_nodes_by_pickcode(
 def iter_selected_nodes_by_pickcode(
     client: str | P115Client, 
     ids: Iterable[int], 
-    ignore_deleted: bool = True, 
+    ignore_deleted: None | bool = True, 
     normalize_attr: None | Callable[[dict], dict] = None, 
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     max_workers: None | int = 20, 
@@ -3251,10 +3257,15 @@ def iter_selected_nodes_by_pickcode(
             partial(client.fs_document, base_url="http://webapi.115.com"), 
             partial(client.fs_document_app, base_url="http://proapi.115.com"), 
         )).__next__
-    else:
+    elif ignore_deleted is None:
         get_method = cycle((
             partial(client.fs_document, base_url="http://webapi.115.com"), 
             partial(client.fs_document_app, base_url="http://proapi.115.com"), 
+            partial(client.fs_supervision, base_url="http://webapi.115.com"), 
+            partial(client.fs_supervision_app, base_url="http://proapi.115.com"), 
+        )).__next__
+    else:
+        get_method = cycle((
             partial(client.fs_supervision, base_url="http://webapi.115.com"), 
             partial(client.fs_supervision_app, base_url="http://proapi.115.com"), 
         )).__next__
@@ -3491,7 +3502,7 @@ def iter_selected_nodes_using_star_event(
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典，如果为 ...，则忽略
     :param app: 使用某个 app （设备）的接口
-    :param cooldown: 冷却时间，大于 0 时，两次接口调用之间至少间隔这么多秒
+    :param cooldown: 冷却时间，大于 0 时，两次拉取操作事件的接口调用之间至少间隔这么多秒
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -3604,6 +3615,7 @@ def iter_selected_dirs_using_star(
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
     app: str = "web", 
+    cooldown: int | float = 0, 
     already_stared: bool = False, 
     *, 
     async_: Literal[False] = False, 
@@ -3617,6 +3629,7 @@ def iter_selected_dirs_using_star(
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
     app: str = "web", 
+    cooldown: int | float = 0, 
     already_stared: bool = False, 
     *, 
     async_: Literal[True], 
@@ -3629,6 +3642,7 @@ def iter_selected_dirs_using_star(
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
     app: str = "web", 
+    cooldown: int | float = 0, 
     already_stared: bool = False, 
     *, 
     async_: Literal[False, True] = False, 
@@ -3644,6 +3658,7 @@ def iter_selected_dirs_using_star(
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param app: 使用某个 app （设备）的接口
+    :param cooldown: 冷却时间，大于 0 时，两次接口调用之间至少间隔这么多秒
     :param already_stared: 说明所有 id 都已经打过星标，不用再次打星标
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
@@ -3668,6 +3683,7 @@ def iter_selected_dirs_using_star(
             id_to_dirnode=id_to_dirnode, 
             normalize_attr=normalize_attr, 
             app=app, 
+            cooldown=cooldown, 
             async_=async_, # type: ignore
             **request_kwargs, 
         )
@@ -3913,7 +3929,6 @@ def iter_files_with_path(
                 cid, 
                 app="android", 
                 cooldown=0.5, 
-                base_url=cycle(("http://proapi.115.com", "https://proapi.115.com")).__next__, 
                 async_=async_, 
                 **request_kwargs, 
             ), 
@@ -3998,7 +4013,7 @@ def iter_files_with_path(
                 client, 
                 unbound_pids, 
                 id_to_dirnode=id_to_dirnode, 
-                ignore_deleted=False, 
+                ignore_deleted=None, 
                 async_=async_, # type: ignore
                 **request_kwargs, 
             ))
