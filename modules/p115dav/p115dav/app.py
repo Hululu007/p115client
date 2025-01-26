@@ -12,13 +12,13 @@ from asyncio import (
     get_running_loop, run_coroutine_threadsafe, to_thread, AbstractEventLoop, Lock, 
 )
 from collections import deque
-from collections.abc import AsyncIterator, Buffer, Callable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Buffer, Iterator, Mapping, Sequence
 from contextlib import closing, suppress
 from datetime import datetime
 from errno import ENOENT, EBUSY
 from http import HTTPStatus
 from io import BytesIO
-from itertools import cycle, dropwhile
+from itertools import cycle
 from math import isinf, isnan
 from pathlib import Path
 from posixpath import split as splitpath, splitext
@@ -33,12 +33,43 @@ from time import time
 from _thread import start_new_thread
 from typing import cast, Any
 from urllib.parse import parse_qsl, quote, unquote, urlsplit, urlunsplit
-from warnings import warn
 from weakref import WeakValueDictionary
+
+from blacksheep.server.compression import use_gzip_compression
+from blacksheep.server.rendering.jinja2 import JinjaRenderer
+from blacksheep.settings.html import html_settings
+from blacksheep.settings.json import json_settings
+from blacksheep import redirect, text, Application, Router
+from blacksheep.contents import Content, StreamedContent
+from blacksheep.messages import Request, Response
+from blacksheep.server.remotes.forwarding import ForwardedHeadersMiddleware
+from blacksheep.server.responses import view_async
+from encode_uri import encode_uri, encode_uri_component_loose
+from orjson import dumps, loads, OPT_INDENT_2, OPT_SORT_KEYS
+from posixpatht import escape
+from texttools import format_size, format_timestamp
+from uvicorn.config import LOGGING_CONFIG
 
 
 CRE_URL_T_search = re_compile(r"(?<=(?:\?|&)t=)\d+").search
-_INITIALIZED = False
+LOGGING_CONFIG["formatters"]["default"]["fmt"] = "[\x1b[1m%(asctime)s\x1b[0m] %(levelprefix)s %(message)s"
+LOGGING_CONFIG["formatters"]["access"]["fmt"] = '[\x1b[1m%(asctime)s\x1b[0m] %(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s'
+
+register_adapter(dict, dumps)
+register_adapter(list, dumps)
+register_converter("JSON", loads)
+
+environ["APP_JINJA_PACKAGE_NAME"] = "p115dav"
+html_settings.use(JinjaRenderer(enable_async=True))
+json_settings.use(loads=loads)
+jinja_env = getattr(html_settings.renderer, "env")
+jinja2_filters = jinja_env.filters
+jinja2_filters["format_size"] = format_size
+jinja2_filters["encode_uri"] = encode_uri
+jinja2_filters["encode_uri_component"] = encode_uri_component_loose
+jinja2_filters["json_dumps"] = lambda data: dumps(data).decode("utf-8").replace("'", "&apos;")
+jinja2_filters["format_timestamp"] = format_timestamp
+jinja2_filters["escape_name"] = lambda name, default="/": escape(name) or default
 
 
 class ColoredLevelNameFormatter(logging.Formatter):
@@ -64,28 +95,6 @@ class ColoredLevelNameFormatter(logging.Formatter):
                 # dark grey
                 record.levelname = f"\x1b[2m{record.levelname}\x1b[0m: ".ljust(18)
         return super().format(record)
-
-
-def format_size(
-    n: int, 
-    /, 
-    unit: str = "", 
-    precision: int = 2, 
-) -> str:
-    "scale bytes to its proper byte format"
-    if unit == "B" or not unit and n < 1024:
-        return f"{n} B"
-    b = 1
-    b2 = 1024
-    for u in ["K", "M", "G", "T", "P", "E", "Z", "Y"]:
-        b, b2 = b2, b2 << 10
-        if u == unit if unit else n < b2:
-            break
-    return f"%.{precision}f {u}B" % (n / b)
-
-
-def format_timestamp(ts: int | float, /) -> str:
-    return str(datetime.fromtimestamp(ts))
 
 
 def get_status_code(e: BaseException, /) -> None | int:
@@ -116,72 +125,6 @@ def get_origin(request: Request) -> str:
     return f"{request.scheme}://{request.host}"
 
 
-def _init():
-    global _INITIALIZED
-    if _INITIALIZED:
-        return
-
-    from blacksheep.server import asgi
-    from blacksheep.server.rendering.jinja2 import JinjaRenderer
-    from blacksheep.settings.html import html_settings
-    from blacksheep.settings.json import json_settings
-    from blacksheep import redirect, text, Application, Router
-    from blacksheep.contents import Content, StreamedContent
-    from blacksheep.messages import Request, Response
-    from blacksheep.server.remotes.forwarding import ForwardedHeadersMiddleware
-    from blacksheep.server.responses import view_async
-
-    globals().update(locals())
-
-    from inspect import getsource
-
-    get_request_url_from_scope = asgi.get_request_url_from_scope
-    source = getsource(get_request_url_from_scope)
-    repl_code = '        host, port = scope["server"]'
-    if repl_code in source:
-        exec(getsource(get_request_url_from_scope).replace(repl_code, """\
-        for key, val in scope["headers"]:
-            key = key.lower()
-            if key in (b"host", b"x-forwarded-host", b"x-original-host"):
-                host = val.decode("latin-1")
-                port = 80 if protocol == "http" else 443
-                break
-        else:
-            host, port = scope["server"]"""), asgi.__dict__)
-        get_request_url_from_scope.__code__ = asgi.get_request_url_from_scope.__code__
-
-    from encode_uri import encode_uri, encode_uri_component_loose
-    from orjson import dumps as json_dumps, loads as json_loads
-    from posixpatht import escape
-
-    if __name__ == "__main__":
-        import sys
-        sys.path[0] = str(Path(__file__).parents[1])
-
-    register_adapter(dict, json_dumps)
-    register_adapter(list, json_dumps)
-    register_converter("JSON", json_loads)
-
-    environ["APP_JINJA_PACKAGE_NAME"] = "p115dav"
-    html_settings.use(JinjaRenderer(enable_async=True))
-    json_settings.use(loads=json_loads)
-    jinja_env = getattr(html_settings.renderer, "env")
-    jinja2_filters = jinja_env.filters
-    jinja2_filters["format_size"] = format_size
-    jinja2_filters["encode_uri"] = encode_uri
-    jinja2_filters["encode_uri_component"] = encode_uri_component_loose
-    jinja2_filters["json_dumps"] = lambda data: json_dumps(data).decode("utf-8").replace("'", "&apos;")
-    jinja2_filters["format_timestamp"] = format_timestamp
-    jinja2_filters["escape_name"] = lambda name, default="/": escape(name) or default
-
-    from uvicorn.config import LOGGING_CONFIG
-
-    LOGGING_CONFIG["formatters"]["default"]["fmt"] = "[\x1b[1m%(asctime)s\x1b[0m] %(levelprefix)s %(message)s"
-    LOGGING_CONFIG["formatters"]["access"]["fmt"] = '[\x1b[1m%(asctime)s\x1b[0m] %(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s'
-
-    _INITIALIZED = True
-
-
 class TooManyRequests(OSError):
     pass
 
@@ -203,19 +146,12 @@ def make_application(
 ) -> Application:
     from a2wsgi import WSGIMiddleware
     from asynctools import to_list
-    from blacksheep import redirect, text, Application, Router
-    from blacksheep.contents import Content, StreamedContent
-    from blacksheep.messages import Request, Response
-    from blacksheep.server.remotes.forwarding import ForwardedHeadersMiddleware
-    from blacksheep.server.responses import view_async
     from cachedict import LRUDict, TTLDict, TLRUDict
     from dictattr import AttrDict
-    from encode_uri import encode_uri, encode_uri_component_loose
     # NOTE: 其它可用模块
     # - https://pypi.org/project/user-agents/
     # - https://github.com/faisalman/ua-parser-js
     from httpagentparser import detect as detect_ua # type: ignore
-    from orjson import dumps, OPT_INDENT_2, OPT_SORT_KEYS
     from p115client import check_response, CLASS_TO_TYPE, SUFFIX_TO_TYPE, P115Client, P115URL
     from p115client.exception import AuthenticationError, BusyOSError, P115Warning
     from p115client.tool import get_id_to_path, get_id_to_pickcode, get_id_to_sha1, share_iterdir, P115ID
@@ -235,14 +171,13 @@ def make_application(
     from wsgidav.dav_error import DAVError # type: ignore
     from wsgidav.dav_provider import DAVCollection, DAVNonCollection, DAVProvider # type: ignore
 
-    _init()
-
     if cookies_path:
         cookies_path = Path(cookies_path)
     else:
         cookies_path = Path("115-cookies.txt")
 
     app = Application(router=Router(), show_error_details=debug)
+    use_gzip_compression(app)
     app.serve_files(
         Path(__file__).with_name("static"), 
         root_path="/%3Cpic", 
@@ -2190,8 +2125,10 @@ END;
 
 
 if __name__ == "__main__":
+    import sys
+    sys.path[0] = str(Path(__file__).parents[1])
+
     import uvicorn
-    from blacksheep import Application, Request, Response
 
     app = make_application(debug=True, load_libass=True, dbfile="p115dav-test.db")
     try:

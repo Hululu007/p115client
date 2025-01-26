@@ -561,8 +561,13 @@ def batch_unstar(
     """
     if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
+    def get_id(info: dict, /) -> int:
+        for k in ("file_id", "category_id", "fid", "cid"):
+            if k in info:
+                return int(info[k])
+        raise KeyError
     def gen_step():
-        from .iterdir import _iter_fs_files, _overview_attr
+        from .iterdir import _iter_fs_files
         it = _iter_fs_files(
             client, 
             payload={"cid": 0, "count_folders": 1, "cur": 0, "fc_mix": 0, "offset": 0, "show_dir": 1, "star": 1}, 
@@ -573,9 +578,9 @@ def batch_unstar(
             **request_kwargs, 
         )
         if async_:
-            ids: list[int] = yield to_list(_overview_attr(a).id async for a in cast(AsyncIterator[dict], it))
+            ids: list[int] = yield to_list(get_id(info) async for info in cast(AsyncIterator[dict], it))
         else:
-            ids = [_overview_attr(a).id for a in cast(Iterator[dict], it)]
+            ids = [get_id(info) for info in cast(Iterator[dict], it)]
         yield update_star(
             client, 
             ids, 

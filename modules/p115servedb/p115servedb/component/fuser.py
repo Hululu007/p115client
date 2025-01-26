@@ -23,6 +23,7 @@ from typing import Final, BinaryIO
 from unicodedata import normalize
 from weakref import WeakValueDictionary
 
+from cachedict import LRUDict
 from fuse import FUSE, Operations # type: ignore
 from httpfile import Urllib3FileReader
 from orjson import dumps as json_dumps
@@ -34,7 +35,6 @@ from urllib3 import PoolManager
 
 from .db import FIELDS, get_attr_from_db, get_id_from_db, get_children_from_db
 from .log import logger
-from .lrudict import LRUDict
 
 
 urlopen = partial(PoolManager(num_pools=128).request, "GET", preload_content=False, timeout=5)

@@ -75,7 +75,7 @@
         <td style="text-align: right"><span class="popup">{{ attr["size"] | format_size }}<span class="popuptext">{{ attr["size"] }}</span></span></td>
         {%- endif %}
         <td style="text-align: center"><a href="/<attr?id={{ attr["id"] }}">attr</a></td>
-        <td style="text-align: center">{{ (attr.get("mtime") or attr["time"]) | format_timestamp }}</td>
+        <td style="text-align: center">{{ (attr.get("mtime") or attr.get("time") or 0) | format_timestamp }}</td>
       </tr>
       {%- endfor %}
     </tbody>

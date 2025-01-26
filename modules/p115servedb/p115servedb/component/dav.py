@@ -24,12 +24,13 @@ from a2wsgi import WSGIMiddleware
 from blacksheep import redirect, text, Application, Router
 from blacksheep.contents import Content, StreamedContent
 from blacksheep.messages import Request, Response
-from blacksheep.server import asgi
+from blacksheep.server.compression import use_gzip_compression
 from blacksheep.server.remotes.forwarding import ForwardedHeadersMiddleware
 from blacksheep.server.rendering.jinja2 import JinjaRenderer
 from blacksheep.server.responses import view_async
 from blacksheep.settings.html import html_settings
 from blacksheep.settings.json import json_settings
+from cachedict import LRUDict
 from encode_uri import encode_uri, encode_uri_component_loose
 from httpagentparser import detect as detect_ua # type: ignore
 from httpx import Client, AsyncClient
@@ -42,6 +43,7 @@ from posixpatht import escape
 from property import locked_cacheproperty
 from pysubs2 import SSAFile # type: ignore
 from sqlitetools import execute, find
+from texttools import format_size, format_timestamp
 from wsgidav.wsgidav_app import WsgiDAVApp # type: ignore
 from wsgidav.dav_error import DAVError # type: ignore
 from wsgidav.dav_provider import DAVCollection, DAVNonCollection, DAVProvider # type: ignore
@@ -50,45 +52,6 @@ from .db import (
     attr_to_path, get_id_from_db, get_pickcode_from_db, get_sha1_from_db, 
     get_ancestors_from_db, get_attr_from_db, get_children_from_db, 
 )
-from .lrudict import LRUDict
-
-
-# NOTE: monkey patch
-get_request_url_from_scope = asgi.get_request_url_from_scope
-source = getsource(get_request_url_from_scope)
-repl_code = '        host, port = scope["server"]'
-if repl_code in source:
-    exec(getsource(get_request_url_from_scope).replace(repl_code, """\
-        for key, val in scope["headers"]:
-            if key.lower() in (b"host", b"x-forwarded-host", b"x-original-host"):
-                host = val.decode("latin-1")
-                port = 80 if protocol == "http" else 443
-                break
-        else:
-            host, port = scope["server"]"""), asgi.__dict__)
-    get_request_url_from_scope.__code__ = asgi.get_request_url_from_scope.__code__
-
-
-def format_size(
-    n: int, 
-    /, 
-    unit: str = "", 
-    precision: int = 2, 
-) -> str:
-    "scale bytes to its proper byte format"
-    if unit == "B" or not unit and n < 1024:
-        return f"{n} B"
-    b = 1
-    b2 = 1024
-    for u in ["K", "M", "G", "T", "P", "E", "Z", "Y"]:
-        b, b2 = b2, b2 << 10
-        if u == unit if unit else n < b2:
-            break
-    return f"%.{precision}f {u}B" % (n / b)
-
-
-def format_timestamp(ts: int | float, /) -> str:
-    return str(datetime.fromtimestamp(ts))
 
 
 register_adapter(dict, json_dumps)
@@ -160,6 +123,7 @@ def make_application(
             cookies_path = ""
 
     app = Application(router=Router(), show_error_details=debug)
+    use_gzip_compression(app)
     app.serve_files(
         Path(__file__).parent.with_name("static"), 
         root_path="/%3Cstatic", 
