@@ -10,23 +10,26 @@ __all__ = [
     "traverse_files", "iter_dupfiles", "iter_image_files", "iter_dangling_files", "share_extract_payload", 
     "share_iterdir", "share_iter_files", "iter_selected_nodes", "iter_selected_nodes_by_pickcode", 
     "iter_selected_nodes_using_category_get", "iter_selected_nodes_using_edit", "iter_selected_nodes_using_star_event", 
-    "iter_selected_dirs_using_star", "iter_files_with_dirname", "iter_files_with_path", 
+    "iter_selected_dirs_using_star", "iter_files_with_dirname", "iter_files_with_path", "iter_parents_3_level", 
 ]
 __doc__ = "这个模块提供了一些和目录信息罗列有关的函数"
 
-from asyncio import Lock as AsyncLock
+from asyncio import sleep as async_sleep, Lock as AsyncLock
 from collections import defaultdict, deque
-from collections.abc import AsyncIterator, Callable, Collection, Coroutine, Iterable, Iterator, Mapping, Sequence
+from collections.abc import (
+    AsyncIterable, AsyncIterator, Callable, Collection, Coroutine, Iterable, Iterator, 
+    Mapping, Sequence, 
+)
 from dataclasses import dataclass
 from errno import EIO, ENOENT, ENOTDIR
 from functools import partial
 from hashlib import md5
-from itertools import chain, count, cycle, islice, takewhile
+from itertools import chain, count, cycle, islice, repeat, takewhile
 from operator import itemgetter
 from re import compile as re_compile
 from string import digits, hexdigits
 from threading import Lock
-from time import time
+from time import sleep, time
 from types import EllipsisType
 from typing import cast, overload, Any, Final, Literal, NamedTuple, TypedDict
 from warnings import warn
@@ -35,12 +38,17 @@ from weakref import WeakValueDictionary
 from asynctools import async_chain, async_filter, async_map, to_list
 from concurrenttools import taskgroup_map, threadpool_map
 from iterutils import (
-    chunked, async_foreach, ensure_aiter, foreach, run_gen_step, run_gen_step_iter, 
-    through, async_through, Yield, YieldFrom, 
+    chunked, async_foreach, ensure_aiter, foreach, flatten, iter_unique,   
+    run_gen_step, run_gen_step_iter, through, async_through, Yield, YieldFrom, 
 )
-from iter_collect import grouped_mapping, grouped_mapping_async, iter_keyed_dups, iter_keyed_dups_async, SupportsLT
+from iter_collect import (
+    grouped_mapping, grouped_mapping_async, iter_keyed_dups, 
+    iter_keyed_dups_async, SupportsLT, 
+)
 from orjson import loads
-from p115client import check_response, normalize_attr, DataError, P115Client, P115OSError, P115Warning
+from p115client import (
+    check_response, normalize_attr, DataError, P115Client, P115OSError, P115Warning, 
+)
 from p115client.const import CLASS_TO_TYPE, SUFFIX_TO_TYPE
 from p115client.type import P115DictAttrLike
 from posixpatht import escape, joins, path_is_dir_form, splitext, splits
@@ -3754,6 +3762,7 @@ def iter_files_with_dirname(
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     cur: Literal[0, 1] = 0, 
+    with_parents_4_level: bool = False, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     raise_for_changed_count: bool = False, 
     app: str = "android", 
@@ -3773,6 +3782,7 @@ def iter_files_with_dirname(
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     cur: Literal[0, 1] = 0, 
+    with_parents_4_level: bool = False, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     raise_for_changed_count: bool = False, 
     app: str = "android", 
@@ -3791,6 +3801,7 @@ def iter_files_with_dirname(
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
     cur: Literal[0, 1] = 0, 
+    with_parents_4_level: bool = False, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     raise_for_changed_count: bool = False, 
     app: str = "android", 
@@ -3827,6 +3838,7 @@ def iter_files_with_dirname(
 
     :param asc: 升序排列。0: 否，1: 是
     :param cur: 仅当前目录。0: 否（将遍历子目录树上所有叶子节点），1: 是
+    :param with_parents_4_level: 添加一个字段 "parents"，包含最近的 4 级父目录名字
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param app: 使用某个 app （设备）的接口
@@ -3899,6 +3911,31 @@ def iter_files_with_dirname(
                     yield Yield(attr, identity=True)
         except (StopIteration, StopAsyncIteration):
             pass
+    if with_parents_4_level:
+        def gen_step2():
+            files: list[dict] = []
+            add_file = files.append
+            def get_pid(attr):
+                add_file(attr)
+                return attr["parent_id"]
+            it = iter_parents_3_level(
+                client, 
+                iter_unique((async_map if async_ else map)( 
+                    get_pid, run_gen_step_iter(gen_step, async_=async_))), # type: ignore
+                async_=async_, # type: ignore
+                **request_kwargs, 
+            )
+            if async_:
+                async def collect():
+                    return {k: v async for k, v in cast(AsyncIterator, it)}
+                id_to_parents: dict[int, tuple[str, str, str]] = yield collect
+            else:
+                id_to_parents = dict(it) # type: ignore
+            id_to_parents[0] = ("", "", "")
+            for attr in files:
+                attr["parents"] = (attr["dir_name"], *id_to_parents[attr["parent_id"]])
+                yield Yield(attr, identity=True)
+        return run_gen_step_iter(gen_step2, async_=async_)
     return run_gen_step_iter(gen_step, async_=async_)
 
 
@@ -4092,4 +4129,91 @@ def iter_files_with_path(
                 attr["posixpath"] = dir_posixpath + name.replace("/", "|")
                 yield Yield(attr, identity=True)
     return run_gen_step_iter(gen_step, async_=async_)
+
+
+@overload
+def iter_parents_3_level(
+    client: str | P115Client, 
+    ids: Iterable[int], 
+    *, 
+    async_: Literal[False] = False, 
+    **request_kwargs, 
+) -> Iterator[tuple[int, tuple[str, str, str]]]:
+    ...
+@overload
+def iter_parents_3_level(
+    client: str | P115Client, 
+    ids: Iterable[int] | AsyncIterable[int], 
+    *, 
+    async_: Literal[True], 
+    **request_kwargs, 
+) -> AsyncIterator[tuple[int, tuple[str, str, str]]]:
+    ...
+def iter_parents_3_level(
+    client: str | P115Client, 
+    ids: Iterable[int] | AsyncIterable[int], 
+    *, 
+    async_: Literal[False, True] = False, 
+    **request_kwargs, 
+) -> Iterator[tuple[int, tuple[str, str, str]]] | AsyncIterator[tuple[int, tuple[str, str, str]]]:
+    """获取一批 id 的上级目录，最多获取 3 级
+
+    :param client: 115 客户端或 cookies
+    :param ids: 一批文件或目录的 id
+    :param async_: 是否异步
+    :param request_kwargs: 其它请求参数
+
+    :return: 迭代器，产生 id 和 最近 3 级目录名的元组的 2 元组
+    """
+    if not isinstance(client, P115Client):
+        client = P115Client(client, check_for_relogin=True)
+    def fix_overflow(t: tuple[str, ...], /) -> tuple[str, ...]:
+        try:
+            start = t.index("文件") + 1
+            return t[start:][::-1] + ("",) * start
+        except ValueError:
+            return t[::-1]
+    def get_parents(ids: Sequence[int], /):
+        data: dict = {f"file_list[{i}][file_id]": id for i, id in enumerate(ids)}
+        resp = yield client.fs_rename_set_names(data, async_=async_, **request_kwargs)
+        check_response(resp)
+        req_id = resp["req_id"]
+        data = {
+            "func_list[0][name]": "addParent", 
+            "func_list[0][config][level]": 1, 
+            "func_list[0][config][position]": 1, 
+            "func_list[0][config][separator]": 0, 
+            "req_id": req_id, 
+        }
+        while True:
+            resp = yield client.fs_rename_reset_names(data, async_=async_, **request_kwargs)
+            if resp["data"][0]["file_name"]:
+                l1 = [d["file_name"] for d in resp["data"]]
+                break
+            if async_:
+                yield async_sleep(0.5)
+            else:
+                sleep(0.5)
+        n = len(ids) - l1.count("文件")
+        if n <= 0:
+            return ((id, ("" if name == "文件" else name, "", "")) for id, name in zip(ids, l1))
+        data["func_list[0][config][level]"] += 1
+        resp = yield client.fs_rename_reset_names(data, async_=async_, **request_kwargs)
+        check_response(resp)
+        l2 = [d["file_name"] for d in resp["data"]]
+        n -= l2.count("文件")
+        if n <= 0:
+            l3: Iterable[str] = repeat("")
+        else:
+            data["func_list[0][config][level]"] += 1
+            resp = yield client.fs_rename_reset_names(data, async_=async_, **request_kwargs)
+            check_response(resp)
+            l3 = (d["file_name"] for d in resp["data"])
+        return ((id, fix_overflow(t)) for id, t in zip(ids, zip(l3, l2, l1)))
+    batch_map = taskgroup_map if async_ else threadpool_map
+    ids = (async_filter if async_ else filter)(None, ids) # type: ignore
+    return flatten(
+        batch_map(lambda ids, /: run_gen_step(get_parents(ids), async_=async_), chunked(ids, 1150)), 
+        exclude_types=tuple, 
+    )
 

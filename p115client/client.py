@@ -8619,6 +8619,82 @@ class P115Client:
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
+    def fs_rename_set_names(
+        self, 
+        payload: dict | list[tuple[str, str | int]], 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_rename_set_names(
+        self, 
+        payload: dict | list[tuple[str, str | int]], 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_rename_set_names(
+        self, 
+        payload: dict | list[tuple[str, str | int]], 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """提交模拟批量重命名请求（提示：较为复杂，自己抓包研究）
+
+        POST https://aps.115.com/rename/set_names.php
+        """
+        api = complete_api("/rename/set_names.php", "aps", base_url=base_url)
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_rename_reset_names(
+        self, 
+        payload: dict | list[tuple[str, str | int]], 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_rename_reset_names(
+        self, 
+        payload: dict | list[tuple[str, str | int]], 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_rename_reset_names(
+        self, 
+        payload: dict | list[tuple[str, str | int]], 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取批量重命名的模拟结果（提示：较为复杂，自己抓包研究）
+
+        POST https://aps.115.com/rename/reset_names.php
+        """
+        api = complete_api("/rename/reset_names.php", "aps", base_url=base_url)
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
     def fs_repeat_sha1(
         self, 
         payload: int | str | dict, 
