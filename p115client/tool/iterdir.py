@@ -3,14 +3,17 @@
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __all__ = [
-    "ID_TO_DIRNODE_CACHE", "P115ID", "unescape_115_charref", "type_of_attr", "get_path_to_cid", 
-    "get_file_count", "get_ancestors", "get_ancestors_to_cid", "get_id_to_path", "get_id_to_sha1", 
-    "get_id_to_pickcode", "iter_nodes_skim", "iter_stared_dirs_raw", "iter_stared_dirs", "ensure_attr_path", 
-    "ensure_attr_path_by_category_get", "iterdir_raw", "iterdir", "iter_files", "iter_files_raw", 
-    "traverse_files", "iter_dupfiles", "iter_image_files", "iter_dangling_files", "share_extract_payload", 
-    "share_iterdir", "share_iter_files", "iter_selected_nodes", "iter_selected_nodes_by_pickcode", 
-    "iter_selected_nodes_using_category_get", "iter_selected_nodes_using_edit", "iter_selected_nodes_using_star_event", 
-    "iter_selected_dirs_using_star", "iter_files_with_dirname", "iter_files_with_path", "iter_parents_3_level", 
+    "ID_TO_DIRNODE_CACHE", "P115ID", "unescape_115_charref", "type_of_attr", 
+    "get_path_to_cid", "get_file_count", "get_ancestors", "get_ancestors_to_cid", 
+    "get_id_to_path", "get_id_to_sha1", "get_id_to_pickcode", "iter_nodes_skim", 
+    "iter_stared_dirs_raw", "iter_stared_dirs", "ensure_attr_path", 
+    "ensure_attr_path_by_category_get", "iterdir_raw", "iterdir", "iterdir_limited", 
+    "iter_files_raw", "iter_files", "traverse_files", "iter_dupfiles", "iter_image_files", 
+    "iter_dangling_files", "share_extract_payload", "share_iterdir", "share_iter_files", 
+    "iter_selected_nodes", "iter_selected_nodes_by_pickcode", "iter_selected_nodes_using_category_get", 
+    "iter_selected_nodes_using_edit", "iter_selected_nodes_using_star_event", 
+    "iter_selected_dirs_using_star", "iter_files_with_dirname", "iter_files_with_path", 
+    "iter_parents_3_level", 
 ]
 __doc__ = "这个模块提供了一些和目录信息罗列有关的函数"
 
@@ -397,7 +400,7 @@ def get_file_count(
                 for info in resp["paths"][1:]:
                     node = DirNode(info["file_name"], pid)
                     id_to_dirnode[(pid := int(info["file_id"]))] = node
-            return int(resp["count"]) - int(resp["folder_count"])
+            return int(resp["count"]) - int(resp.get("folder_count") or 0)
     return run_gen_step(gen_step, async_=async_)
 
 
@@ -1963,6 +1966,155 @@ def iterdir(
             yield YieldFrom(do_map(process, it), identity=True) # type: ignore
         else:
             yield YieldFrom(do_map(normalize_attr, it), identity=True) # type: ignore
+    return run_gen_step_iter(gen_step, async_=async_)
+
+
+def iterdir_limited(
+    client: str | P115Client, 
+    cid: int = 0, 
+    with_ancestors: bool = False, 
+    with_path: bool = False, 
+    escape: None | Callable[[str], str] = escape, 
+    normalize_attr: Callable[[dict], dict] = normalize_attr, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
+    ensure_file: None | bool = None, 
+    *, 
+    async_: Literal[False, True] = False, 
+    **request_kwargs, 
+) -> Iterator[dict] | AsyncIterator[dict]:
+    """迭代目录，获取文件信息，但受限，文件或目录最多分别获取 2402 - 被置顶数 个
+
+    :param client: 115 客户端或 cookies
+    :param cid: 目录 id
+    :param with_ancestors: 文件信息中是否要包含 "ancestors"
+    :param with_path: 文件信息中是否要包含 "path"
+    :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
+    :param normalize_attr: 把数据进行转换处理，使之便于阅读
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param ensure_file: 是否确保为文件
+
+        - True: 必须是文件
+        - False: 必须是目录
+        - None: 可以是目录或文件
+
+    :param async_: 是否异步
+    :param request_kwargs: 其它请求参数
+
+    :return: 迭代器，返回此目录内的文件信息（文件和目录）
+    """
+    if not isinstance(client, P115Client):
+        client = P115Client(client, check_for_relogin=True)
+    if id_to_dirnode is None:
+        id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
+    seen_dirs: set[int] = set()
+    add_dir = seen_dirs.add
+    seen_files: set[int] = set()
+    add_file = seen_files.add
+    ancestors: list[dict] = [{"id": 0, "name": "", "parent_id": 0}]
+    payload = {
+        "asc": 1, "cid": cid, "count_folders": 1, "cur": 1, "fc_mix": 0, "limit": 10_000, 
+        "offset": 0, "show_dir": 1,  
+    }
+    if ensure_file is not None:
+        if ensure_file:
+            payload["show_dir"] = 0
+        else:
+            payload["nf"] = 1
+    def request(params={}, /):
+        resp = yield client.fs_files_aps(
+            {**payload, **params}, 
+            base_url=True, 
+            async_=async_, 
+            **request_kwargs, 
+        )
+        check_response(resp)
+        if cid and int(resp["path"][-1]["cid"]) != cid:
+            raise FileNotFoundError(ENOENT, cid)
+        ancestors[1:] = [
+            {"id": int(info["cid"]), "name": info["name"], "parent_id": int(info["pid"])} 
+            for info in resp["path"][1:]
+        ]
+        return resp
+    def iter_attrs(resp):
+        if with_path:
+            names: Iterator[str] = (info["name"] for info in ancestors)
+            if escape is not None:
+                names = map(escape, names)
+            dirname = "/".join(names) + "/"
+        for attr in map(normalize_attr, resp["data"]):
+            is_dir = ensure_file is False or attr.get("is_dir") or attr.get("is_directory")
+            fid = attr["id"]
+            if is_dir:
+                if fid in seen_dirs:
+                    continue
+                add_dir(fid)
+            else:
+                if fid in seen_files:
+                    continue
+                add_file(fid)
+            name = attr["name"]
+            if id_to_dirnode is not ...:
+                id_to_dirnode[fid] = DirNode(name, cid)
+            if with_ancestors:
+                attr["ancestors"] = [*ancestors, {"id": fid, "name": name, "parent_id": cid}]
+            if with_path:
+                if escape is not None:
+                    name = escape(name)
+                attr["path"] = dirname + name
+            yield attr
+    def gen_step():
+        resp: dict = yield run_gen_step(request, async_=async_)
+        yield YieldFrom(iter_attrs(resp), identity=True)
+        count = int(resp["count"])
+        count_fetched = len(resp["data"])
+        if count > count_fetched:
+            count_dirs = int(resp.get("folder_count") or 0)
+            count_files = count - count_dirs
+            count_top_dirs = 0
+            count_top_files = 0
+            for attr in map(normalize_attr, resp["data"]):
+                is_dir = ensure_file is False or attr.get("is_dir") or attr.get("is_directory")
+                if attr["is_top"]:
+                    if is_dir:
+                        count_top_dirs += 1
+                    else:
+                        count_top_files += 1
+                elif not cid and is_dir and attr["name"] in ("我的接收", "手机相册", "云下载", "我的时光记录"):
+                    count_top_dirs += 1
+                else:
+                    break
+            else:
+                if diff := count_dirs - len(seen_dirs):
+                    warn(f"lost {diff} directories: cid={cid}", category=P115Warning)
+                if diff := count_files - len(seen_files):
+                    warn(f"lost {diff} files: cid={cid}", category=P115Warning)
+                return
+            count_top = count_top_dirs + count_top_files
+            if count <= count_fetched * 2 - count_top:
+                resp = request({"asc": 0, "offset": count_top, "limit": count - count_fetched})
+                yield YieldFrom(iter_attrs(resp), identity=True)
+                return
+            if diff := count_dirs - len(seen_dirs):
+                if diff > count_fetched - count_top_dirs:
+                    resp = request({"nf": 1, "offset": len(seen_dirs)})
+                    yield YieldFrom(iter_attrs(resp), identity=True)
+                    diff = count_dirs - len(seen_dirs)
+                if diff > 0:
+                    resp = request({"asc": 0, "nf": 1, "offset": count_top_dirs, "limit": diff})
+                    yield YieldFrom(iter_attrs(resp), identity=True)
+                    
+                    if diff := count_dirs - len(seen_dirs):
+                        warn(f"lost {diff} directories: cid={cid}", category=P115Warning)
+            if diff := count_files - len(seen_files):
+                if diff > count_fetched - count_top_files:
+                    resp = request({"show_dir": 0, "offset": len(seen_files)})
+                    yield YieldFrom(iter_attrs(resp), identity=True)
+                    diff = count_files - len(seen_files)
+                if diff > 0:
+                    resp = request({"asc": 0, "show_dir": 0, "offset": count_top_files, "limit": diff})
+                    yield YieldFrom(iter_attrs(resp), identity=True)
+                    if diff := count_files - len(seen_files):
+                        warn(f"lost {diff} files: cid={cid}", category=P115Warning)
     return run_gen_step_iter(gen_step, async_=async_)
 
 
