@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from errno import EIO, ENOENT, ENOTDIR
 from functools import partial
 from hashlib import md5
-from itertools import chain, count, cycle, islice, repeat, takewhile
+from itertools import chain, count, cycle, islice, takewhile
 from operator import itemgetter
 from re import compile as re_compile
 from string import digits, hexdigits
@@ -1982,7 +1982,7 @@ def iterdir_limited(
     async_: Literal[False, True] = False, 
     **request_kwargs, 
 ) -> Iterator[dict] | AsyncIterator[dict]:
-    """迭代目录，获取文件信息，但受限，文件或目录最多分别获取 2402 - 被置顶数 个
+    """迭代目录，获取文件信息，但受限，文件或目录最多分别获取 max(1201, 2402 - 此类型被置顶的个数) 个
 
     :param client: 115 客户端或 cookies
     :param cid: 目录 id
@@ -4013,52 +4013,53 @@ def iter_files_with_dirname(
         payload["type"] = type
     if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
-    def gen_step():
-        request_kwargs.update(
-            page_size=page_size, 
-            app=app, 
-            raise_for_changed_count=raise_for_changed_count, 
-        )
-        if cooldown <= 0:
-            request_kwargs["async_"] = async_
-            func: Callable = iter_fs_files
+    request_kwargs.update(
+        page_size=page_size, 
+        app=app, 
+        raise_for_changed_count=raise_for_changed_count, 
+    )
+    if cooldown <= 0:
+        request_kwargs["async_"] = async_
+        func: Callable = iter_fs_files
+    else:
+        request_kwargs["cooldown"] = cooldown
+        func = iter_fs_files_asynchronized if async_ else iter_fs_files_threaded
+    pid_to_info = {0: {"dir_name": "", "dir_pickcode": ""}}
+    def callback(resp: dict, /):
+        files = resp["data"] = list(map(normalize_attr, resp["data"]))
+        pids = (pid for a in files if (pid := a["parent_id"]) not in pid_to_info)
+        if async_:
+            async def request():
+                async for info in iter_nodes_skim(
+                    client, 
+                    pids, 
+                    async_=True, 
+                    **request_kwargs, 
+                ):
+                    pid_to_info[int(info["file_id"])] = {
+                        "dir_name": info["file_name"], 
+                        "dir_pickcode": info["pick_code"], 
+                    }
+            return request()
         else:
-            request_kwargs["cooldown"] = cooldown
-            func = iter_fs_files_asynchronized if async_ else iter_fs_files_threaded
-        it = func(client, payload, **request_kwargs)
+            pid_to_info.update(
+                (int(info["file_id"]), {
+                    "dir_name": info["file_name"], 
+                    "dir_pickcode": info["pick_code"], 
+                })
+                for info in iter_nodes_skim(
+                    client, 
+                    pids, 
+                    **request_kwargs, 
+                )
+            )
+    def gen_step():
+        it = func(client, payload, callback=callback, **request_kwargs)
         get_next = it.__anext__ if async_ else it.__next__
         try:
-            pid_to_info = {0: {"dir_name": "", "dir_pickcode": ""}}
             while True:
                 resp = yield get_next
-                files = list(map(normalize_attr, resp["data"]))
-                pids = (pid for a in files if (pid := a["parent_id"]) not in pid_to_info)
-                if async_:
-                    async def request():
-                        async for info in iter_nodes_skim(
-                            client, 
-                            pids, 
-                            async_=True, 
-                            **request_kwargs, 
-                        ):
-                            pid_to_info[int(info["file_id"])] = {
-                                "dir_name": info["file_name"], 
-                                "dir_pickcode": info["pick_code"], 
-                            }
-                    yield request
-                else:
-                    pid_to_info.update(
-                        (int(info["file_id"]), {
-                            "dir_name": info["file_name"], 
-                            "dir_pickcode": info["pick_code"], 
-                        })
-                        for info in iter_nodes_skim(
-                            client, 
-                            pids, 
-                            **request_kwargs, 
-                        )
-                    )
-                for attr in files:
+                for attr in resp["data"]:
                     attr.update(pid_to_info[attr["parent_id"]])
                     yield Yield(attr, identity=True)
         except (StopIteration, StopAsyncIteration):
@@ -4287,6 +4288,7 @@ def iter_files_with_path(
 def iter_parents_3_level(
     client: str | P115Client, 
     ids: Iterable[int], 
+    max_workers: None | int = None, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -4296,6 +4298,7 @@ def iter_parents_3_level(
 def iter_parents_3_level(
     client: str | P115Client, 
     ids: Iterable[int] | AsyncIterable[int], 
+    max_workers: None | int = None, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -4304,6 +4307,7 @@ def iter_parents_3_level(
 def iter_parents_3_level(
     client: str | P115Client, 
     ids: Iterable[int] | AsyncIterable[int], 
+    max_workers: None | int = None, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -4312,6 +4316,7 @@ def iter_parents_3_level(
 
     :param client: 115 客户端或 cookies
     :param ids: 一批文件或目录的 id
+    :param max_workers: 最大并发数
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -4325,9 +4330,11 @@ def iter_parents_3_level(
             return t[start:][::-1] + ("",) * start
         except ValueError:
             return t[::-1]
+    set_names = client.fs_rename_set_names
+    reset_names = client.fs_rename_reset_names
     def get_parents(ids: Sequence[int], /):
         data: dict = {f"file_list[{i}][file_id]": id for i, id in enumerate(ids)}
-        resp = yield client.fs_rename_set_names(data, async_=async_, **request_kwargs)
+        resp = yield set_names(data, async_=async_, **request_kwargs)
         check_response(resp)
         req_id = resp["req_id"]
         data = {
@@ -4338,7 +4345,7 @@ def iter_parents_3_level(
             "req_id": req_id, 
         }
         while True:
-            resp = yield client.fs_rename_reset_names(data, async_=async_, **request_kwargs)
+            resp = yield reset_names(data, async_=async_, **request_kwargs)
             if resp["data"][0]["file_name"]:
                 l1 = [d["file_name"] for d in resp["data"]]
                 break
@@ -4346,26 +4353,29 @@ def iter_parents_3_level(
                 yield async_sleep(0.5)
             else:
                 sleep(0.5)
-        n = len(ids) - l1.count("文件")
-        if n <= 0:
+        if len(ids) - l1.count("文件") <= 0:
             return ((id, ("" if name == "文件" else name, "", "")) for id, name in zip(ids, l1))
-        data["func_list[0][config][level]"] += 1
-        resp = yield client.fs_rename_reset_names(data, async_=async_, **request_kwargs)
-        check_response(resp)
-        l2 = [d["file_name"] for d in resp["data"]]
-        n -= l2.count("文件")
-        if n <= 0:
-            l3: Iterable[str] = repeat("")
-        else:
-            data["func_list[0][config][level]"] += 1
-            resp = yield client.fs_rename_reset_names(data, async_=async_, **request_kwargs)
-            check_response(resp)
-            l3 = (d["file_name"] for d in resp["data"])
+        def call(i):
+            return check_response(reset_names(
+                {**data, "func_list[0][config][level]": i}, 
+                async_=async_, 
+                **request_kwargs, 
+            ))
+        ret = batch_map(call, (2, 3), max_workers=2)
+        if async_:
+            ret = yield to_list(ret)
+        resp2, resp3 = cast(Iterable, ret)
+        l2 = [d["file_name"] for d in resp2["data"]]
+        l3 = (d["file_name"] for d in resp3["data"])
         return ((id, fix_overflow(t)) for id, t in zip(ids, zip(l3, l2, l1)))
     batch_map = taskgroup_map if async_ else threadpool_map
     ids = (async_filter if async_ else filter)(None, ids) # type: ignore
     return flatten(
-        batch_map(lambda ids, /: run_gen_step(get_parents(ids), async_=async_), chunked(ids, 1150)), 
+        batch_map(
+            lambda ids, /: run_gen_step(get_parents(ids), async_=async_), 
+            chunked(ids, 1150), 
+            max_workers=max_workers, 
+        ), 
         exclude_types=tuple, 
     )
 

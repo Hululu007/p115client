@@ -16,10 +16,11 @@ from warnings import warn
 
 from concurrenttools import run_as_thread
 from iterutils import iter_unique
+from orjson import dumps, loads
 from p115client import P115Client
 from p115client.exception import BusyOSError, P115Warning
-from p115client.tool import iter_files, iter_fs_files, iter_nodes_skim, get_id_to_path
-from sqlitetools import execute, find, query, upsert_items, AutoCloseConnection
+from p115client.tool import iter_files, iter_fs_files, iter_nodes_skim, get_id_to_path, iter_parents_3_level
+from sqlitetools import execute, find, upsert_items, AutoCloseConnection
 
 
 logger = logging.Logger("115-updatedb-file", level=logging.INFO)
@@ -140,6 +141,7 @@ def updatedb_all(
     top_id: int = 0, 
     page_size: int = 8_000, 
     max_workers: None | int = None, 
+    with_parents: bool = False, 
 ) -> tuple[int, int]:
     def norm_attr(info: dict, /) -> dict:
         attr = normalize_attr(info)
@@ -171,7 +173,20 @@ def updatedb_all(
     for attr in ls_attr:
         attr.update(parent_nodes[attr["parent_id"]])
     del parent_nodes
-    upsert_items(con, ls_attr, commit=True)
+    upsert_items(con, ls_attr)
+    if with_parents:
+        parent_ids = {a["parent_id"] for a in ls_attr}
+        sql = """\
+UPDATE data 
+SET extra=JSON_PATCH(
+    COALESCE(extra, '{}'), 
+    JSON_OBJECT('parents', JSONB(json_array_prepend(?, parent_name)))
+)
+WHERE parent_id=?"""
+        con.executemany(sql, ((dumps(parents), pid) for pid, parents in iter_parents_3_level(client, parent_ids)))
+    if isinstance(con, Cursor):
+        con = con.connection
+    con.commit()
     return len(ls_attr), 0
 
 
@@ -181,6 +196,7 @@ def updatedb_partial(
     top_id: int = 0, 
     page_size: int = 8_000, 
     no_dir_moved: bool = False, 
+    with_parents: bool = False, 
 ) -> tuple[int, int]:
     upsert_list: list[dict] = []
     remove_list: list[int] = []
@@ -236,33 +252,37 @@ def updatedb_partial(
     if remove_list:
         sql = "DELETE FROM data WHERE id IN (%s)" % ",".join(map(str, remove_list))
         con.execute(sql)
-    if no_dir_moved:
-        if upsert_list:
-            parent_nodes: dict[int, dict]
-            if not top_id:
-                parent_nodes[0] = {"parent_name": "", "parent_pickcode": ""}
-            for info in iter_nodes_skim(client, {a["parent_id"] for a in upsert_list}):
-                parent_nodes[int(info["file_id"])] = {
-                    "parent_name": info["file_name"], 
-                    "parent_pickcode": info["pick_code"], 
-                }
-            for attr in upsert_list:
-                attr.update(parent_nodes[attr["parent_id"]])
-            upsert_items(con, upsert_list)
-    else:
+    if upsert_list:
         upsert_items(con, upsert_list)
-        sql = "UPDATE data SET parent_name=?, parent_pickcode=? WHERE parent_id=?"
-        con.executemany(sql, (
-            (info["file_name"], info["pick_code"], int(info["file_id"]))
-            for info in iter_nodes_skim(
-                client, 
-                query(con, "SELECT DISTINCT parent_id FROM data WHERE top_id = ?", top_id), 
-            )
-        ))
+    if no_dir_moved:
+        parent_ids: Iterable[int] = {a["parent_id"] for a in upsert_list}
+    else:
+        sql = "SELECT DISTINCT parent_id FROM data WHERE top_id = ?"
+        parent_ids = [pid for pid, in con.execute(sql, (top_id,))]
+    sql = "UPDATE data SET parent_name=?, parent_pickcode=? WHERE parent_id=?"
+    con.executemany(sql, (
+        (info["file_name"], info["pick_code"], int(info["file_id"]))
+        for info in iter_nodes_skim(client, parent_ids)
+    ))
+    if with_parents:
+        sql = """\
+UPDATE data 
+SET extra=JSON_PATCH(
+    COALESCE(extra, '{}'), 
+    JSON_OBJECT('parents', JSONB(json_array_prepend(?, parent_name)))
+)
+WHERE parent_id=?"""
+        con.executemany(sql, ((dumps(parents), pid) for pid, parents in iter_parents_3_level(client, parent_ids)))
     if isinstance(con, Cursor):
         con = con.connection
     con.commit()
     return len(upsert_list), len(remove_list)
+
+
+def json_array_prepend(json_str, value):
+    js = loads(json_str)
+    js.insert(0, value)
+    return dumps(js)
 
 
 def _init_client(
@@ -287,6 +307,11 @@ def _init_client(
             timeout=inf, 
         )
         initdb(con)
+    if isinstance(con, Cursor):
+        conn = con.connection
+    else:
+        conn = con
+    conn.create_function("json_array_prepend", 2, json_array_prepend)
     return client, con
 
 
@@ -296,6 +321,7 @@ def updatedb(
     top_dirs: int | str | Iterable[int | str] = 0, 
     page_size: int = 8_000, 
     no_dir_moved: bool = False, 
+    with_parents: bool = False, 
     interval: int | float = 0, 
     max_workers: None | int = None, 
     logger = logger, 
@@ -307,7 +333,9 @@ def updatedb(
     :param top_dirs: 要拉取的顶层目录集，可以是目录 id 或路径
     :param page_size: 每次批量拉取的分页大小
     :param no_dir_moved: 是否无目录被移动或改名，如果为 True，则拉取会快一些
+    :oaram with_parents: 是否给 extra 字段的 JSON，更新一个键为 "parents"，值为最近的 4 层上级目录
     :param interval: 两个任务之间的睡眠时间，如果 <= 0，则不睡眠
+    :param max_workers: 全量更新时，最大的并发数
     :param logger: 日志对象，如果为 None，则不输出日志
     """
     if isinstance(top_dirs, (int, str)):
@@ -343,9 +371,9 @@ def updatedb(
         start = time()
         try:
             if find(con, "SELECT 1 FROM data WHERE top_id = ?", top_id):
-                upserted, removed = updatedb_partial(client, con, top_id, page_size, no_dir_moved=no_dir_moved)
+                upserted, removed = updatedb_partial(client, con, top_id, page_size, with_parents=with_parents, no_dir_moved=no_dir_moved)
             else:
-                upserted, removed = updatedb_all(client, con, top_id, page_size, max_workers=max_workers)
+                upserted, removed = updatedb_all(client, con, top_id, page_size, with_parents=with_parents, max_workers=max_workers)
         except FileNotFoundError:
             execute(con, "DELETE FROM data WHERE top_id = ?", top_id, commit=True)
             if logger is not None:

@@ -20,8 +20,7 @@ from p115filedb import updatedb
 
 ```console
 $ p115filedb -h
-usage: p115filedb [-h] [-cp COOKIES_PATH] [-f DBFILE] [-i INTERVAL] [-m MAX_WORKERS] [-p PAGE_SIZE] [-nm]
-                  [-cl] [-v] [-l]
+usage: p115filedb [-h] [-cp COOKIES_PATH] [-f DBFILE] [-i INTERVAL] [-m MAX_WORKERS] [-p PAGE_SIZE] [-nm] [-wp] [-cl] [-v] [-l]
                   [dir ...]
 
 遍历 115 网盘的目录，仅导出文件信息导出到数据库
@@ -46,6 +45,7 @@ options:
   -p PAGE_SIZE, --page-size PAGE_SIZE
                         每次批量拉取的分页大小，默认值：8,000
   -nm, --no-dir-moved   声明没有目录被移动或改名（但可以有目录被新增或删除），这可以加快批量拉取时的速度
+  -wp, --with-parents   给 extra 字段的 JSON，更新一个键为 'parents'，值为最近的 4 层上级目录
   -cl, --check-for-relogin
                         当风控时，自动重新扫码登录
   -v, --version         输出版本号

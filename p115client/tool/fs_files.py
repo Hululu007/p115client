@@ -7,14 +7,15 @@ __doc__ = "这个模块利用 P115Client.fs_files 方法做了一些封装"
 
 from asyncio import shield, wait_for, Task, TaskGroup
 from collections import deque
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from copy import copy
 from errno import EBUSY, ENOENT, ENOTDIR
 from functools import partial
+from inspect import isawaitable
 from itertools import cycle
 from time import time
-from typing import cast, overload, Final, Literal
+from typing import cast, overload, Any, Final, Literal
 from warnings import warn
 
 from iterutils import run_gen_step, run_gen_step_iter, Yield
@@ -46,6 +47,7 @@ def iter_fs_files(
     /, 
     first_page_size: int = 0, 
     page_size: int = 10_000, 
+    callback: None | Callable[[dict], Any] = None, 
     app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
@@ -60,6 +62,7 @@ def iter_fs_files(
     /, 
     first_page_size: int = 0, 
     page_size: int = 10_000, 
+    callback: None | Callable[[dict], Any] = None, 
     app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
@@ -73,6 +76,7 @@ def iter_fs_files(
     /, 
     first_page_size: int = 0, 
     page_size: int = 10_000, 
+    callback: None | Callable[[dict], Any] = None, 
     app: str = "web", 
     raise_for_changed_count: bool = False, 
     *, 
@@ -85,6 +89,7 @@ def iter_fs_files(
     :param payload: 目录的 id 或者详细的查询参数
     :param first_page_size: 首次拉取的分页大小，如果 <= 0，则自动确定
     :param page_size: 分页大小，如果 <= 0，则自动确定
+    :param callback: 回调函数，调用后，会获得一个值，会添加到返回值中，key 为 "callback"
     :param app: 使用此设备的接口
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param async_: 是否异步
@@ -111,36 +116,49 @@ def iter_fs_files(
     else:
         request_kwargs.setdefault("base_url", get_proapi_origin)
         fs_files = partial(client.fs_files_app, app=app, async_=async_, **request_kwargs)
+    count = -1
     def get_files(payload: dict, /):
+        nonlocal count
         while True:
             try:
                 resp = yield fs_files(payload)
-                return check_response(resp)
+                check_response(resp)
             except DataError:
                 if payload["limit"] <= 1150:
                     raise
                 payload["limit"] -= 1_000
                 if payload["limit"] < 1150:
                     payload["limit"] = 1150
+            else:
+                if cid and int(resp["path"][-1]["cid"]) != cid:
+                    if count < 0:
+                        raise NotADirectoryError(ENOTDIR, cid)
+                    else:
+                        raise FileNotFoundError(ENOENT, cid)
+                count_new = int(resp["count"])
+                if count < 0:
+                    count = count_new
+                elif count != count_new:
+                    message = f"cid={cid} detected count changes during iteration: {count} -> {count_new}"
+                    if raise_for_changed_count:
+                        raise BusyOSError(EBUSY, message)
+                    else:
+                        warn(message, category=P115Warning)
+                    count = count_new
+                if callback is not None:
+                    if async_:
+                        resp["callback"] = yield partial(callback, resp)
+                    else:
+                        resp["callback"] = callback(resp)
+                return resp
     def gen_step():
-        resp = yield run_gen_step(get_files(payload), async_=async_)
-        payload["limit"] = page_size
-        count = int(resp["count"])
         while True:
-            if cid and int(resp["path"][-1]["cid"]) != cid:
-                raise NotADirectoryError(ENOTDIR, cid)
+            resp = yield run_gen_step(get_files(payload), async_=async_)
+            payload["limit"] = page_size
             yield Yield(resp, identity=True)
             payload["offset"] += len(resp["data"])
             if payload["offset"] >= count:
                 break
-            resp = yield run_gen_step(get_files(payload), async_=async_)
-            if count != int(resp["count"]):
-                message = f"cid={cid} detected count changes during iteration: {count} -> {resp['count']}"
-                if raise_for_changed_count:
-                    raise BusyOSError(EBUSY, message)
-                else:
-                    warn(message, category=P115Warning)
-                count = int(resp["count"])
     return run_gen_step_iter(gen_step, async_=async_)
 
 
@@ -149,6 +167,7 @@ def iter_fs_files_threaded(
     payload: int | str | dict = 0, 
     /, 
     page_size: int = 7_000, 
+    callback: None | Callable[[dict], Any] = None, 
     app: str = "web", 
     raise_for_changed_count: bool = False, 
     cooldown: int | float = 1, 
@@ -160,6 +179,7 @@ def iter_fs_files_threaded(
     :param client: 115 网盘客户端对象
     :param payload: 目录的 id 或者详细的查询参数
     :param page_size: 分页大小，如果 <= 0，则自动确定
+    :param callback: 回调函数，调用后，会获得一个值，会添加到返回值中，key 为 "callback"
     :param app: 使用此设备的接口
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param cooldown: 冷却时间，单位为秒
@@ -179,7 +199,6 @@ def iter_fs_files_threaded(
         "limit": page_size, "show_dir": 1, **payload, 
     }
     cid = int(payload["cid"])
-    request_kwargs["async_"] = False
     if app in ("", "web", "desktop", "harmony"):
         page_size = min(page_size, 1150)
         request_kwargs.setdefault("base_url", get_webapi_origin)
@@ -187,6 +206,29 @@ def iter_fs_files_threaded(
     else:
         request_kwargs.setdefault("base_url", get_proapi_origin)
         fs_files = partial(client.fs_files_app, app=app, **request_kwargs)
+    count = -1
+    def get_files(payload: dict, /):
+        nonlocal count
+        resp = fs_files(payload)
+        check_response(resp)
+        if cid and int(resp["path"][-1]["cid"]) != cid:
+            if count < 0:
+                raise NotADirectoryError(ENOTDIR, cid)
+            else:
+                raise FileNotFoundError(ENOENT, cid)
+        count_new = int(resp["count"])
+        if count < 0:
+            count = count_new
+        elif count != count_new:
+            message = f"cid={cid} detected count changes during iteration: {count} -> {count_new}"
+            if raise_for_changed_count:
+                raise BusyOSError(EBUSY, message)
+            else:
+                warn(message, category=P115Warning)
+            count = count_new
+        if callback is not None:
+            resp["callback"] = callback(resp)
+        return resp
     dq: deque[tuple[Future, int]] = deque()
     push, pop = dq.append, dq.popleft
     executor = ThreadPoolExecutor(max_workers=max_workers)
@@ -197,14 +239,13 @@ def iter_fs_files_threaded(
         if args is None:
             args = copy(payload)
         ts = time()
-        return submit(fs_files, args)
+        return submit(get_files, args)
     try:
-        count = -1
         future = make_future()
         offset = payload["offset"]
         while True:
             try:
-                resp = check_response(future.result(max(0, ts + cooldown - time())))
+                resp = future.result(max(0, ts + cooldown - time()))
             except TimeoutError:
                 payload["offset"] += page_size
                 if count < 0 or payload["offset"] < count:
@@ -214,21 +255,7 @@ def iter_fs_files_threaded(
                     raise
                 future = make_future({**payload, "offset": offset})
             else:
-                if cid and int(resp["path"][-1]["cid"]) != cid:
-                    if count < 0:
-                        raise NotADirectoryError(ENOTDIR, cid)
-                    else:
-                        raise FileNotFoundError(ENOENT, cid)
                 yield resp
-                if count < 0:
-                    count = int(resp["count"])
-                elif count != int(resp["count"]):
-                    message = f"cid={cid} detected count changes during iteration: {count} -> {resp['count']}"
-                    if raise_for_changed_count:
-                        raise BusyOSError(EBUSY, message)
-                    else:
-                        warn(message, category=P115Warning)
-                    count = int(resp["count"])
                 if dq:
                     future, offset = pop()
                 elif not count or offset >= count or offset != resp["offset"] or offset + len(resp["data"]) >= count:
@@ -248,6 +275,7 @@ async def iter_fs_files_asynchronized(
     payload: int | str | dict = 0, 
     /, 
     page_size: int = 7_000, 
+    callback: None | Callable[[dict], Any] = None, 
     app: str = "web", 
     raise_for_changed_count: bool = False, 
     cooldown: int | float = 1, 
@@ -258,6 +286,7 @@ async def iter_fs_files_asynchronized(
     :param client: 115 网盘客户端对象
     :param payload: 目录的 id 或者详细的查询参数
     :param page_size: 分页大小，如果 <= 0，则自动确定
+    :param callback: 回调函数，调用后，会获得一个值，会添加到返回值中，key 为 "callback"
     :param app: 使用此设备的接口
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param cooldown: 冷却时间，单位为秒
@@ -276,7 +305,6 @@ async def iter_fs_files_asynchronized(
         "limit": page_size, "show_dir": 1, **payload, 
     }
     cid = int(payload["cid"])
-    request_kwargs["async_"] = True
     if app in ("", "web", "desktop", "harmony"):
         page_size = min(page_size, 1150)
         request_kwargs.setdefault("base_url", get_webapi_origin)
@@ -284,6 +312,32 @@ async def iter_fs_files_asynchronized(
     else:
         request_kwargs.setdefault("base_url", get_proapi_origin)
         fs_files = partial(client.fs_files_app, app=app, **request_kwargs)
+    count = -1
+    async def get_files(payload: dict, /):
+        nonlocal count
+        resp = await fs_files(payload, async_=True) # type: ignore
+        check_response(resp)
+        if cid and int(resp["path"][-1]["cid"]) != cid:
+            if count < 0:
+                raise NotADirectoryError(ENOTDIR, cid)
+            else:
+                raise FileNotFoundError(ENOENT, cid)
+        count_new = int(resp["count"])
+        if count < 0:
+            count = count_new
+        elif count != count_new:
+            message = f"cid={cid} detected count changes during iteration: {count} -> {count_new}"
+            if raise_for_changed_count:
+                raise BusyOSError(EBUSY, message)
+            else:
+                warn(message, category=P115Warning)
+            count = count_new
+        if callback is not None:
+            ret = callback(resp)
+            if isawaitable(ret):
+                ret = await ret
+            resp["callback"] = ret
+        return resp
     dq: deque[tuple[Task, int]] = deque()
     push, pop = dq.append, dq.popleft
     async with TaskGroup() as tg:
@@ -294,13 +348,12 @@ async def iter_fs_files_asynchronized(
             if args is None:
                 args = copy(payload)
             ts = time()
-            return create_task(fs_files(args)) # type: ignore
-        count = -1
+            return create_task(get_files(args)) # type: ignore
         task = make_task()
         offset = payload["offset"]
         while True:
             try:
-                resp = check_response(await wait_for(shield(task), max(0, ts + cooldown - time())))
+                resp = await wait_for(shield(task), max(0, ts + cooldown - time()))
             except TimeoutError:
                 payload["offset"] += page_size
                 if count < 0 or payload["offset"] < count:
@@ -310,21 +363,7 @@ async def iter_fs_files_asynchronized(
                     raise
                 task = make_task({**payload, "offset": offset})
             else:
-                if cid and int(resp["path"][-1]["cid"]) != cid:
-                    if count < 0:
-                        raise NotADirectoryError(ENOTDIR, cid)
-                    else:
-                        raise FileNotFoundError(ENOENT, cid)
                 yield resp
-                if count < 0:
-                    count = int(resp["count"])
-                elif count != int(resp["count"]):
-                    message = f"cid={cid} detected count changes during iteration: {count} -> {resp['count']}"
-                    if raise_for_changed_count:
-                        raise BusyOSError(EBUSY, message)
-                    else:
-                        warn(message, category=P115Warning)
-                    count = int(resp["count"])
                 if dq:
                     task, offset = pop()
                 elif not count or offset >= count or offset != resp["offset"] or offset + len(resp["data"]) >= count:
