@@ -3948,7 +3948,6 @@ def iter_selected_dirs_using_star(
     return run_gen_step_iter(gen_step, async_=async_)
 
 
-# TODO: cur = 1 的时候，就没必要太复杂了
 @overload
 def iter_files_with_dirname(
     client: str | P115Client, 
@@ -3958,7 +3957,6 @@ def iter_files_with_dirname(
     type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
-    cur: Literal[0, 1] = 0, 
     with_parents_4_level: bool = False, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     raise_for_changed_count: bool = False, 
@@ -3978,7 +3976,6 @@ def iter_files_with_dirname(
     type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
-    cur: Literal[0, 1] = 0, 
     with_parents_4_level: bool = False, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     raise_for_changed_count: bool = False, 
@@ -3997,7 +3994,6 @@ def iter_files_with_dirname(
     type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
     order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
     asc: Literal[0, 1] = 1, 
-    cur: Literal[0, 1] = 0, 
     with_parents_4_level: bool = False, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     raise_for_changed_count: bool = False, 
@@ -4034,7 +4030,6 @@ def iter_files_with_dirname(
         - "user_otime": 上一次打开时间
 
     :param asc: 升序排列。0: 否，1: 是
-    :param cur: 仅当前目录。0: 否（将遍历子目录树上所有叶子节点），1: 是
     :param with_parents_4_level: 添加一个字段 "parents"，包含最近的 4 级父目录名字
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
@@ -4049,7 +4044,7 @@ def iter_files_with_dirname(
     if not (type or suffix):
         raise ValueError("please set the non-zero value of suffix or type")
     payload: dict = {
-        "asc": asc, "cid": cid, "count_folders": 0, "cur": cur, "o": order, 
+        "asc": asc, "cid": cid, "count_folders": 0, "cur": 0, "o": order, 
         "offset": 0, "show_dir": 0, 
     }
     if suffix:
