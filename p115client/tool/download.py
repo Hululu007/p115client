@@ -6,21 +6,22 @@ __all__ = [
     "MakeStrmLog", "reduce_image_url_layers", "batch_get_url", "iter_url_batches", 
     "iter_files_with_url", "iter_images_with_url", "iter_subtitles_with_url", 
     "iter_subtitle_batches", "make_strm", "make_strm_by_export_dir", 
+    "iter_download_nodes", "iter_download_files", 
 ]
 __doc__ = "这个模块提供了一些和下载有关的函数"
 
-import errno
-
-from asyncio import to_thread, Semaphore, TaskGroup
+from asyncio import to_thread, Queue as AsyncQueue, Semaphore, TaskGroup
 from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from errno import ENOENT, ENOTDIR
 from functools import partial
 from glob import iglob
 from inspect import isawaitable
-from itertools import chain, islice
+from itertools import chain, count, cycle, islice
 from mimetypes import guess_type
 from os import fsdecode, makedirs, remove, PathLike
 from os.path import dirname, join as joinpath, normpath, splitext
+from queue import SimpleQueue
 from threading import Lock
 from time import perf_counter
 from typing import overload, Any, Final, Literal, TypedDict
@@ -29,6 +30,7 @@ from uuid import uuid4
 from warnings import warn
 
 from asynctools import async_chain_from_iterable
+from concurrenttools import run_as_async, run_as_thread
 from encode_uri import encode_uri_component_loose
 from iterutils import run_gen_step, run_gen_step_iter, Yield, YieldFrom
 from p115client import check_response, normalize_attr, P115Client, P115URL
@@ -36,7 +38,7 @@ from p115client.exception import P115Warning
 from posixpatht import escape
 
 from .export_dir import export_dir_parse_iter
-from .iterdir import get_path_to_cid, iter_files, iter_files_raw, DirNode, ID_TO_DIRNODE_CACHE
+from .iterdir import get_path_to_cid, iterdir, iter_files, iter_files_raw, DirNode, ID_TO_DIRNODE_CACHE
 
 
 def reduce_image_url_layers(url: str, /, size: str | int = "") -> str:
@@ -296,7 +298,7 @@ def iter_url_batches(
     return run_gen_step_iter(gen_step, async_=async_)
 
 
-# TODO: 按批获取 url，以减少总的耗时
+# TODO: 支持按批获取 url，以减少总的耗时
 @overload
 def iter_files_with_url(
     client: str | P115Client, 
@@ -380,7 +382,7 @@ def iter_files_with_url(
     :param use_star: 获取目录信息时，是否允许使用星标 （如果为 None，则采用流处理，否则采用批处理）
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
-    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
     :param app: 使用某个 app （设备）的接口
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param user_agent: "User-Agent" 请求头的值
@@ -512,7 +514,7 @@ def iter_images_with_url(
     :param use_star: 获取目录信息时，是否允许使用星标 （如果为 None，则采用流处理，否则采用批处理）
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
-    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
     :param app: 使用某个 app （设备）的接口
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param async_: 是否异步
@@ -649,7 +651,7 @@ def iter_subtitles_with_url(
     :param use_star: 获取目录信息时，是否允许使用星标 （如果为 None，则采用流处理，否则采用批处理）
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
-    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
     :param app: 使用某个 app （设备）的接口
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param async_: 是否异步
@@ -1008,7 +1010,7 @@ def make_strm(
             elif with_root:
                 resp = await client.fs_file_skim(cid, async_=True, **request_kwargs)
                 if not resp:
-                    raise FileNotFoundError(errno.ENOENT, cid)
+                    raise FileNotFoundError(ENOENT, cid)
                 check_response(resp)
                 savedir = joinpath(savedir, resp["data"][0]["file_name"])
             success = 0
@@ -1108,7 +1110,7 @@ def make_strm(
         elif with_root:
             resp = client.fs_file_skim(cid, **request_kwargs)
             if not resp:
-                raise FileNotFoundError(errno.ENOENT, cid)
+                raise FileNotFoundError(ENOENT, cid)
             check_response(resp)
             savedir = joinpath(savedir, resp["data"][0]["file_name"])
         success = 0
@@ -1497,4 +1499,327 @@ def make_strm_by_export_dir(
             }
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
+
+
+@overload
+def iter_download_nodes(
+    client: str | P115Client, 
+    pickcode: str, 
+    files: bool = True, 
+    max_workers: None | int = 1, 
+    *, 
+    async_: Literal[False] = False, 
+    **request_kwargs, 
+) -> Iterator[dict]:
+    ...
+@overload
+def iter_download_nodes(
+    client: str | P115Client, 
+    pickcode: str, 
+    files: bool = True, 
+    max_workers: None | int = 1, 
+    *, 
+    async_: Literal[True], 
+    **request_kwargs, 
+) -> AsyncIterator[dict]:
+    ...
+def iter_download_nodes(
+    client: str | P115Client, 
+    pickcode: str, 
+    files: bool = True, 
+    max_workers: None | int = 1, 
+    *, 
+    async_: Literal[False, True] = False, 
+    **request_kwargs, 
+) -> Iterator[dict] | AsyncIterator[dict]:
+    """获取一个目录内所有的文件或者目录的信息（简略）
+
+    :param client: 115 客户端或 cookies
+    :param pickcode: 目录的提取码
+    :param files: 如果为 True，则只获取文件，否则只获取目录
+    :param max_workers: 最大并发数，如果为 None 或 <= 0，则默认为 20
+    :param async_: 是否异步
+    :param request_kwargs: 其它请求参数
+
+    :return: 迭代器，产生文件或者目录的简略信息
+    """
+    if not isinstance(client, P115Client):
+        client = P115Client(client, check_for_relogin=True)
+    if files:
+        method = client.download_files
+    else:
+        method = client.download_folders
+    request_kwargs.setdefault("base_url", cycle(("http://proapi.115.com", "https://proapi.115.com")).__next__)
+    if max_workers == 1:
+        def gen_step():
+            for i in count(1):
+                payload = {"pickcode": pickcode, "page": i}
+                resp = yield method(payload, async_=async_, **request_kwargs)
+                check_response(resp)
+                data = resp["data"]
+                yield YieldFrom(data["list"], identity=True)
+                if not data["has_next_page"]:
+                    break
+    else:
+        get_next_page = count(1).__next__
+        if async_:
+            q: Any = AsyncQueue()
+        else:
+            q = SimpleQueue()
+        get, put = q.get, q.put_nowait
+        max_page = 0
+        def request():
+            nonlocal max_page
+            while True:
+                page = get_next_page()
+                if max_page and page > max_page:
+                    return
+                resp: dict = yield method(
+                    {"pickcode": pickcode, "page": page}, 
+                    async_=async_, # type: ignore
+                    **request_kwargs, 
+                )
+                try:
+                    check_response(resp)
+                except BaseException as e:
+                    put(e)
+                    return
+                data = resp["data"]
+                put(data["list"])
+                if not data["has_next_page"]:
+                    max_page = page
+        def gen_step():
+            nonlocal max_workers
+            if async_:
+                if max_workers is None or max_workers <= 0:
+                    max_workers = 20
+                n = max_workers
+                task_group = TaskGroup()
+                yield task_group.__aenter__()
+                create_task = task_group.create_task
+                submit: Callable = lambda f, /, *a, **k: create_task(f(*a, **k))
+                shutdown: Callable = lambda: task_group.__aexit__(None, None, None)
+            else:
+                if max_workers is not None and max_workers <= 0:
+                    max_workers = None
+                executor = ThreadPoolExecutor(max_workers)
+                n = executor._max_workers
+                submit = executor.submit
+                shutdown = lambda: executor.shutdown(False, cancel_futures=True)
+            try:
+                sentinel = object()
+                countdown: Callable
+                if async_:
+                    def countdown(_, /):
+                        nonlocal n
+                        n -= 1
+                        if not n:
+                            put(sentinel)
+                else:
+                    def countdown(_, /, lock=Lock()):
+                        nonlocal n
+                        with lock:
+                            n -= 1
+                            if not n:
+                                put(sentinel)
+                for i in range(n):
+                    submit(run_gen_step, request, async_=async_).add_done_callback(countdown)
+                while True:
+                    ls = yield get
+                    if ls is sentinel:
+                        break
+                    elif isinstance(ls, BaseException):
+                        raise ls
+                    yield YieldFrom(ls, identity=True)
+            finally:
+                yield shutdown
+    return run_gen_step_iter(gen_step, async_=async_)
+
+
+def iter_download_files(
+    client: str | P115Client, 
+    cid: int = 0, 
+    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    max_workers: None | int = None, 
+    *, 
+    async_: Literal[False, True] = False, 
+    **request_kwargs, 
+):
+    """获取一个目录内所有的文件信息（简略），且包括 "dir_ancestors"、"dirname" 和 "posix_dirname"
+
+    .. note::
+        并不提供文件的 id 和 name，但有 pickcode，如果需要获得 name，你可以在之后获取下载链接，然后从下载链接中获取实际的名字
+
+        如果要通过 pickcode 获取基本信息，请用 `P115Client.fs_supervision`
+
+    :param client: 115 客户端或 cookies
+    :param cid: 目录 id
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
+    :param max_workers: 最大并发数，如果为 None 或 <= 0，则默认为 20
+    :param async_: 是否异步
+    :param request_kwargs: 其它请求参数
+
+    :return: 迭代器，产生文件的简略信息
+    """
+    if not isinstance(client, P115Client):
+        client = P115Client(client, check_for_relogin=True)
+    if id_to_dirnode is None:
+        id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
+    else:
+        id_to_dirnode = {}
+    id_to_ancestors: dict[int, list[dict]] = {}
+    def get_ancestors(id: int, attr: dict | tuple[str, int] | DirNode, /) -> list[dict]:
+        if isinstance(attr, (DirNode, tuple)):
+            name, pid = attr
+        else:
+            pid = attr["parent_id"]
+            name = attr["name"]
+        if pid == 0:
+            ancestors = [{"id": 0, "parent_id": 0, "name": ""}]
+        else:
+            if pid not in id_to_ancestors:
+                id_to_ancestors[pid] = get_ancestors(pid, id_to_dirnode[pid])
+            ancestors = [*id_to_ancestors[pid]]
+        ancestors.append({"id": id, "parent_id": pid, "name": name})
+        return ancestors
+    id_to_path: dict[int, str] = {}
+    id_to_posixpath: dict[int, str] = {}
+    def get_path(attr: dict | tuple[str, int] | DirNode, /) -> tuple[str, str]:
+        if isinstance(attr, (DirNode, tuple)):
+            name, pid = attr
+        else:
+            pid = attr["parent_id"]
+            name = attr["name"]
+        ename = name
+        if escape is not None:
+            ename = escape(ename)
+        name = name.replace("/", "|")
+        if pid == 0:
+            return "/" + ename, "/" + name
+        elif pid in id_to_path:
+            return id_to_path[pid] + ename, id_to_posixpath[pid] + name
+        else:
+            dirname, posix_dirname = get_path(id_to_dirnode[pid])
+            dirname += "/"
+            posix_dirname += "/"
+            id_to_path[pid], id_to_posixpath[pid] = dirname, posix_dirname
+            return dirname + ename, posix_dirname + name
+    def norm_attr(info: dict, /) -> dict:
+        pid = int(info["pid"])
+        attr = {"parent_id": pid, "pickcode": info["pc"], "size": info["fs"]}
+        pnode = id_to_dirnode[pid]
+        attr["dir_ancestors"] = get_ancestors(pid, pnode)
+        attr["dirname"], attr["posix_dirname"] = get_path(pnode)
+        return attr
+    def gen_step(pickcode: str = ""):
+        if not cid:
+            defaults = {
+                "dir_ancestors": [{"id": 0, "parent_id": 0, "name": ""}],
+                "dirname": "/",
+                "posix_dirname": "/", 
+            }
+            it = iterdir(
+                client, 
+                id_to_dirnode=id_to_dirnode, 
+                app="android", 
+                raise_for_changed_count=True, 
+                async_=async_, # type: ignore
+                **request_kwargs, 
+            )
+            pickcodes: list[str] = []
+            try:
+                get_next = it.__anext__ if async_ else it.__next__ # type: ignore
+                while True:
+                    attr = yield get_next
+                    if attr["is_dir"]:
+                        pickcodes.append(attr["pickcode"])
+                    else:
+                        yield Yield({
+                            "parent_id": attr["parent_id"],
+                            "pickcode": attr["pickcode"],
+                            "size": attr["size"],
+                            **defaults, 
+                        }, identity=True)
+            except (StopAsyncIteration, StopIteration):
+                pass
+            for pickcode in pickcodes:
+                yield YieldFrom(run_gen_step_iter(gen_step(pickcode), async_=async_), identity=True)
+            return
+        if not pickcode:
+            resp = yield client.fs_file_skim(cid, async_=async_, **request_kwargs)
+            check_response(resp)
+            info = resp["data"][0]
+            if info["sha1"]:
+                raise NotADirectoryError(ENOTDIR, info)
+            pickcode = info["pick_code"]
+        folders = iter_download_nodes(
+            client, 
+            pickcode, 
+            files=False, 
+            max_workers=max_workers, 
+            async_=async_, 
+            **request_kwargs, 
+        )
+        files = iter_download_nodes(
+            client, 
+            pickcode, 
+            files=True, 
+            max_workers=max_workers, 
+            async_=async_, 
+            **request_kwargs, 
+        )
+        ancestors_loaded: None | bool = False
+        load_ancestors_error = None
+        def load_ancestors():
+            nonlocal ancestors_loaded, load_ancestors_error
+            if cid:
+                resp = yield client.fs_files(
+                    {"cid": cid, "limit": 1}, 
+                    async_=async_, 
+                    **request_kwargs, 
+                )
+                check_response(resp)
+                for info in resp["path"][1:]:
+                    id_to_dirnode[int(info["cid"])] = DirNode(info["name"], int(info["pid"]))
+                get_next = folders.__anext__ if async_ else folders.__next__ # type: ignore
+            try:
+                while True:
+                    info = yield get_next
+                    id_to_dirnode[int(info["fid"])] = DirNode(info["fn"], int(info["pid"]))
+            except (StopAsyncIteration, StopIteration):
+                pass
+            except BaseException as e:
+                load_ancestors_error = e
+                raise
+            finally:
+                ancestors_loaded = True
+        if async_:
+            future: Any = run_as_async(run_gen_step, load_ancestors, async_=async_)
+        else:
+            future = run_as_thread(run_gen_step, load_ancestors, async_=async_)
+        cache: list[dict] = []
+        add_to_cache = cache.append
+        get_next = files.__anext__ if async_ else files.__next__ # type: ignore
+        try:
+            while True:
+                info = yield get_next
+                if ancestors_loaded is None:
+                    yield Yield(norm_attr(info), identity=True)
+                elif ancestors_loaded:
+                    yield YieldFrom(map(norm_attr, cache), identity=True)
+                    cache.clear()
+                    if load_ancestors_error is not None:
+                        raise load_ancestors_error
+                    ancestors_loaded = None
+                else:
+                    add_to_cache(info)
+        except (StopAsyncIteration, StopIteration):
+            pass
+        if cache:
+            if async_:
+                yield future.result()
+            else:
+                future.result()
+            yield YieldFrom(map(norm_attr, cache), identity=True)
+    return run_gen_step_iter(gen_step, async_=async_)
 

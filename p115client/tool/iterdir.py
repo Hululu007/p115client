@@ -245,7 +245,7 @@ def get_path_to_cid(
     :param root_id: 根目录 id，如果指定此参数且不为 None，则返回相对路径，否则返回绝对路径
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param refresh: 是否刷新。如果为 True，则会执行网络请求以查询；如果为 False，则直接从 `id_to_dirnode` 中获取
-    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
     :param app: 使用某个 app （设备）的接口
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
@@ -323,7 +323,7 @@ def get_file_count(
 
     :param client: 115 客户端或 cookies
     :param cid: 目录 id
-    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -447,7 +447,7 @@ def get_ancestors(
 
     :param client: 115 客户端或 cookies
     :param attr: 待查询节点的信息（必须有 id 和 parent_id）
-    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -591,7 +591,7 @@ def get_ancestors_to_cid(
     :param client: 115 客户端或 cookies
     :param cid: 目录的 id
     :param refresh: 是否刷新。如果为 True，则会执行网络请求以查询；如果为 False，则直接从 `id_to_dirnode` 中获取
-    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
     :param app: 使用某个 app （设备）的接口
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
@@ -696,7 +696,7 @@ def get_id_to_path(
 
     :param is_posixpath: 使用 posixpath，会把 "/" 转换为 "|"，因此解析的时候，会对 "|" 进行特别处理
     :param refresh: 是否刷新。如果为 True，则会执行网络请求以查询；如果为 False，则直接从 `id_to_dirnode` 中获取
-    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
     :param app: 使用某个 app （设备）的接口
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
@@ -1067,7 +1067,7 @@ def _iter_fs_files(
     :param client: 115 客户端或 cookies
     :param payload: 请求参数，如果是 int 或 str，则视为 cid
     :param first_page_size: 首次拉取的分页大小
-    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param ensure_file: 是否确保为文件
 
@@ -1221,7 +1221,7 @@ def iter_stared_dirs_raw(
         - "user_otime": 上一次打开时间
 
     :param asc: 升序排列。0: 否，1: 是
-    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param app: 使用某个 app （设备）的接口
     :param cooldown: 冷却时间，大于 0，则使用此时间间隔执行并发
@@ -1318,7 +1318,7 @@ def iter_stared_dirs(
 
     :param asc: 升序排列。0: 否，1: 是
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
-    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param app: 使用某个 app （设备）的接口
     :param cooldown: 冷却时间，大于 0，则使用此时间间隔执行并发
@@ -1362,7 +1362,7 @@ def ensure_attr_path[D: dict](
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
-) -> Collection[D]:
+) -> Iterator[D]:
     ...
 @overload
 def ensure_attr_path[D: dict](
@@ -1381,7 +1381,7 @@ def ensure_attr_path[D: dict](
     *, 
     async_: Literal[True], 
     **request_kwargs, 
-) -> Coroutine[Any, Any, Collection[D]]:
+) -> AsyncIterator[D]:
     ...
 def ensure_attr_path[D: dict](
     client: str | P115Client, 
@@ -1399,7 +1399,7 @@ def ensure_attr_path[D: dict](
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
-) -> Collection[D] | Coroutine[Any, Any, Collection[D]]:
+) -> Iterator[D] | AsyncIterator[D]:
     """为一组文件信息添加 "path" 和 "posixpath" 或 "ancestors" 字段
 
     :param client: 115 客户端或 cookies
@@ -1410,7 +1410,7 @@ def ensure_attr_path[D: dict](
     :param use_star: 获取目录信息时，是否允许使用星标
     :param life_event_cooldown: 冷却时间，大于 0 时，两次拉取操作事件的接口调用之间至少间隔这么多秒
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
-    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
     :param make_up_missing: 是否补全缺失的节点信息
     :param app: 使用某个 app （设备）的接口
     :param errors: 如何处理错误
@@ -1424,10 +1424,13 @@ def ensure_attr_path[D: dict](
 
     :return: 返回这一组文件信息
     """
-    if not isinstance(attrs, Collection):
-        attrs = tuple(attrs)
     if not (with_ancestors or with_path):
-        return attrs
+        if async_:
+            return ensure_aiter(attrs)
+        else:
+            return iter(attrs)
+    if make_up_missing and not isinstance(attrs, Collection):
+        attrs = tuple(attrs)
     if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     if page_size <= 0:
@@ -1519,24 +1522,23 @@ def ensure_attr_path[D: dict](
                             case "warn":
                                 warn(f"{type(e).__module__}.{type(e).__qualname__}: {e}", category=P115Warning)
                 pids = {ppid for pid in pids if (ppid := id_to_dirnode[pid][1])}
-            del pids, find_ids
-        if with_ancestors or with_path:
-            for attr in attrs:
-                try:
-                    if with_ancestors:
-                        attr["ancestors"] = get_ancestors(attr["id"], attr)
-                    if with_path:
-                        attr["path"], attr["posixpath"] = get_path(attr)
-                except Exception as e:
-                    match errors:
-                        case "raise":
-                            raise
-                        case "warn":
-                            warn(f"{type(e).__module__}.{type(e).__qualname__}: {e} of {attr}", category=P115Warning)
-                    attr.setdefault("ancestors", None)
-                    attr.setdefault("path", "")
-                    attr.setdefault("posixpath", "")
-        return attrs
+            del pids, find_ids, add_pid
+        for attr in attrs:
+            try:
+                if with_ancestors:
+                    attr["ancestors"] = get_ancestors(attr["id"], attr)
+                if with_path:
+                    attr["path"], attr["posixpath"] = get_path(attr)
+            except Exception as e:
+                match errors:
+                    case "raise":
+                        raise
+                    case "warn":
+                        warn(f"{type(e).__module__}.{type(e).__qualname__}: {e} of {attr}", category=P115Warning)
+                attr.setdefault("ancestors", None)
+                attr.setdefault("path", "")
+                attr.setdefault("posixpath", "")
+            yield Yield(attr, identity=True)
     return run_gen_step(gen_step, async_=async_)
 
 
@@ -1593,7 +1595,7 @@ def ensure_attr_path_by_category_get[D: dict](
     :param with_ancestors: 文件信息中是否要包含 "ancestors"
     :param with_path: 文件信息中是否要包含 "path" 和 "posixpath"
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
-    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典，如果为 ...，则忽略
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典，如果为 ...，则忽略
     :param app: 使用某个 app （设备）的接口
     :param max_workers: 最大并发数
     :param async_: 是否异步
@@ -1790,7 +1792,7 @@ def iterdir_raw(
     :param asc: 升序排列。0: 否，1: 是
     :param show_dir: 展示文件夹。0: 否，1: 是
     :param fc_mix: 文件夹置顶。0: 文件夹在文件之前，1: 文件和文件夹混合并按指定排序
-    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param ensure_file: 是否确保为文件
 
@@ -1920,7 +1922,7 @@ def iterdir(
     :param with_path: 文件信息中是否要包含 "path" 和 "posixpath"
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
-    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param ensure_file: 是否确保为文件
 
@@ -2022,7 +2024,7 @@ def iterdir_limited(
     :param with_path: 文件信息中是否要包含 "path" 和 "posixpath"
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
-    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
     :param ensure_file: 是否确保为文件
 
         - True: 必须是文件
@@ -2240,7 +2242,7 @@ def iter_files_raw(
 
     :param asc: 升序排列。0: 否，1: 是
     :param cur: 仅当前目录。0: 否（将遍历子目录树上所有叶子节点），1: 是
-    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param app: 使用某个 app （设备）的接口
     :param cooldown: 冷却时间，大于 0，则使用此时间间隔执行并发
@@ -2387,7 +2389,7 @@ def iter_files(
     :param use_star: 获取目录信息时，是否允许使用星标 （如果为 None，则采用流处理，否则采用批处理）
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
-    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param app: 使用某个 app （设备）的接口
     :param cooldown: 冷却时间，大于 0，则使用此时间间隔执行并发
@@ -2504,7 +2506,7 @@ def iter_files(
                 app=app, 
                 async_=async_, # type: ignore
                 **request_kwargs, 
-            ))
+            ), identity=True)
     return run_gen_step_iter(gen_step, async_=async_)
 
 
@@ -2606,7 +2608,7 @@ def traverse_files(
     :param use_star: 获取目录信息时，是否允许使用星标 （如果为 None，则采用流处理，否则采用批处理）
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
-    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
     :param app: 使用某个 app （设备）的接口
     :param cooldown: 冷却时间，大于 0，则使用此时间间隔执行并发
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
@@ -2705,7 +2707,7 @@ def traverse_files(
                                         **request_kwargs, 
                                     )
                                 else:
-                                    attrs = yield ensure_attr_path(
+                                    attrs = ensure_attr_path( # type: ignore
                                         client, 
                                         attrs, 
                                         page_size=page_size, 
@@ -2865,7 +2867,7 @@ def iter_dupfiles[K](
     :param auto_splitting_threshold: 如果 `auto_splitting_tasks` 为 True，且目录内的文件数大于 `auto_splitting_threshold`，则分拆此任务到它的各个直接子目录，否则批量拉取
     :param auto_splitting_statistics_timeout: 如果执行统计超过此时间，则立即终止，并认为文件是无限多
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
-    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param app: 使用某个 app （设备）的接口
     :param cooldown: 冷却时间，大于 0，则使用此时间间隔执行并发
@@ -3392,7 +3394,7 @@ def iter_selected_nodes(
     :param ids: 一组文件或目录的 id
     :param ignore_deleted: 忽略已经被删除的
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
-    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典，如果为 ...，则忽略
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典，如果为 ...，则忽略
     :param max_workers: 最大并发数
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
@@ -3475,7 +3477,7 @@ def iter_selected_nodes_by_pickcode(
     :param ids: 一组文件或目录的 id
     :param ignore_deleted: 是否忽略已经被删除的
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
-    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典，如果为 ...，则忽略
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典，如果为 ...，则忽略
     :param max_workers: 最大并发数
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
@@ -3570,7 +3572,7 @@ def iter_selected_nodes_using_edit(
 
     :param client: 115 客户端或 cookies
     :param ids: 一组文件或目录的 id
-    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典，如果为 ...，则忽略
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典，如果为 ...，则忽略
     :param max_workers: 最大并发数
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
@@ -3643,7 +3645,7 @@ def iter_selected_nodes_using_category_get(
 
     :param client: 115 客户端或 cookies
     :param ids: 一组文件或目录的 id
-    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典，如果为 ...，则忽略
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典，如果为 ...，则忽略
     :param max_workers: 最大并发数
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
@@ -3740,7 +3742,7 @@ def iter_selected_nodes_using_star_event(
     :param ids: 一组文件或目录的 id
     :param with_pics: 包含图片的 id
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
-    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典，如果为 ...，则忽略
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典，如果为 ...，则忽略
     :param app: 使用某个 app （设备）的接口
     :param cooldown: 冷却时间，大于 0 时，两次拉取操作事件的接口调用之间至少间隔这么多秒
     :param async_: 是否异步
@@ -3895,7 +3897,7 @@ def iter_selected_dirs_using_star(
 
     :param client: 115 客户端或 cookies
     :param ids: 一组目录的 id（如果包括文件，则会被忽略）
-    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param app: 使用某个 app （设备）的接口
     :param cooldown: 冷却时间，大于 0 时，两次接口调用之间至少间隔这么多秒
@@ -4219,7 +4221,7 @@ def iter_files_with_path(
     :param asc: 升序排列。0: 否，1: 是
     :param cur: 仅当前目录。0: 否（将遍历子目录树上所有叶子节点），1: 是
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
-    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param app: 使用某个 app （设备）的接口
     :param cooldown: 冷却时间，大于 0，则使用此时间间隔执行并发
@@ -4485,7 +4487,7 @@ def iter_files_with_path_by_export_dir(
             for fid, (name, pid) in id_to_dirnode.items():
                 if pid and pid not in id_to_dirnode and pid not in pid_to_dirpatht:
                     add_pid(pid)
-        del unbound_pids
+        del unbound_pids, add_pid
         for pid in pid_to_files.keys() - pid_to_dirpatht.keys():
             if pid not in id_to_dirnode:
                 continue

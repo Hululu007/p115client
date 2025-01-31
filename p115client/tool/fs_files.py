@@ -340,8 +340,10 @@ async def iter_fs_files_asynchronized(
         return resp
     dq: deque[tuple[Task, int]] = deque()
     push, pop = dq.append, dq.popleft
-    async with TaskGroup() as tg:
-        create_task = tg.create_task
+    tg = TaskGroup()
+    await tg.__aenter__()
+    create_task = tg.create_task
+    try:
         ts: int | float = 0
         def make_task(args: None | dict = None, /) -> Task:
             nonlocal ts
@@ -373,5 +375,11 @@ async def iter_fs_files_asynchronized(
                     if offset >= count:
                         break
                     task = make_task()
+    except *GeneratorExit:
+        pass
+    finally:
+        for t in tuple(tg._tasks):
+            t.cancel()
+        await tg.__aexit__(None, None, None)
 
 # TODO: 以上的数据获取方式某种程度上应该是通用的，只要是涉及到 offset 和 count，因此可以总结出一个更抽象的函数
