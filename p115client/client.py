@@ -2983,6 +2983,151 @@ class P115Client:
     ########## Download API ##########
 
     @overload
+    def download_folders(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def download_folders(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def download_folders(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取待下载的目录列表
+
+        GET https://proapi.115.com/app/chrome/downfolders
+
+        .. note::
+            一页最多可获取 3000 条记录
+
+        :payload:
+            - pickcode: str 💡 提取码
+            - page: int = 1 💡 第几页
+        """
+        api = complete_proapi("/app/chrome/downfolders", base_url)
+        if isinstance(payload, str):
+            payload = {"pickcode": payload}
+        payload.setdefault("page", 1)
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def download_files(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def download_files(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def download_files(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取待下载的文件列表
+
+        GET https://proapi.115.com/app/chrome/downfiles
+
+        .. note::
+            一页最多可获取 3000 条记录，不提供文件名
+
+        :payload:
+            - pickcode: str 💡 提取码
+            - page: int = 1 💡 第几页
+        """
+        api = complete_proapi("/app/chrome/downfiles", base_url)
+        if isinstance(payload, str):
+            payload = {"pickcode": payload}
+        payload.setdefault("page", 1)
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def download_downfolder_app(
+        self, 
+        payload: str | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def download_downfolder_app(
+        self, 
+        payload: str | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def download_downfolder_app(
+        self, 
+        payload: str | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取待下载的文件列表
+
+        GET https://proapi.115.com/android/folder/downfolder
+
+        .. caution::
+            一次性拉完，当文件过多时，会报错
+
+        :payload:
+            - pickcode: str 💡 提取码
+        """
+        api = complete_proapi("/folder/downfolder", base_url, app)
+        if isinstance(payload, str):
+            payload = {"pickcode": payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
     def download_url(
         self, 
         pickcode: str, 

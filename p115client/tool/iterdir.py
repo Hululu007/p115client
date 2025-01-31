@@ -13,16 +13,17 @@ __all__ = [
     "iter_selected_nodes", "iter_selected_nodes_by_pickcode", "iter_selected_nodes_using_category_get", 
     "iter_selected_nodes_using_edit", "iter_selected_nodes_using_star_event", 
     "iter_selected_dirs_using_star", "iter_files_with_dirname", "iter_files_with_path", 
-    "iter_parents_3_level", 
+    "iter_files_with_path_by_export_dir", "iter_parents_3_level", 
 ]
 __doc__ = "这个模块提供了一些和目录信息罗列有关的函数"
 
-from asyncio import sleep as async_sleep, Lock as AsyncLock
+from asyncio import sleep as async_sleep, Lock as AsyncLock, TaskGroup
 from collections import defaultdict, deque
 from collections.abc import (
     AsyncIterable, AsyncIterator, Callable, Collection, Coroutine, Iterable, Iterator, 
     Mapping, Sequence, 
 )
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from errno import EIO, ENOENT, ENOTDIR
 from functools import partial
@@ -317,6 +318,9 @@ def get_file_count(
 ) -> int | Coroutine[Any, Any, int]:
     """获取文件总数
 
+    .. caution::
+        我通过一些经验，搭配了多个接口的占比和参数分布，可能不够合理，以后会根据实际情况调整
+
     :param client: 115 客户端或 cookies
     :param cid: 目录 id
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
@@ -329,10 +333,14 @@ def get_file_count(
         client = P115Client(client, check_for_relogin=True)
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
+    n_webapi = len(WEBAPI_BASE_URLS)
+    n_proapi = len(PROAPI_BASE_URLS)
+    n_apsapi = len(APS_BASE_URLS)
+    n_api = n_webapi * 2 + n_proapi * 2 + n_apsapi
     def get_resp():
         global _n_get_count
-        n = _n_get_count % 25
-        if n < 7:
+        n = _n_get_count % n_api
+        if n < n_webapi:
             _n_get_count += 1
             return client.fs_files(
                 {"cid": cid, "limit": 1, "show_dir": 0}, 
@@ -340,8 +348,8 @@ def get_file_count(
                 async_=async_, 
                 **request_kwargs, 
             )
-        n -= 7
-        if n < 4:
+        n -= n_webapi
+        if n < n_proapi:
             _n_get_count += 1
             return client.fs_files_app(
                 {"cid": cid, "hide_data": 1, "show_dir": 0}, 
@@ -349,8 +357,8 @@ def get_file_count(
                 async_=async_, 
                 **request_kwargs, 
             )
-        n -= 4
-        if n < 3:
+        n -= n_proapi
+        if n < n_apsapi:
             _n_get_count += 1
             return client.fs_files_aps(
                 {"cid": cid, "limit": 1, "show_dir": 0}, 
@@ -358,8 +366,8 @@ def get_file_count(
                 async_=async_, 
                 **request_kwargs, 
             )
-        n -= 3
-        if n < 7:
+        n -= n_apsapi
+        if n < n_webapi:
             _n_get_count += 1
             return client.fs_category_get(
                 cid, 
@@ -367,7 +375,7 @@ def get_file_count(
                 async_=async_, 
                 **request_kwargs, 
             )
-        n -= 7
+        n -= n_webapi
         _n_get_count += 1
         return client.fs_category_get_app(
             cid, 
@@ -434,6 +442,9 @@ def get_ancestors(
 ) -> list[dict] | Coroutine[Any, Any, list[dict]]:
     """获取某个节点对应的祖先节点列表（只有 id、parent_id 和 name 的信息）
 
+    .. caution::
+        我通过一些经验，搭配了多个接口的占比和参数分布，可能不够合理，以后会根据实际情况调整
+
     :param client: 115 客户端或 cookies
     :param attr: 待查询节点的信息（必须有 id 和 parent_id）
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
@@ -454,10 +465,14 @@ def get_ancestors(
         client = P115Client(client, check_for_relogin=True)
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
+    n_webapi = len(WEBAPI_BASE_URLS)
+    n_proapi = len(PROAPI_BASE_URLS)
+    n_apsapi = len(APS_BASE_URLS)
+    n_api = n_webapi * 2 + n_proapi * 2 + n_apsapi
     def get_resp():
         global _n_get_ancestors
-        n = _n_get_ancestors % 25
-        if n < 7:
+        n = _n_get_ancestors % n_api
+        if n < n_webapi:
             _n_get_ancestors += 1
             return client.fs_files(
                 {"cid": attr["parent_id"], "limit": 1}, 
@@ -465,8 +480,8 @@ def get_ancestors(
                 async_=async_, 
                 **request_kwargs, 
             )
-        n -= 7
-        if n < 4:
+        n -= n_webapi
+        if n < n_proapi:
             _n_get_ancestors += 1
             return client.fs_files_app(
                 {"cid": attr["parent_id"], "hide_data": 1}, 
@@ -474,8 +489,8 @@ def get_ancestors(
                 async_=async_, 
                 **request_kwargs, 
             )
-        n -= 4
-        if n < 3:
+        n -= n_proapi
+        if n < n_apsapi:
             _n_get_ancestors += 1
             return client.fs_files_aps(
                 {"cid": attr["parent_id"], "limit": 1}, 
@@ -486,8 +501,8 @@ def get_ancestors(
         if attr.get("is_dir", False) or attr.get("is_directory", False):
             _n_get_ancestors = 0
             return get_resp()
-        n -= 3
-        if n < 7:
+        n -= n_apsapi
+        if n < n_webapi:
             _n_get_ancestors += 1
             return client.fs_category_get(
                 attr["id"], 
@@ -495,7 +510,7 @@ def get_ancestors(
                 async_=async_, 
                 **request_kwargs, 
             )
-        n -= 7
+        n -= n_webapi
         _n_get_ancestors += 1
         return client.fs_category_get_app(
             attr["id"], 
@@ -1062,7 +1077,7 @@ def _iter_fs_files(
 
     :param app: 使用某个 app （设备）的接口
     :param cooldown: 冷却时间，大于 0，则使用此时间间隔执行并发
-    :param max_workers: 最大工作线程数
+    :param max_workers: 最大并发数
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -1073,14 +1088,15 @@ def _iter_fs_files(
     show_files = payload.get("suffix") or payload.get("type")
     if show_files:
         payload.setdefault("show_dir", 0)
+    if not ensure_file:
+        payload["count_folders"] = 1
     if ensure_file:
         payload["show_dir"] = 0
         if not show_files:
             payload.setdefault("cur", 1)
     elif ensure_file is False:
-        payload["count_folders"] = 1
-        payload["fc_mix"] = 0
         payload["show_dir"] = 1
+        payload["nf"] = 1
     if payload.get("type") == 99:
         payload.pop("type", None)
     if not isinstance(client, P115Client):
@@ -1209,7 +1225,7 @@ def iter_stared_dirs_raw(
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param app: 使用某个 app （设备）的接口
     :param cooldown: 冷却时间，大于 0，则使用此时间间隔执行并发
-    :param max_workers: 最大工作线程数
+    :param max_workers: 最大并发数
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -1246,6 +1262,7 @@ def iter_stared_dirs(
     raise_for_changed_count: bool = False, 
     app: str = "web", 
     cooldown: int | float = 0, 
+    max_workers: None | int = None, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -1263,6 +1280,7 @@ def iter_stared_dirs(
     raise_for_changed_count: bool = False, 
     app: str = "web", 
     cooldown: int | float = 0, 
+    max_workers: None | int = None, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -1279,6 +1297,7 @@ def iter_stared_dirs(
     raise_for_changed_count: bool = False, 
     app: str = "web", 
     cooldown: int | float = 0, 
+    max_workers: None | int = None, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -1303,6 +1322,7 @@ def iter_stared_dirs(
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param app: 使用某个 app （设备）的接口
     :param cooldown: 冷却时间，大于 0，则使用此时间间隔执行并发
+    :param max_workers: 最大并发数
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -1319,6 +1339,7 @@ def iter_stared_dirs(
         raise_for_changed_count=raise_for_changed_count, 
         app=app, 
         cooldown=cooldown, 
+        max_workers=max_workers, 
         async_=async_, # type: ignore
         **request_kwargs, 
     ))
@@ -1335,6 +1356,7 @@ def ensure_attr_path[D: dict](
     life_event_cooldown: int | float = 0.5, 
     escape: None | Callable[[str], str] = escape, 
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
+    make_up_missing: bool = True, 
     app: str = "web", 
     errors: Literal["ignore", "raise", "warn"] = "raise", 
     *, 
@@ -1353,6 +1375,7 @@ def ensure_attr_path[D: dict](
     life_event_cooldown: int | float = 0.5, 
     escape: None | Callable[[str], str] = escape, 
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
+    make_up_missing: bool = True, 
     app: str = "web", 
     errors: Literal["ignore", "raise", "warn"] = "raise", 
     *, 
@@ -1370,23 +1393,25 @@ def ensure_attr_path[D: dict](
     life_event_cooldown: int | float = 0.5, 
     escape: None | Callable[[str], str] = escape, 
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
+    make_up_missing: bool = True, 
     app: str = "web", 
     errors: Literal["ignore", "raise", "warn"] = "raise", 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
 ) -> Collection[D] | Coroutine[Any, Any, Collection[D]]:
-    """为一组文件信息添加 "path" 或 "ancestors" 字段
+    """为一组文件信息添加 "path" 和 "posixpath" 或 "ancestors" 字段
 
     :param client: 115 客户端或 cookies
     :param attrs: 一组文件或目录的信息
     :param page_size: 分页大小
     :param with_ancestors: 文件信息中是否要包含 "ancestors"
-    :param with_path: 文件信息中是否要包含 "path"
+    :param with_path: 文件信息中是否要包含 "path" 和 "posixpath"
     :param use_star: 获取目录信息时，是否允许使用星标
     :param life_event_cooldown: 冷却时间，大于 0 时，两次拉取操作事件的接口调用之间至少间隔这么多秒
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param make_up_missing: 是否补全缺失的节点信息
     :param app: 使用某个 app （设备）的接口
     :param errors: 如何处理错误
 
@@ -1431,84 +1456,86 @@ def ensure_attr_path[D: dict](
             return ancestors
     if with_path:
         id_to_path: dict[int, str] = {}
-        def get_path(attr: dict | tuple[str, int] | DirNode, /) -> str:
+        id_to_posixpath: dict[int, str] = {}
+        def get_path(attr: dict | tuple[str, int] | DirNode, /) -> tuple[str, str]:
             if isinstance(attr, (DirNode, tuple)):
                 name, pid = attr
             else:
                 pid = attr["parent_id"]
                 name = attr["name"]
+            ename = name
             if escape is not None:
-                name = escape(name)
+                ename = escape(ename)
+            name = name.replace("/", "|")
             if pid == 0:
-                return "/" + name
+                return "/" + ename, "/" + name
             elif pid in id_to_path:
-                return id_to_path[pid] + name
+                return id_to_path[pid] + ename, id_to_posixpath[pid] + name
             else:
-                dirname = id_to_path[pid] = get_path(id_to_dirnode[pid]) + "/"
-                return dirname + name
+                dirname, posix_dirname = get_path(id_to_dirnode[pid])
+                dirname += "/"
+                posix_dirname += "/"
+                id_to_path[pid], id_to_posixpath[pid] = dirname, posix_dirname
+                return dirname + ename, posix_dirname + name
     def gen_step():
-        pids: set[int] = set()
-        add_pid = pids.add
-        for attr in attrs:
-            if pid := attr["parent_id"]:
-                add_pid(pid)
-            if attr.get("is_dir", False) or attr.get("is_directory", False):
-                id_to_dirnode[attr["id"]] = DirNode(attr["name"], pid)
-        find_ids: set[int]
-        do_through: Callable = async_through if async_ else through
-        while pids:
-            if find_ids := pids - id_to_dirnode.keys():
-                try:
-                    if use_star:
-                        yield do_through(iter_selected_nodes_using_star_event(
-                            client, 
-                            find_ids, 
-                            normalize_attr=None, 
-                            id_to_dirnode=id_to_dirnode, 
-                            cooldown=life_event_cooldown, 
-                            app=app, 
-                            async_=async_, # type: ignore
-                            **request_kwargs, 
-                        ))
-                    else:
-                        yield do_through(iter_selected_nodes_by_pickcode(
-                            client, 
-                            find_ids, 
-                            normalize_attr=None, 
-                            id_to_dirnode=id_to_dirnode, 
-                            ignore_deleted=None, 
-                            async_=async_, # type: ignore
-                            **request_kwargs, 
-                        ))
-                except Exception as e:
-                    match errors:
-                        case "raise":
-                            raise
-                        case "warn":
-                            warn(f"{type(e).__module__}.{type(e).__qualname__}: {e}", category=P115Warning)
-            pids = {ppid for pid in pids if (ppid := id_to_dirnode[pid][1])}
-        if with_ancestors:
+        if make_up_missing:
+            pids: set[int] = set()
+            add_pid = pids.add
+            for attr in attrs:
+                if pid := attr["parent_id"]:
+                    add_pid(pid)
+                if attr.get("is_dir", False) or attr.get("is_directory", False):
+                    id_to_dirnode[attr["id"]] = DirNode(attr["name"], pid)
+            find_ids: set[int]
+            do_through: Callable = async_through if async_ else through
+            while pids:
+                if find_ids := pids - id_to_dirnode.keys():
+                    try:
+                        if use_star:
+                            yield do_through(iter_selected_nodes_using_star_event(
+                                client, 
+                                find_ids, 
+                                normalize_attr=None, 
+                                id_to_dirnode=id_to_dirnode, 
+                                cooldown=life_event_cooldown, 
+                                app=app, 
+                                async_=async_, # type: ignore
+                                **request_kwargs, 
+                            ))
+                        else:
+                            yield do_through(iter_selected_nodes_by_pickcode(
+                                client, 
+                                find_ids, 
+                                normalize_attr=None, 
+                                id_to_dirnode=id_to_dirnode, 
+                                ignore_deleted=None, 
+                                async_=async_, # type: ignore
+                                **request_kwargs, 
+                            ))
+                    except Exception as e:
+                        match errors:
+                            case "raise":
+                                raise
+                            case "warn":
+                                warn(f"{type(e).__module__}.{type(e).__qualname__}: {e}", category=P115Warning)
+                pids = {ppid for pid in pids if (ppid := id_to_dirnode[pid][1])}
+            del pids, find_ids
+        if with_ancestors or with_path:
             for attr in attrs:
                 try:
-                    attr["ancestors"] = get_ancestors(attr["id"], attr)
+                    if with_ancestors:
+                        attr["ancestors"] = get_ancestors(attr["id"], attr)
+                    if with_path:
+                        attr["path"], attr["posixpath"] = get_path(attr)
                 except Exception as e:
                     match errors:
                         case "raise":
                             raise
                         case "warn":
-                            warn(f"{type(e).__module__}.{type(e).__qualname__}: {e}", category=P115Warning)
-                    attr["ancestors"] = None
-        if with_path:
-            for attr in attrs:
-                try:
-                    attr["path"] = get_path(attr)
-                except Exception as e:
-                    match errors:
-                        case "raise":
-                            raise
-                        case "warn":
-                            warn(f"{type(e).__module__}.{type(e).__qualname__}: {e}", category=P115Warning)
-                    attr["path"] = ""
+                            warn(f"{type(e).__module__}.{type(e).__qualname__}: {e} of {attr}", category=P115Warning)
+                    attr.setdefault("ancestors", None)
+                    attr.setdefault("path", "")
+                    attr.setdefault("posixpath", "")
         return attrs
     return run_gen_step(gen_step, async_=async_)
 
@@ -1556,12 +1583,15 @@ def ensure_attr_path_by_category_get[D: dict](
     async_: Literal[False, True] = False, 
     **request_kwargs, 
 ) -> Iterator[D] | AsyncIterator[D]:
-    """为一组文件信息添加 "path" 或 "ancestors" 字段
+    """为一组文件信息添加 "path" 和 "posixpath" 或 "ancestors" 字段
+
+    .. caution::
+        风控非常严重，建议不要使用
 
     :param client: 115 客户端或 cookies
     :param attrs: 一组文件或目录的信息
     :param with_ancestors: 文件信息中是否要包含 "ancestors"
-    :param with_path: 文件信息中是否要包含 "path"
+    :param with_path: 文件信息中是否要包含 "path" 和 "posixpath"
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典，如果为 ...，则忽略
     :param app: 使用某个 app （设备）的接口
@@ -1582,8 +1612,10 @@ def ensure_attr_path_by_category_get[D: dict](
     elif id_to_dirnode is ...:
         id_to_dirnode = {}
     if app in ("", "web", "desktop", "harmony"):
+        request_kwargs.setdefault("base_url", cycle(("http://webapi.115.com", "https://webapi.115.com")).__next__)
         func: Callable = partial(client.fs_category_get, **request_kwargs)
     else:
+        request_kwargs.setdefault("base_url", cycle(("http://proapi.115.com", "https://proapi.115.com")).__next__)
         func = partial(client.fs_category_get_app, app=app, **request_kwargs)
     if with_ancestors:
         id_to_node: dict[int, dict] = {0: {"id": 0, "parent_id": 0, "name": ""}}
@@ -1768,7 +1800,7 @@ def iterdir_raw(
 
     :param app: 使用某个 app （设备）的接口
     :param cooldown: 冷却时间，大于 0，则使用此时间间隔执行并发
-    :param max_workers: 最大工作线程数
+    :param max_workers: 最大并发数
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -1885,7 +1917,7 @@ def iterdir(
     :param show_dir: 展示文件夹。0: 否，1: 是
     :param fc_mix: 文件夹置顶。0: 文件夹在文件之前，1: 文件和文件夹混合并按指定排序
     :param with_ancestors: 文件信息中是否要包含 "ancestors"
-    :param with_path: 文件信息中是否要包含 "path"
+    :param with_path: 文件信息中是否要包含 "path" 和 "posixpath"
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
@@ -1898,7 +1930,7 @@ def iterdir(
 
     :param app: 使用某个 app （设备）的接口
     :param cooldown: 冷却时间，大于 0，则使用此时间间隔执行并发
-    :param max_workers: 最大工作线程数
+    :param max_workers: 最大并发数
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
@@ -1987,7 +2019,7 @@ def iterdir_limited(
     :param client: 115 客户端或 cookies
     :param cid: 目录 id
     :param with_ancestors: 文件信息中是否要包含 "ancestors"
-    :param with_path: 文件信息中是否要包含 "path"
+    :param with_path: 文件信息中是否要包含 "path" 和 "posixpath"
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
@@ -2212,7 +2244,7 @@ def iter_files_raw(
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param app: 使用某个 app （设备）的接口
     :param cooldown: 冷却时间，大于 0，则使用此时间间隔执行并发
-    :param max_workers: 最大工作线程数
+    :param max_workers: 最大并发数
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -2351,7 +2383,7 @@ def iter_files(
     :param asc: 升序排列。0: 否，1: 是
     :param cur: 仅当前目录。0: 否（将遍历子目录树上所有叶子节点），1: 是
     :param with_ancestors: 文件信息中是否要包含 "ancestors"
-    :param with_path: 文件信息中是否要包含 "path"
+    :param with_path: 文件信息中是否要包含 "path" 和 "posixpath"
     :param use_star: 获取目录信息时，是否允许使用星标 （如果为 None，则采用流处理，否则采用批处理）
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
@@ -2359,7 +2391,7 @@ def iter_files(
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param app: 使用某个 app （设备）的接口
     :param cooldown: 冷却时间，大于 0，则使用此时间间隔执行并发
-    :param max_workers: 最大工作线程数
+    :param max_workers: 最大并发数
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -2570,7 +2602,7 @@ def traverse_files(
     :param auto_splitting_threshold: 如果 `auto_splitting_tasks` 为 True，且目录内的文件数大于 `auto_splitting_threshold`，则分拆此任务到它的各个直接子目录，否则批量拉取
     :param auto_splitting_statistics_timeout: 如果执行统计超过此时间，则立即终止，并认为文件是无限多
     :param with_ancestors: 文件信息中是否要包含 "ancestors"
-    :param with_path: 文件信息中是否要包含 "path"
+    :param with_path: 文件信息中是否要包含 "path" 和 "posixpath"
     :param use_star: 获取目录信息时，是否允许使用星标 （如果为 None，则采用流处理，否则采用批处理）
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
@@ -3353,6 +3385,9 @@ def iter_selected_nodes(
 ) -> Iterator[dict] | AsyncIterator[dict]:
     """获取一组 id 的信息
 
+    .. caution::
+        风控非常严重，建议不要使用
+
     :param client: 115 客户端或 cookies
     :param ids: 一组文件或目录的 id
     :param ignore_deleted: 忽略已经被删除的
@@ -3398,7 +3433,7 @@ def iter_selected_nodes(
 def iter_selected_nodes_by_pickcode(
     client: str | P115Client, 
     ids: Iterable[int], 
-    ignore_deleted: bool = True, 
+    ignore_deleted: None | bool = True, 
     normalize_attr: None | Callable[[dict], dict] = None, 
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     max_workers: None | int = 20, 
@@ -3411,7 +3446,7 @@ def iter_selected_nodes_by_pickcode(
 def iter_selected_nodes_by_pickcode(
     client: str | P115Client, 
     ids: Iterable[int], 
-    ignore_deleted: bool = True, 
+    ignore_deleted: None | bool = True, 
     normalize_attr: None | Callable[[dict], dict] = None, 
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     max_workers: None | int = 20,  
@@ -3433,9 +3468,12 @@ def iter_selected_nodes_by_pickcode(
 ) -> Iterator[dict] | AsyncIterator[dict]:
     """获取一组 id 的信息
 
+    .. caution::
+        并发数较多时，容易发生 HTTP 链接中断现象
+
     :param client: 115 客户端或 cookies
     :param ids: 一组文件或目录的 id
-    :param ignore_deleted: 忽略已经被删除的
+    :param ignore_deleted: 是否忽略已经被删除的
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典，如果为 ...，则忽略
     :param max_workers: 最大并发数
@@ -3448,24 +3486,26 @@ def iter_selected_nodes_by_pickcode(
         client = P115Client(client, check_for_relogin=True)
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
-    if ignore_deleted:
-        get_method = cycle((
+    methods: list[Callable] = []
+    if ignore_deleted or ignore_deleted is None:
+        methods += (
+            partial(client.fs_document, base_url="http://anxia.com/webapi"), 
             partial(client.fs_document, base_url="http://webapi.115.com"), 
             partial(client.fs_document_app, base_url="http://proapi.115.com"), 
-        )).__next__
-    elif ignore_deleted is None:
-        get_method = cycle((
-            partial(client.fs_document, base_url="http://webapi.115.com"), 
-            partial(client.fs_document_app, base_url="http://proapi.115.com"), 
+            partial(client.fs_document, base_url="http://v.anxia.com/webapi"), 
+            partial(client.fs_document, base_url="https://webapi.115.com"), 
+            partial(client.fs_document_app, base_url="https://proapi.115.com"), 
+        )
+    if not ignore_deleted:
+       methods += (
+            partial(client.fs_supervision, base_url="http://anxia.com/webapi"), 
             partial(client.fs_supervision, base_url="http://webapi.115.com"), 
             partial(client.fs_supervision_app, base_url="http://proapi.115.com"), 
-        )).__next__
-    else:
-        get_method = cycle((
-            partial(client.fs_supervision, base_url="http://webapi.115.com"), 
-            partial(client.fs_supervision_app, base_url="http://proapi.115.com"), 
-        )).__next__
-    def get_document(info: dict, /):
+            partial(client.fs_supervision, base_url="http://v.anxia.com/webapi"), 
+            partial(client.fs_supervision, base_url="https://webapi.115.com"), 
+            partial(client.fs_supervision_app, base_url="https://proapi.115.com"), 
+        )
+    def get_response(info: dict, /, get_method=cycle(methods).__next__):
         return get_method()(
             info["pick_code"], 
             async_=async_, 
@@ -3473,13 +3513,11 @@ def iter_selected_nodes_by_pickcode(
         )
     def project(resp: dict, /) -> None | dict:
         was_deleted = resp.get("code") == 31001 or resp.get("msg_code") == 70005
-        if ignore_deleted and was_deleted:
+        info = resp.get("data")
+        if not info or not info.get("file_id") or ignore_deleted and was_deleted:
             return None
-        if not resp["state"] and not was_deleted:
+        if not info and not resp["state"] and not was_deleted:
             check_response(resp)
-        info = resp["data"]
-        if not info or not info["file_id"]:
-            return None
         if id_to_dirnode is not ... and not info["file_sha1"] and not was_deleted:
             id_to_dirnode[int(info["file_id"])] = DirNode(info["file_name"], int(info["parent_id"]))
         if normalize_attr is None:
@@ -3488,10 +3526,10 @@ def iter_selected_nodes_by_pickcode(
     it = iter_nodes_skim(client, ids, async_=async_, **request_kwargs)
     if async_:
         return async_filter(None, async_map(project, taskgroup_map( # type: ignore
-            get_document, it, max_workers=max_workers, kwargs=request_kwargs)))
+            get_response, it, max_workers=max_workers, kwargs=request_kwargs)))
     else:
         return filter(None, map(project, threadpool_map(
-            get_document, it, max_workers=max_workers, kwargs=request_kwargs)))
+            get_response, it, max_workers=max_workers, kwargs=request_kwargs)))
 
 
 @overload
@@ -3526,6 +3564,9 @@ def iter_selected_nodes_using_edit(
     **request_kwargs, 
 ) -> Iterator[dict] | AsyncIterator[dict]:
     """获取一组 id 的信息
+
+    .. caution::
+        速度较慢，风控较严重，建议不要使用
 
     :param client: 115 客户端或 cookies
     :param ids: 一组文件或目录的 id
@@ -3596,6 +3637,9 @@ def iter_selected_nodes_using_category_get(
     **request_kwargs, 
 ) -> Iterator[dict] | AsyncIterator[dict]:
     """获取一组 id 的信息
+
+    .. caution::
+        风控非常严重，建议不要使用
 
     :param client: 115 客户端或 cookies
     :param ids: 一组文件或目录的 id
@@ -3904,6 +3948,7 @@ def iter_selected_dirs_using_star(
     return run_gen_step_iter(gen_step, async_=async_)
 
 
+# TODO: cur = 1 的时候，就没必要太复杂了
 @overload
 def iter_files_with_dirname(
     client: str | P115Client, 
@@ -4095,7 +4140,18 @@ def iter_files_with_dirname(
 @overload
 def iter_files_with_path(
     client: str | P115Client, 
-    cid: int, 
+    cid: int = 0, 
+    page_size: int = 0, 
+    suffix: str = "", 
+    type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
+    order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
+    asc: Literal[0, 1] = 1, 
+    cur: Literal[0, 1] = 0, 
+    normalize_attr: Callable[[dict], dict] = normalize_attr, 
+    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    raise_for_changed_count: bool = False, 
+    app: str = "android", 
+    cooldown: int | float = 0.5, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -4104,13 +4160,187 @@ def iter_files_with_path(
 @overload
 def iter_files_with_path(
     client: str | P115Client, 
-    cid: int, 
+    cid: int = 0, 
+    page_size: int = 0, 
+    suffix: str = "", 
+    type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
+    order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
+    asc: Literal[0, 1] = 1, 
+    cur: Literal[0, 1] = 0, 
+    normalize_attr: Callable[[dict], dict] = normalize_attr, 
+    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    raise_for_changed_count: bool = False, 
+    app: str = "android", 
+    cooldown: int | float = 0.5, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
 ) -> AsyncIterator[dict]:
     ...
 def iter_files_with_path(
+    client: str | P115Client, 
+    cid: int = 0, 
+    page_size: int = 0, 
+    suffix: str = "", 
+    type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
+    order: Literal["file_name", "file_size", "file_type", "user_utime", "user_ptime", "user_otime"] = "user_ptime", 
+    asc: Literal[0, 1] = 1, 
+    cur: Literal[0, 1] = 0, 
+    normalize_attr: Callable[[dict], dict] = normalize_attr, 
+    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    raise_for_changed_count: bool = False, 
+    app: str = "android", 
+    cooldown: int | float = 0.5, 
+    *, 
+    async_: Literal[False, True] = False, 
+    **request_kwargs, 
+) -> Iterator[dict] | AsyncIterator[dict]:
+    """遍历目录树，获取文件信息（包含 "path"、"posixpath" 和 "ancestors"）
+
+    :param client: 115 客户端或 cookies
+    :param cid: 目录 id
+    :param page_size: 分页大小
+    :param suffix: 后缀名（优先级高于 type）
+    :param type: 文件类型
+
+        - 1: 文档
+        - 2: 图片
+        - 3: 音频
+        - 4: 视频
+        - 5: 压缩包
+        - 6: 应用
+        - 7: 书籍
+        - 99: 仅文件
+
+    :param order: 排序
+
+        - "file_name": 文件名
+        - "file_size": 文件大小
+        - "file_type": 文件种类
+        - "user_utime": 修改时间
+        - "user_ptime": 创建时间
+        - "user_otime": 上一次打开时间
+
+    :param asc: 升序排列。0: 否，1: 是
+    :param cur: 仅当前目录。0: 否（将遍历子目录树上所有叶子节点），1: 是
+    :param normalize_attr: 把数据进行转换处理，使之便于阅读
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 ``DirNode(name, parent_id)`` 命名元组的字典
+    :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
+    :param app: 使用某个 app （设备）的接口
+    :param cooldown: 冷却时间，大于 0，则使用此时间间隔执行并发
+    :param async_: 是否异步
+    :param request_kwargs: 其它请求参数
+
+    :return: 迭代器，返回此目录内的（仅文件）文件信息
+    """
+    suffix = suffix.strip(".")
+    if not (type or suffix):
+        raise ValueError("please set the non-zero value of suffix or type")
+    if not isinstance(client, P115Client):
+        client = P115Client(client, check_for_relogin=True)
+    if id_to_dirnode is None:
+        id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
+    else:
+        id_to_dirnode = {}
+    def fetch_dirs(cid):
+        resp = yield client.fs_file_skim(cid, async_=async_, **request_kwargs)
+        check_response(resp)
+        payload = {"pickcode": resp["data"][0]["pick_code"]}
+        for i in count(1):
+            payload["page"] = i
+            resp = yield client.download_folders(payload, async_=async_, **request_kwargs)
+            check_response(resp)
+            data = resp["data"]
+            for info in data["list"]:
+                id_to_dirnode[int(info["fid"])] = DirNode(info["fn"], int(info["pid"]))
+            if not data["has_next_page"]:
+                break
+    def gen_step():
+        it = iter_files(
+            client, 
+            cid, 
+            page_size=page_size, 
+            suffix=suffix, 
+            type=type, 
+            order=order, 
+            asc=asc, 
+            cur=cur, 
+            normalize_attr=normalize_attr, 
+            id_to_dirnode=id_to_dirnode, 
+            raise_for_changed_count=raise_for_changed_count, 
+            app=app, 
+            cooldown=cooldown, 
+            async_=async_, # type: ignore
+            **request_kwargs, 
+        )
+        if cur:
+            return YieldFrom(it, identity=True)
+        if async_:
+            async def request():
+                async with TaskGroup() as tg:
+                    task = tg.create_task(to_list(it))
+                    if cid:
+                        tg.create_task(run_gen_step(fetch_dirs(cid), async_=True))
+                    else:
+                        async for attr in iterdir(
+                            client, 
+                            ensure_file=False, 
+                            id_to_dirnode=id_to_dirnode, 
+                            app=app, 
+                            async_=True, 
+                            **request_kwargs, 
+                        ):
+                            tg.create_task(run_gen_step(fetch_dirs(attr["id"]), async_=True))
+                    files = await task
+                return files
+            files: list[dict] = yield request
+        else:
+            with ThreadPoolExecutor(2) as e:
+                task = e.submit(list, it)
+                if cid:
+                    e.submit(run_gen_step, fetch_dirs(cid))
+                else:
+                    for attr in iterdir(
+                        client, 
+                        ensure_file=False, 
+                        id_to_dirnode=id_to_dirnode, 
+                        app=app, 
+                        **request_kwargs, 
+                    ):
+                        e.submit(run_gen_step, fetch_dirs(attr["id"]))
+                files = task.result()
+        return YieldFrom(ensure_attr_path(
+            client, 
+            files, 
+            with_ancestors=True, 
+            with_path=True, 
+            id_to_dirnode=id_to_dirnode, 
+            make_up_missing=False, 
+            errors="warn", 
+            async_=async_, # type: ignore
+        ), identity=True)
+    return run_gen_step_iter(gen_step, async_=async_)
+
+
+@overload
+def iter_files_with_path_by_export_dir(
+    client: str | P115Client, 
+    cid: int, 
+    *, 
+    async_: Literal[False] = False, 
+    **request_kwargs, 
+) -> Iterator[dict]:
+    ...
+@overload
+def iter_files_with_path_by_export_dir(
+    client: str | P115Client, 
+    cid: int, 
+    *, 
+    async_: Literal[True], 
+    **request_kwargs, 
+) -> AsyncIterator[dict]:
+    ...
+def iter_files_with_path_by_export_dir(
     client: str | P115Client, 
     cid: int, 
     *, 
@@ -4123,7 +4353,7 @@ def iter_files_with_path(
         相比较于 `iter_files`，这个函数专门针对获取路径的风控问题做了优化，会用到 导出目录树，尝试进行匹配，不能唯一确定的，会再用其它办法获取路径
 
     :param client: 115 客户端或 cookies
-    :param cid: 目录 id
+    :param cid: 目录 id，不能为 0 （受限于 export_dir 接口）
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -4235,18 +4465,32 @@ def iter_files_with_path(
         do_through: Callable = async_through if async_ else through
         id_to_dirnode: dict[int, DirNode] = {}
         while unbound_pids:
-            yield do_through(iter_selected_nodes_by_pickcode(
-                client, 
-                unbound_pids, 
-                id_to_dirnode=id_to_dirnode, 
-                ignore_deleted=None, 
-                async_=async_, # type: ignore
-                **request_kwargs, 
-            ))
+            if len(unbound_pids) >= 1000:
+                yield do_through(iter_selected_nodes_using_star_event(
+                    client, 
+                    unbound_pids, 
+                    normalize_attr=None, 
+                    id_to_dirnode=id_to_dirnode, 
+                    app="android", 
+                    cooldown=0.5, 
+                    async_=async_, # type: ignore
+                    **request_kwargs, 
+                ))
+            else:
+                yield do_through(iter_selected_nodes_by_pickcode(
+                    client, 
+                    unbound_pids, 
+                    normalize_attr=None, 
+                    id_to_dirnode=id_to_dirnode, 
+                    ignore_deleted=None, 
+                    async_=async_, # type: ignore
+                    **request_kwargs, 
+                ))
             unbound_pids.clear()
             for fid, (name, pid) in id_to_dirnode.items():
                 if pid and pid not in id_to_dirnode and pid not in pid_to_dirpatht:
                     add_pid(pid)
+        del unbound_pids
         for pid in pid_to_files.keys() - pid_to_dirpatht.keys():
             if pid not in id_to_dirnode:
                 continue
@@ -4269,6 +4513,7 @@ def iter_files_with_path(
                 names.reverse()
                 for pid, name in zip(pids, names):
                     dir_patht = pid_to_dirpatht[pid] = (*dir_patht, name)
+        del id_to_dirnode
         # 迭代地返回所有文件节点信息
         for pid, files in pid_to_files.items():
             if pid not in pid_to_dirpatht:
@@ -4350,9 +4595,9 @@ def iter_parents_3_level(
                 l1 = [d["file_name"] for d in resp["data"]]
                 break
             if async_:
-                yield async_sleep(0.5)
+                yield async_sleep(0.25)
             else:
-                sleep(0.5)
+                sleep(0.25)
         if len(ids) - l1.count("文件") <= 0:
             return ((id, ("" if name == "文件" else name, "", "")) for id, name in zip(ids, l1))
         def call(i):
