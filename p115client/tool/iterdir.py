@@ -17,13 +17,12 @@ __all__ = [
 ]
 __doc__ = "这个模块提供了一些和目录信息罗列有关的函数"
 
-from asyncio import sleep as async_sleep, Lock as AsyncLock, TaskGroup
+from asyncio import create_task, sleep as async_sleep, Lock as AsyncLock
 from collections import defaultdict, deque
 from collections.abc import (
     AsyncIterable, AsyncIterator, Callable, Collection, Coroutine, Iterable, Iterator, 
     Mapping, Sequence, 
 )
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from errno import EIO, ENOENT, ENOTDIR
 from functools import partial
@@ -39,19 +38,15 @@ from warnings import warn
 from weakref import WeakValueDictionary
 
 from asynctools import async_chain, async_filter, async_map, to_list
-from concurrenttools import taskgroup_map, threadpool_map
+from concurrenttools import run_as_thread, taskgroup_map, threadpool_map
 from iterutils import (
     chunked, async_foreach, ensure_aiter, foreach, flatten, iter_unique,   
-    run_gen_step, run_gen_step_iter, through, async_through, Yield, YieldFrom, 
+    run_gen_step, run_gen_step_iter, through, async_through, with_iter_next, 
+    Yield, YieldFrom, 
 )
-from iter_collect import (
-    grouped_mapping, grouped_mapping_async, iter_keyed_dups, 
-    iter_keyed_dups_async, SupportsLT, 
-)
+from iter_collect import iter_keyed_dups, iter_keyed_dups_async, SupportsLT
 from orjson import loads
-from p115client import (
-    check_response, normalize_attr, DataError, P115Client, P115OSError, P115Warning, 
-)
+from p115client import check_response, normalize_attr, P115Client, P115OSError, P115Warning
 from p115client.const import CLASS_TO_TYPE, SUFFIX_TO_TYPE
 from p115client.type import P115DictAttrLike
 from posixpatht import escape, joins, path_is_dir_form, splitext, splits
@@ -2669,7 +2664,7 @@ def traverse_files(
                     # NOTE: 必要时也可以根据不同的扩展名进行分拆任务，通过 client.fs_files_second_type({"cid": cid, "type": type}) 获取目录内所有的此种类型的扩展名，并且如果响应为空时，则直接退出
                     try:
                         payload = {
-                            "asc": 1, "cid": cid, "cur": 0, "limit": 16, "o": "user_ptime", "offset": 0, 
+                            "asc": 0, "cid": cid, "cur": 0, "limit": 16, "o": "user_utime", "offset": 0, 
                             "show_dir": 0, "suffix": suffix, "type": type, 
                         }
                         resp = check_response((yield fs_files(
@@ -3981,6 +3976,7 @@ def iter_files_with_dirname(
     raise_for_changed_count: bool = False, 
     app: str = "android", 
     cooldown: int | float = 0.5, 
+    max_workers: None | int = None, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -4000,6 +3996,7 @@ def iter_files_with_dirname(
     raise_for_changed_count: bool = False, 
     app: str = "android", 
     cooldown: int | float = 0.5, 
+    max_workers: None | int = None, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -4018,6 +4015,7 @@ def iter_files_with_dirname(
     raise_for_changed_count: bool = False, 
     app: str = "android", 
     cooldown: int | float = 0.5, 
+    max_workers: None | int = None, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -4054,6 +4052,7 @@ def iter_files_with_dirname(
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param app: 使用某个 app （设备）的接口
     :param cooldown: 冷却时间，大于 0，则使用此时间间隔执行并发
+    :param max_workers: 最大并发数
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -4082,6 +4081,7 @@ def iter_files_with_dirname(
         func: Callable = iter_fs_files
     else:
         request_kwargs["cooldown"] = cooldown
+        request_kwargs["max_workers"] = max_workers
         func = iter_fs_files_asynchronized if async_ else iter_fs_files_threaded
     pid_to_info = {0: {"dir_name": "", "dir_pickcode": ""}}
     def callback(resp: dict, /):
@@ -4163,9 +4163,11 @@ def iter_files_with_path(
     cur: Literal[0, 1] = 0, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    path_already: bool = False, 
     raise_for_changed_count: bool = False, 
     app: str = "android", 
     cooldown: int | float = 0.5, 
+    max_workers: None | int = None, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -4183,9 +4185,11 @@ def iter_files_with_path(
     cur: Literal[0, 1] = 0, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    path_already: bool = False, 
     raise_for_changed_count: bool = False, 
     app: str = "android", 
     cooldown: int | float = 0.5, 
+    max_workers: None | int = None, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -4202,9 +4206,11 @@ def iter_files_with_path(
     cur: Literal[0, 1] = 0, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    path_already: bool = False, 
     raise_for_changed_count: bool = False, 
     app: str = "android", 
     cooldown: int | float = 0.5, 
+    max_workers: None | int = None, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -4239,9 +4245,11 @@ def iter_files_with_path(
     :param cur: 仅当前目录。0: 否（将遍历子目录树上所有叶子节点），1: 是
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
+    :param path_already: 如果为 True，则说明 id_to_dirnode 中已经具备构建路径所需要的目录节点，所以不会再去拉取目录节点的信息
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
     :param app: 使用某个 app （设备）的接口
     :param cooldown: 冷却时间，大于 0，则使用此时间间隔执行并发
+    :param max_workers: 最大并发数
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -4256,21 +4264,99 @@ def iter_files_with_path(
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
     else:
         id_to_dirnode = {}
-    def fetch_dirs(cid):
-        resp = yield client.fs_file_skim(cid, async_=async_, **request_kwargs)
-        check_response(resp)
-        payload = {"pickcode": resp["data"][0]["pick_code"]}
-        for i in count(1):
-            payload["page"] = i
-            resp = yield client.download_folders(payload, async_=async_, **request_kwargs)
-            check_response(resp)
-            data = resp["data"]
-            for info in data["list"]:
-                id_to_dirnode[int(info["fid"])] = DirNode(info["fn"], int(info["pid"]))
-            if not data["has_next_page"]:
-                break
+        path_already = False
+    _path_already: None | bool = None if path_already else False
+    if not path_already:
+        from .download import iter_download_nodes
+        def set_path_already(*a):
+            nonlocal _path_already
+            _path_already = True
+        def fetch_dirs(id: int | str, /):
+            if id:
+                if isinstance(id, int):
+                    resp = yield client.fs_file_skim(id, async_=async_, **request_kwargs)
+                    check_response(resp)
+                    pickcode = resp["data"][0]["pick_code"]
+                else:
+                    pickcode = id
+                with with_iter_next(iter_download_nodes(
+                    client, 
+                    pickcode, 
+                    files=False, 
+                    max_workers=None, 
+                    async_=async_, 
+                    **request_kwargs, 
+                )) as get_next_info:
+                    while True:
+                        info = yield get_next_info
+                        id_to_dirnode[int(info["fid"])] = DirNode(info["fn"], int(info["pid"]))
+            else:
+                with with_iter_next(iterdir(
+                    client, 
+                    ensure_file=False, 
+                    id_to_dirnode=id_to_dirnode, 
+                    app=app, 
+                    async_=async_, 
+                    **request_kwargs, 
+                )) as get_next:
+                    while True:
+                        attr = yield get_next
+                        yield run_gen_step(fetch_dirs(attr["pickcode"]), async_=async_)
+    id_to_ancestors: dict[int, list[dict]] = {}
+    def get_ancestors(id: int, attr: dict | tuple[str, int] | DirNode, /) -> list[dict]:
+        if isinstance(attr, (DirNode, tuple)):
+            name, pid = attr
+        else:
+            pid = attr["parent_id"]
+            name = attr["name"]
+        if pid == 0:
+            ancestors = [{"id": 0, "parent_id": 0, "name": ""}]
+        else:
+            if pid not in id_to_ancestors:
+                id_to_ancestors[pid] = get_ancestors(pid, id_to_dirnode[pid])
+            ancestors = [*id_to_ancestors[pid]]
+        ancestors.append({"id": id, "parent_id": pid, "name": name})
+        return ancestors
+    id_to_path: dict[int, str] = {}
+    id_to_posixpath: dict[int, str] = {}
+    def get_path(attr: dict | tuple[str, int] | DirNode, /) -> tuple[str, str]:
+        if isinstance(attr, (DirNode, tuple)):
+            name, pid = attr
+        else:
+            pid = attr["parent_id"]
+            name = attr["name"]
+        ename = name
+        if escape is not None:
+            ename = escape(ename)
+        name = name.replace("/", "|")
+        if pid == 0:
+            return "/" + ename, "/" + name
+        elif pid in id_to_path:
+            return id_to_path[pid] + ename, id_to_posixpath[pid] + name
+        else:
+            dirname, posix_dirname = get_path(id_to_dirnode[pid])
+            dirname += "/"
+            posix_dirname += "/"
+            id_to_path[pid], id_to_posixpath[pid] = dirname, posix_dirname
+            return dirname + ename, posix_dirname + name
+    def update_path(attr: dict, /) -> dict:
+        try:
+            attr["ancestors"] = get_ancestors(attr["id"], attr)
+            attr["path"], attr["posixpath"] = get_path(attr)
+        except KeyError:
+            pass
+        return attr
     def gen_step():
-        it = iter_files(
+        nonlocal _path_already
+        cache: list[dict] = []
+        add_to_cache = cache.append
+        if not path_already:
+            if async_:
+                task: Any = create_task(run_gen_step(fetch_dirs(cid), async_=True))
+            else:
+                task = run_as_thread(run_gen_step, fetch_dirs(cid))
+            task.add_done_callback(set_path_already)
+        with with_iter_next(iter_files(
             client, 
             cid, 
             page_size=page_size, 
@@ -4282,57 +4368,34 @@ def iter_files_with_path(
             normalize_attr=normalize_attr, 
             id_to_dirnode=id_to_dirnode, 
             raise_for_changed_count=raise_for_changed_count, 
+            max_workers=max_workers, 
             app=app, 
             cooldown=cooldown, 
             async_=async_, # type: ignore
             **request_kwargs, 
-        )
-        if cur:
-            return YieldFrom(it, identity=True)
-        if async_:
-            async def request():
-                async with TaskGroup() as tg:
-                    task = tg.create_task(to_list(it))
-                    if cid:
-                        tg.create_task(run_gen_step(fetch_dirs(cid), async_=True))
+        )) as get_next:
+            while True:
+                attr = yield get_next
+                if _path_already is None:
+                    yield Yield(update_path(attr), identity=True)
+                elif _path_already:
+                    if async_:
+                        yield task
                     else:
-                        async for attr in iterdir(
-                            client, 
-                            ensure_file=False, 
-                            id_to_dirnode=id_to_dirnode, 
-                            app=app, 
-                            async_=True, 
-                            **request_kwargs, 
-                        ):
-                            tg.create_task(run_gen_step(fetch_dirs(attr["id"]), async_=True))
-                    files = await task
-                return files
-            files: list[dict] = yield request
-        else:
-            with ThreadPoolExecutor(2) as e:
-                task = e.submit(list, it)
-                if cid:
-                    e.submit(run_gen_step, fetch_dirs(cid))
+                        task.result()
+                    if cache:
+                        yield YieldFrom(map(update_path, cache), identity=True)
+                        cache.clear()
+                    yield Yield(update_path(attr), identity=True)
+                    _path_already = None
                 else:
-                    for attr in iterdir(
-                        client, 
-                        ensure_file=False, 
-                        id_to_dirnode=id_to_dirnode, 
-                        app=app, 
-                        **request_kwargs, 
-                    ):
-                        e.submit(run_gen_step, fetch_dirs(attr["id"]))
-                files = task.result()
-        return YieldFrom(ensure_attr_path(
-            client, 
-            files, 
-            with_ancestors=True, 
-            with_path=True, 
-            id_to_dirnode=id_to_dirnode, 
-            make_up_missing=False, 
-            errors="warn", 
-            async_=async_, # type: ignore
-        ), identity=True)
+                    add_to_cache(attr)
+        if cache:
+            if async_:
+                yield task
+            else:
+                task.result()
+            yield YieldFrom(map(update_path, cache), identity=True)
     return run_gen_step_iter(gen_step, async_=async_)
 
 

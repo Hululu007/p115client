@@ -3,14 +3,13 @@
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __all__ = [
-    "MakeStrmLog", "reduce_image_url_layers", "batch_get_url", "iter_url_batches", 
+    "reduce_image_url_layers", "batch_get_url", "iter_url_batches", 
     "iter_files_with_url", "iter_images_with_url", "iter_subtitles_with_url", 
-    "iter_subtitle_batches", "make_strm", "make_strm_by_export_dir", 
-    "iter_download_nodes", "iter_download_files", 
+    "iter_subtitle_batches", "make_strm", "iter_download_nodes", "iter_download_files", 
 ]
 __doc__ = "这个模块提供了一些和下载有关的函数"
 
-from asyncio import to_thread, Queue as AsyncQueue, Semaphore, TaskGroup
+from asyncio import create_task, to_thread, Queue as AsyncQueue, Semaphore, TaskGroup
 from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from errno import ENOENT, ENOTDIR
@@ -20,17 +19,17 @@ from inspect import isawaitable
 from itertools import chain, count, cycle, islice
 from mimetypes import guess_type
 from os import fsdecode, makedirs, remove, PathLike
-from os.path import dirname, join as joinpath, normpath, splitext
+from os.path import abspath, dirname, join as joinpath, normpath, splitext
 from queue import SimpleQueue
 from threading import Lock
-from time import perf_counter
+from time import time
 from typing import overload, Any, Final, Literal, TypedDict
 from urllib.parse import quote, urlsplit
 from uuid import uuid4
 from warnings import warn
 
 from asynctools import async_chain_from_iterable
-from concurrenttools import run_as_async, run_as_thread
+from concurrenttools import run_as_async, run_as_thread, thread_batch, async_batch
 from encode_uri import encode_uri_component_loose
 from iterutils import chunked, run_gen_step, run_gen_step_iter, with_iter_next, Yield, YieldFrom
 from p115client import check_response, normalize_attr, P115Client, P115URL
@@ -38,7 +37,10 @@ from p115client.exception import P115Warning
 from posixpatht import escape
 
 from .export_dir import export_dir_parse_iter
-from .iterdir import get_path_to_cid, iterdir, iter_files, iter_files_raw, DirNode, ID_TO_DIRNODE_CACHE
+from .iterdir import (
+    get_path_to_cid, iterdir, iter_files, iter_files_raw, iter_files_with_path, unescape_115_charref, 
+    DirNode, ID_TO_DIRNODE_CACHE, 
+)
 
 
 def reduce_image_url_layers(url: str, /, size: str | int = "") -> str:
@@ -51,62 +53,6 @@ def reduce_image_url_layers(url: str, /, size: str | int = "") -> str:
     if size == "":
         size = size0 or "0"
     return f"https://imgjump.115.com/?sha1={sha1}&{urlp.query}&size={size}"
-
-
-class MakeStrmResult(TypedDict):
-    """用来展示 `make_strm` 函数的执行结果
-    """
-    total: int
-    success: int
-    failed: int
-    skipped: int
-    removed: int
-    elapsed: float
-
-
-class MakeStrmLog(str):
-    """用来表示 `make_strm` 增删 strm 后的消息
-    """
-    def __new__(cls, msg: str = "", /, *args, **kwds):
-        return super().__new__(cls, msg)
-
-    def __init__(self, msg: str = "", /, *args, **kwds):
-        self.__dict__.update(*args, **kwds)
-
-    def __getattr__(self, attr: str, /):
-        try:
-            return self.__dict__[attr]
-        except KeyError as e:
-            raise AttributeError(attr) from e
-
-    def __getitem__(self, key: str, /): # type: ignore
-        if isinstance(key, str):
-            return self.__dict__[key]
-        return super().__getitem__(key)
-
-    def __repr__(self, /) -> str:
-        cls = type(self)
-        if (module := cls.__module__) == "__main__":
-            name = cls.__qualname__
-        else:
-            name = f"{module}.{cls.__qualname__}"
-        return f"{name}({str(self)!r}, {self.__dict__!r})"
-
-    @property
-    def mapping(self, /) -> dict[str, Any]:
-        return self.__dict__
-
-    def get(self, key, /, default=None):
-        return self.__dict__.get(key, default)
-
-    def items(self, /):
-        return self.__dict__.items()
-
-    def keys(self, /):
-        return self.__dict__.keys()
-
-    def values(self, /):
-        return self.__dict__.values()
 
 
 @overload
@@ -881,19 +827,24 @@ def make_strm(
     cid: int = 0, 
     save_dir: bytes | str | PathLike = ".", 
     origin: str = "http://localhost:8000", 
-    use_abspath: None | bool = True, 
-    with_root: bool = True, 
-    without_suffix: bool = True, 
-    ensure_ascii: bool = False, 
-    log: None | Callable[[MakeStrmLog], Any] = print, 
-    max_workers: None | int = None, 
     update: bool = False, 
     discard: bool = True, 
-    app: str = "web", 
+    use_abspath: None | bool = True, 
+    with_root: bool = False, 
+    without_suffix: bool = True, 
+    complete_url: bool = True, 
+    suffix: str = "", 
+    type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 4, 
+    max_workers: None | int = None, 
+    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    path_already: bool = False, 
+    app: str = "android", 
+    fs_files_cooldown: int | float = 0.5, 
+    fs_files_max_workers: None | int = None, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
-) -> MakeStrmResult:
+) -> dict:
     ...
 @overload
 def make_strm(
@@ -901,47 +852,56 @@ def make_strm(
     cid: int = 0, 
     save_dir: bytes | str | PathLike = ".", 
     origin: str = "http://localhost:8000", 
-    use_abspath: None | bool = True, 
-    with_root: bool = True, 
-    without_suffix: bool = True, 
-    ensure_ascii: bool = False, 
-    log: None | Callable[[MakeStrmLog], Any] = print, 
-    max_workers: None | int = None, 
     update: bool = False, 
     discard: bool = True, 
-    app: str = "web", 
+    use_abspath: None | bool = True, 
+    with_root: bool = False, 
+    without_suffix: bool = True, 
+    complete_url: bool = True, 
+    suffix: str = "", 
+    type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 4, 
+    max_workers: None | int = None, 
+    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    path_already: bool = False, 
+    app: str = "android", 
+    fs_files_cooldown: int | float = 0.5, 
+    fs_files_max_workers: None | int = None, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
-) -> Coroutine[Any, Any, MakeStrmResult]:
+) -> Coroutine[Any, Any, dict]:
     ...
 def make_strm(
     client: str | P115Client, 
     cid: int = 0, 
     save_dir: bytes | str | PathLike = ".", 
     origin: str = "http://localhost:8000", 
-    use_abspath: None | bool = True, 
-    with_root: bool = True, 
-    without_suffix: bool = True, 
-    ensure_ascii: bool = False, 
-    log: None | Callable[[MakeStrmLog], Any] = print, 
-    max_workers: None | int = None, 
     update: bool = False, 
     discard: bool = True, 
-    app: str = "web", 
+    use_abspath: None | bool = True, 
+    with_root: bool = False, 
+    without_suffix: bool = True, 
+    complete_url: bool = True, 
+    suffix: str = "", 
+    type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 4, 
+    max_workers: None | int = None, 
+    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    path_already: bool = False, 
+    app: str = "android", 
+    fs_files_cooldown: int | float = 0.5, 
+    fs_files_max_workers: None | int = None, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
-) -> MakeStrmResult | Coroutine[Any, Any, MakeStrmResult]:
+) -> dict | Coroutine[Any, Any, dict]:
     """生成 strm 保存到本地
-
-    .. hint::
-        函数在第 2 次处理同一个 id 时，速度会快一些，因为第 1 次时候需要全量拉取构建路径所需的数据
 
     :param client: 115 客户端或 cookies
     :param cid: 目录 id
     :param save_dir: 本地的保存目录，默认是当前工作目录
     :param origin: strm 文件的 `HTTP 源 <https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Origin>`_
+    :param update: 是否更新 strm 文件，如果为 False，则跳过已存在的路径
+    :param discard: 是否清理 strm 文件，如果为 True，则删除未取得的路径（不在本次的路径集合内）
     :param use_abspath: 是否使用相对路径
 
         - 如果为 True，则使用 115 的完整路径
@@ -950,581 +910,152 @@ def make_strm(
 
     :param with_root: 如果为 True，则当 use_abspath 为 False 或 None 时，在 `save_dir` 下创建一个和 `cid` 目录名字相同的目录，作为实际的 `save_dir`
     :param without_suffix: 是否去除原来的扩展名。如果为 False，则直接用 ".strm" 拼接到原来的路径后面；如果为 True，则去掉原来的扩展名后再拼接
-    :param ensure_ascii: strm 是否进行完全转码，确保 ascii 之外的字符都被 urlencode 转码
-    :param log: 调用以收集事件，如果为 None，则忽略
+    :param complete_url: 是否需要完整的 url
+
+        - 如果为 False, 格式为 ff"{origin}?pickcode={attr['pickcode']}"
+        - 如果为 True,  格式为 f"{origin}/{attr['name']}?pickcode={attr['pickcode']}&id={attr['id']}&sha1={attr['sha1']}&size={attr['size']}"
+
+    :param suffix: 后缀名（优先级高于 type）
+    :param type: 文件类型
+
+        - 1: 文档
+        - 2: 图片
+        - 3: 音频
+        - 4: 视频
+        - 5: 压缩包
+        - 6: 应用
+        - 7: 书籍
+        - 99: 仅文件
+ 
     :param max_workers: 最大并发数，主要用于限制同时打开的文件数
-    :param update: 是否更新 strm 文件，如果为 False，则跳过已存在的路径
-    :param discard: 是否清理 strm 文件，如果为 True，则删除未取得的路径（不在本次的路径集合内）
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
+    :param path_already: 如果为 True，则说明 id_to_dirnode 中已经具备构建路径所需要的目录节点，所以不会再去拉取目录节点的信息
     :param app: 使用某个 app （设备）的接口
+    :param fs_files_cooldown: `fs_files` 接口调用的冷却时间，大于 0，则使用此时间间隔执行并发
+    :param fs_files_max_workers: `fs_files` 接口调用的最大并发数
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
     """
-    origin = origin.rstrip("/")
-    savedir = fsdecode(save_dir)
-    makedirs(savedir, exist_ok=True)
     if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
-    id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
-    mode = "w" if update else "x"
+    origin = origin.rstrip("/")
+    savedir = abspath(fsdecode(save_dir))
+    makedirs(savedir, exist_ok=True)
+    mode = "wb" if update else "xb"
+    abspath_prefix_length = 1
+    upserted: list[str] = []
+    skipped: list[str] = []
+    removed: list[str] = []
+    append = list.append
     if discard:
         seen: set[str] = set()
         seen_add = seen.add
         existing: set[str] = set()
         def do_discard():
-            removed = 0
             for path in existing - seen:
                 path = joinpath(savedir, path)
-                try:
-                    remove(path)
-                    if log is not None:
-                        log(MakeStrmLog(
-                            f"[DEL] path={path!r}", 
-                            type="remove", 
-                            path=path, 
-                        ))
-                    removed += 1
-                except OSError:
-                    pass
-            return removed
-    abspath_prefix_length = 1
+                remove(path)
+                append(removed, path)
     def normalize_path(attr: dict, /) -> str:
         if use_abspath is None:
             path = attr["name"]
-        elif use_abspath:
-            path = attr["path"][abspath_prefix_length:]
         else:
-            dir_ = get_path_to_cid(
-                client, 
-                cid, 
-                root_id=attr["parent_id"], 
-                escape=None, 
-                id_to_dirnode=id_to_dirnode, 
-            )
-            path = joinpath(dir_, attr["name"])
+            path = attr["posixpath"][abspath_prefix_length:]
         if without_suffix:
             path = splitext(path)[0]
         relpath = normpath(path) + ".strm"
         if discard:
             seen_add(relpath)
         return joinpath(savedir, relpath)
+    write_url: Callable
     if async_:
-        try:
-            from aiofile import async_open
-        except ImportError:
-            from sys import executable
-            from subprocess import run
-            run([executable, "-m", "pip", "install", "-U", "aiofile"], check=True)
-            from aiofile import async_open # type: ignore
-        if max_workers is None or max_workers <= 0:
-            sema = None
-        else:
-            sema = Semaphore(max_workers)
-        async def request():
-            nonlocal savedir, abspath_prefix_length
-            if use_abspath:
-                if cid:
-                    root = await get_path_to_cid(
-                        client, 
-                        cid, 
-                        escape=None, 
-                        refresh=True, 
-                        async_=True, 
-                        **request_kwargs, 
-                    )
-                    savedir += root
-                    abspath_prefix_length = len(root) + 1
-            elif with_root:
-                resp = await client.fs_file_skim(cid, async_=True, **request_kwargs)
-                if not resp:
-                    raise FileNotFoundError(ENOENT, cid)
-                check_response(resp)
-                savedir = joinpath(savedir, resp["data"][0]["file_name"])
-            success = 0
-            failed = 0
-            skipped = 0
-            removed = 0
-            async def save(attr, /, sema=None):
-                nonlocal success, failed, skipped
-                if sema is not None:
-                    async with sema:
-                        return await save(attr)
-                path = normalize_path(attr)
-                url = f"{origin}/{encode_uri_component_loose(attr['name'], ensure_ascii=ensure_ascii)}?pickcode={attr['pickcode']}&id={attr['id']}&sha1={attr['sha1']}&size={attr['size']}"
-                try:
-                    try:
-                        async with async_open(path, mode) as f:
-                            await f.write(url)
-                    except FileExistsError:
-                        if log is not None:
-                            ret = log(MakeStrmLog(
-                                f"[SKIP] path={path!r} attr={attr!r}", 
-                                type="ignore", 
-                                path=path, 
-                                attr=attr, 
-                            ))
-                            if isawaitable(ret):
-                                await ret
-                        skipped += 1
-                        return
-                    except FileNotFoundError:
-                        makedirs(dirname(path), exist_ok=True)
-                        async with async_open(path, "w") as f:
-                            await f.write(url)
-                    if log is not None:
-                        ret = log(MakeStrmLog(
-                            f"[OK] path={path!r} attr={attr!r}", 
-                            type="write", 
-                            path=path, 
-                            attr=attr, 
-                        ))
-                        if isawaitable(ret):
-                            await ret
-                    success += 1
-                except BaseException as e:
-                    failed += 1
-                    if log is not None:
-                        ret =log(MakeStrmLog(
-                            f"[ERROR] path={path!r} attr={attr!r} error={e!r}", 
-                            type="error", 
-                            path=path, 
-                            attr=attr, 
-                            error=e, 
-                        ))
-                        if isawaitable(ret):
-                            await ret
-                    if not isinstance(e, OSError):
-                        raise
-            start_t = perf_counter()
-            async with TaskGroup() as group:
-                create_task = group.create_task
-                if discard:
-                    create_task(to_thread(lambda: existing.update(iglob("**/*.strm", root_dir=savedir, recursive=True))))
-                async for attr in iter_files(
-                    client, 
-                    cid, 
-                    type=4, 
-                    with_path=use_abspath is not None, 
-                    escape=None, 
-                    app=app, 
-                    async_=True, 
-                    **request_kwargs, 
-                ):
-                    create_task(save(attr, sema))
-            if discard:
-                removed = do_discard()
-            return {
-                "total": success + failed + skipped, 
-                "success": success, 
-                "failed": failed, 
-                "skipped": skipped, 
-                "removed": removed, 
-                "elapsed": perf_counter() - start_t, 
-            }
-        return request()
+        from aiofile import async_open
+        async def write_url(path: str, url: bytes, /):
+            async with async_open(path, mode) as f:
+                await f.write(url)
     else:
-        if use_abspath:
-            if cid:
-                root = get_path_to_cid(
+        def write_url(path: str, url: bytes, /):
+            with open(path, mode) as f:
+                f.write(url)
+    def save(attr: dict, /):
+        path = normalize_path(attr)
+        if complete_url:
+            name = encode_uri_component_loose(attr["name"])
+            url = f"{origin}/{name}?pickcode={attr['pickcode']}&id={attr['id']}&sha1={attr['sha1']}&size={attr['size']}"
+            urlb = bytes(url, "utf-8")
+        else:
+            url = f"{origin}?pickcode={attr['pickcode']}"
+            urlb = bytes(url, "ascii")
+        try:
+            yield write_url(path, urlb)
+        except FileNotFoundError:
+            makedirs(dirname(path), exist_ok=True)
+            yield write_url(path, urlb)
+        except OSError:
+            append(skipped, path)
+            return
+        append(upserted, path)
+    def gen_step():
+        nonlocal abspath_prefix_length, savedir
+        start_t = time()
+        if discard:
+            strm_files = iglob("**/*.strm", root_dir=savedir, recursive=True)
+            if async_:
+                task: Any = create_task(to_thread(existing.update, strm_files))
+            else:
+                task = run_as_thread(existing.update, strm_files)
+        if cid:
+            if use_abspath is False:
+                root = yield get_path_to_cid(
                     client, 
                     cid, 
-                    escape=None, 
+                    escape=lambda name: name.replace("/", "|"), 
                     refresh=True, 
+                    async_=async_, # type: ignore
                     **request_kwargs, 
                 )
-                savedir += root
                 abspath_prefix_length = len(root) + 1
-        elif with_root:
-            resp = client.fs_file_skim(cid, **request_kwargs)
-            if not resp:
-                raise FileNotFoundError(ENOENT, cid)
-            check_response(resp)
-            savedir = joinpath(savedir, resp["data"][0]["file_name"])
-        success = 0
-        failed = 0
-        skipped = 0
-        removed = 0
-        lock = Lock()
-        def save(attr: dict, /):
-            nonlocal success, failed, skipped
-            path = normalize_path(attr)
-            try:
-                try:
-                    f = open(path, mode)
-                except FileExistsError:
-                    if log is not None:
-                        log(MakeStrmLog(
-                            f"[SKIP] path={path!r} attr={attr!r}", 
-                            type="ignore", 
-                            path=path, 
-                            attr=attr, 
-                        ))
-                    skipped += 1
-                    return
-                except FileNotFoundError:
-                    makedirs(dirname(path), exist_ok=True)
-                    f = open(path,  "w")
-                f.write(f"{origin}/{encode_uri_component_loose(attr['name'], ensure_ascii=ensure_ascii)}?pickcode={attr['pickcode']}&id={attr['id']}&sha1={attr['sha1']}&size={attr['size']}")
-                if log is not None:
-                    log(MakeStrmLog(
-                        f"[OK] path={path!r} attr={attr!r}", 
-                        type="write", 
-                        path=path, 
-                        attr=attr, 
-                    ))
-                with lock:
-                    success += 1
-            except BaseException as e:
-                with lock:
-                    failed += 1
-                if log is not None:
-                    log(MakeStrmLog(
-                        f"[ERROR] path={path!r} attr={attr!r} error={e!r}", 
-                        type="error", 
-                        path=path, 
-                        attr=attr, 
-                        error=e, 
-                    ))
-                if not isinstance(e, OSError):
-                    raise
-        if max_workers and max_workers <= 0:
-            max_workers = None
-        start_t = perf_counter()
-        executor = ThreadPoolExecutor(max_workers)
-        try:
-            if discard:
-                executor.submit(lambda: existing.update(iglob("**/*.strm", root_dir=savedir, recursive=True)))
-            executor.map(save, iter_files(
+            if with_root and not use_abspath:
+                resp = yield client.fs_file_skim(
+                    cid, 
+                    async_=async_, # type: ignore
+                    **request_kwargs
+                )
+                check_response(resp)
+                name = unescape_115_charref(resp["data"][0]["file_name"]).replace("/", "|")
+                savedir = joinpath(savedir, name)
+        params: dict[str, Any] = {}
+        if use_abspath is None:
+            params["id_to_dirnode"] = ...
+        else:
+            params["id_to_dirnode"] = id_to_dirnode
+            params["path_already"] = path_already
+        yield (async_batch if async_ else thread_batch)(
+            lambda attr: run_gen_step(save(attr), async_=async_), 
+            (iter_files if use_abspath is None else iter_files_with_path)(
                 client, 
                 cid, 
-                type=4, 
-                with_path=use_abspath is not None, 
-                escape=None, 
+                order="file_name", 
+                suffix=suffix, 
+                type=type, 
                 app=app, 
+                cooldown=fs_files_cooldown, 
+                max_workers=fs_files_max_workers, 
+                async_=async_, # type: ignore
+                **params, # type: ignore
                 **request_kwargs, 
-            ))
-            executor.shutdown(wait=True)
-            if discard:
-                removed = do_discard()
-            return {
-                "total": success + failed + skipped, 
-                "success": success, 
-                "failed": failed, 
-                "skipped": skipped, 
-                "removed": removed, 
-                "elapsed": perf_counter() - start_t, 
-            }
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
-
-
-@overload
-def make_strm_by_export_dir(
-    client: str | P115Client, 
-    export_file_ids: int | str | Iterable[int | str], 
-    save_dir: bytes | str | PathLike = ".", 
-    origin: str = "http://localhost:8000", 
-    without_suffix: bool = True, 
-    ensure_ascii: bool = False, 
-    log: None | Callable[[MakeStrmLog], Any] = print, 
-    max_workers: None | int = None, 
-    update: bool = False, 
-    discard: bool = True, 
-    layer_limit: int = 0, 
-    timeout: None | int | float = None, 
-    check_interval: int | float = 1, 
-    show_clock: bool | Callable[[], Any] = True, 
-    clock_interval: int | float = 0.05, 
-    *, 
-    async_: Literal[False] = False, 
-    **request_kwargs, 
-) -> MakeStrmResult:
-    ...
-@overload
-def make_strm_by_export_dir(
-    client: str | P115Client, 
-    export_file_ids: int | str | Iterable[int | str], 
-    save_dir: bytes | str | PathLike = ".", 
-    origin: str = "http://localhost:8000", 
-    without_suffix: bool = True, 
-    ensure_ascii: bool = False, 
-    log: None | Callable[[MakeStrmLog], Any] = print, 
-    max_workers: None | int = None, 
-    update: bool = False, 
-    discard: bool = True, 
-    layer_limit: int = 0, 
-    timeout: None | int | float = None, 
-    check_interval: int | float = 1, 
-    show_clock: bool | Callable[[], Any] = True, 
-    clock_interval: int | float = 0.05, 
-    *, 
-    async_: Literal[True], 
-    **request_kwargs, 
-) -> Coroutine[Any, Any, MakeStrmResult]:
-    ...
-def make_strm_by_export_dir(
-    client: str | P115Client, 
-    export_file_ids: int | str | Iterable[int | str], 
-    save_dir: bytes | str | PathLike = ".", 
-    origin: str = "http://localhost:8000", 
-    without_suffix: bool = True, 
-    ensure_ascii: bool = False, 
-    log: None | Callable[[MakeStrmLog], Any] = print, 
-    max_workers: None | int = None, 
-    update: bool = False, 
-    discard: bool = True, 
-    layer_limit: int = 0, 
-    timeout: None | int | float = None, 
-    check_interval: int | float = 1, 
-    show_clock: bool | Callable[[], Any] = True, 
-    clock_interval: int | float = 0.05, 
-    *, 
-    async_: Literal[False, True] = False, 
-    **request_kwargs, 
-) -> MakeStrmResult | Coroutine[Any, Any, MakeStrmResult]:
-    """生成 strm 保存到本地（通过导出目录树 `export_dir`）
-
-    .. hint::
-        通过 `mimetypes.guess_type` 判断文件的 `mimetype <https://developer.mozilla.org/en-US/docs/Web/HTTP/MIME_types>`_，如果以 "video/" 开头，则会生成相应的 strm 文件
-
-        有哪些扩展名会被系统识别为视频，在不同电脑是上是不同的，你可以使用 `mimetypes.add_type` 添加一些 mimetype 和 扩展名 的关系
-
-        或者你可以安装这个模块，`mimetype_more <https://pypi.org/project/mimetype_more/>`_，我已经在其中添加了很多的 mimetype 和 扩展名 的关系，import 此模块后即会自行添加
-
-        .. code:: console
-
-            pip install -U mimetype_more
-
-    :param client: 115 客户端或 cookies
-    :param export_file_ids: 待导出的目录 id 或 路径（如果有多个，需传入可迭代对象）
-    :param save_dir: 本地的保存目录，默认是当前工作目录
-    :param origin: strm 文件的 `HTTP 源 <https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Origin>`_
-    :param without_suffix: 是否去除原来的扩展名。如果为 False，则直接用 ".strm" 拼接到原来的路径后面；如果为 True，则去掉原来的扩展名后再拼接
-    :param ensure_ascii: strm 是否进行完全转码，确保 ascii 之外的字符都被 urlencode 转码
-    :param log: 调用以收集事件，如果为 None，则忽略
-    :param max_workers: 最大并发数，主要用于限制同时打开的文件数
-    :param update: 是否更新 strm 文件，如果为 False，则跳过已存在的路径
-    :param discard: 是否清理 strm 文件，如果为 True，则删除未取得的路径（不在本次的路径集合内）
-    :param layer_limit: 层级深度，小于等于 0 时不限
-    :param timeout: 导出任务的超时秒数，如果为 None 或 小于等于 0，则相当于 float("inf")，即永不超时
-    :param check_interval: 导出任务的状态，两次轮询之间的等待秒数，如果 <= 0，则不等待
-    :param show_clock: 是否在等待导出目录树时，显示时钟。如果为 True，则显示默认的时钟，如果为 Callable，则作为自定义时钟进行调用（无参数）
-    :param clock_interval: 更新时钟的时间间隔
-    :param async_: 是否异步
-    :param request_kwargs: 其它请求参数
-    """
-    origin = origin.rstrip("/")
-    savedir = fsdecode(save_dir)
-    makedirs(savedir, exist_ok=True)
-    if not isinstance(client, P115Client):
-        client = P115Client(client, check_for_relogin=True)
-    mode = "w" if update else "x"
-    if discard:
-        seen: set[str] = set()
-        seen_add = seen.add
-        existing: set[str] = set()
-        def do_discard():
-            removed = 0
-            for path in existing - seen:
-                path = joinpath(savedir, path)
-                try:
-                    remove(path)
-                    if log is not None:
-                        log(MakeStrmLog(
-                            f"[DEL] path={path!r}", 
-                            type="remove", 
-                            path=path, 
-                        ))
-                    removed += 1
-                except OSError:
-                    pass
-            return removed
-    def normalize_path(path: str, /) -> str:
-        if without_suffix:
-            path = splitext(path)[0]
-        relpath = normpath(path[1:]) + ".strm"
+            ), 
+            max_workers=max_workers, 
+        )
         if discard:
-            seen_add(relpath)
-        return joinpath(savedir, relpath)
-    if async_:
-        try:
-            from aiofile import async_open
-        except ImportError:
-            from sys import executable
-            from subprocess import run
-            run([executable, "-m", "pip", "install", "-U", "aiofile"], check=True)
-            from aiofile import async_open
-        if max_workers is None or max_workers <= 0:
-            sema = None
-        else:
-            sema = Semaphore(max_workers)
-        async def request():
-            success = 0
-            failed = 0
-            skipped = 0
-            removed = 0
-            async def save(remote_path, /, sema=None):
-                nonlocal success, failed, skipped
-                if sema is not None:
-                    async with sema:
-                        return await save(remote_path)
-                path = normalize_path(remote_path)
-                url = f"{origin}/{encode_uri_component_loose(remote_path, ensure_ascii=ensure_ascii)}"
-                try:
-                    try:
-                        async with async_open(path, mode) as f:
-                            await f.write(url)
-                    except FileExistsError:
-                        if log is not None:
-                            ret = log(MakeStrmLog(
-                                f"[SKIP] path={path!r} remote_path={remote_path!r}", 
-                                type="ignore", 
-                                path=path, 
-                                remote_path=remote_path, 
-                            ))
-                            if isawaitable(ret):
-                                await ret
-                        skipped += 1
-                        return
-                    except FileNotFoundError:
-                        makedirs(dirname(path), exist_ok=True)
-                        async with async_open(path, "w") as f:
-                            await f.write(url)
-                    if log is not None:
-                        ret = log(MakeStrmLog(
-                            f"[OK] path={path!r} remote_path={remote_path!r}", 
-                            type="write", 
-                            path=path, 
-                            remote_path=remote_path, 
-                        ))
-                        if isawaitable(ret):
-                            await ret
-                    success += 1
-                except BaseException as e:
-                    failed += 1
-                    if log is not None:
-                        ret =log(MakeStrmLog(
-                            f"[ERROR] path={path!r} remote_path={remote_path!r} error={e!r}", 
-                            type="error", 
-                            path=path, 
-                            remote_path=remote_path, 
-                            error=e, 
-                        ))
-                        if isawaitable(ret):
-                            await ret
-                    if not isinstance(e, OSError):
-                        raise
-            start_t = perf_counter()
-            async with TaskGroup() as group:
-                create_task = group.create_task
-                if discard:
-                    create_task(to_thread(lambda: existing.update(iglob("**/*.strm", root_dir=savedir, recursive=True))))
-                async for remote_path in export_dir_parse_iter(
-                    client, 
-                    export_file_ids=export_file_ids, 
-                    layer_limit=layer_limit, 
-                    timeout=timeout, 
-                    check_interval=check_interval, 
-                    show_clock=show_clock, 
-                    clock_interval=clock_interval, 
-                    async_=async_, 
-                    **request_kwargs, 
-                ):
-                    mime = guess_type(remote_path)[0]
-                    if mime and mime.startswith("video/"):
-                        create_task(save(remote_path, sema))
-            if discard:
-                removed = do_discard()
-            return {
-                "total": success + failed + skipped, 
-                "success": success, 
-                "failed": failed, 
-                "skipped": skipped, 
-                "removed": removed, 
-                "elapsed": perf_counter() - start_t, 
-            }
-        return request()
-    else:
-        success = 0
-        failed = 0
-        skipped = 0
-        removed = 0
-        lock = Lock()
-        def save(remote_path: str, /):
-            nonlocal success, failed, skipped
-            path = normalize_path(remote_path)
-            try:
-                try:
-                    f = open(path, mode)
-                except FileExistsError:
-                    if log is not None:
-                        log(MakeStrmLog(
-                            f"[SKIP] path={path!r} remote_path={remote_path!r}", 
-                            type="ignore", 
-                            path=path, 
-                            remote_path=remote_path, 
-                        ))
-                    skipped += 1
-                    return
-                except FileNotFoundError:
-                    makedirs(dirname(path), exist_ok=True)
-                    f = open(path,  "w")
-                f.write(f"{origin}/{encode_uri_component_loose(remote_path, ensure_ascii=ensure_ascii)}")
-                if log is not None:
-                    log(MakeStrmLog(
-                        f"[OK] path={path!r} remote_path={remote_path!r}", 
-                        type="write", 
-                        path=path, 
-                        remote_path=remote_path, 
-                    ))
-                with lock:
-                    success += 1
-            except BaseException as e:
-                with lock:
-                    failed += 1
-                if log is not None:
-                    log(MakeStrmLog(
-                        f"[ERROR] path={path!r} remote_path={remote_path!r} error={e!r}", 
-                        type="error", 
-                        path=path, 
-                        remote_path=remote_path, 
-                        error=e, 
-                    ))
-                if not isinstance(e, OSError):
-                    raise
-        if max_workers and max_workers <= 0:
-            max_workers = None
-        start_t = perf_counter()
-        executor = ThreadPoolExecutor(max_workers)
-        submit = executor.submit
-        try:
-            if discard:
-                submit(lambda: existing.update(iglob("**/*.strm", root_dir=savedir, recursive=True)))
-            for remote_path in export_dir_parse_iter(
-                client, 
-                export_file_ids=export_file_ids, 
-                layer_limit=layer_limit, 
-                timeout=timeout, 
-                check_interval=check_interval, 
-                show_clock=show_clock, 
-                clock_interval=clock_interval, 
-                **request_kwargs, 
-            ):
-                mime = guess_type(remote_path)[0]
-                if mime and mime.startswith("video/"):
-                    submit(save, remote_path)
-            executor.shutdown(wait=True)
-            if discard:
-                removed = do_discard()
-            return {
-                "total": success + failed + skipped, 
-                "success": success, 
-                "failed": failed, 
-                "skipped": skipped, 
-                "removed": removed, 
-                "elapsed": perf_counter() - start_t, 
-            }
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
+            if async_:
+                yield task
+                yield to_thread(do_discard)
+            else:
+                task.result()
+                do_discard()
+        return {"cost": time() - start_t, "upsert": upserted, "skip": skipped, "remove": removed}
+    return run_gen_step(gen_step, async_=async_)
 
 
 @overload
@@ -1759,9 +1290,9 @@ def iter_download_files(
                         pickcodes.append(attr["pickcode"])
                     else:
                         yield Yield({
-                            "parent_id": attr["parent_id"],
-                            "pickcode": attr["pickcode"],
-                            "size": attr["size"],
+                            "parent_id": attr["parent_id"], 
+                            "pickcode": attr["pickcode"], 
+                            "size": attr["size"], 
                             **defaults, 
                         }, identity=True)
             for pickcode in pickcodes:
@@ -1801,9 +1332,9 @@ def iter_download_files(
             finally:
                 ancestors_loaded = True
         if async_:
-            future: Any = run_as_async(run_gen_step, load_ancestors, async_=async_)
+            task: Any = create_task(run_gen_step(load_ancestors, async_=True))
         else:
-            future = run_as_thread(run_gen_step, load_ancestors, async_=async_)
+            task = run_as_thread(run_gen_step, load_ancestors)
         cache: list[dict] = []
         add_to_cache = cache.append
         with with_iter_next(iter_download_nodes(
@@ -1821,12 +1352,18 @@ def iter_download_files(
                 elif ancestors_loaded:
                     yield YieldFrom(map(norm_attr, cache), identity=True)
                     cache.clear()
-                    yield future.result()
+                    if async_:
+                        yield task
+                    else:
+                        task.result()
                     ancestors_loaded = None
                 else:
                     add_to_cache(info)
         if cache:
-            yield future.result()
+            if async_:
+                yield task
+            else:
+                task.result()
             yield YieldFrom(map(norm_attr, cache), identity=True)
     return run_gen_step_iter(gen_step, async_=async_)
 

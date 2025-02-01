@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "p115client"
-version = "0.0.4.11"
+version = "0.0.4.12"
 description = "Python 115 webdisk client."
 authors = ["ChenyangGao <wosiwujm@gmail.com>"]
 license = "MIT"
@@ -28,6 +28,7 @@ include = [
 
 [tool.poetry.dependencies]
 python = "^3.12"
+aiofile = "*"
 ed2k = ">=0.0.2.1"
 http_response = ">=0.0.2.2"
 httpx = "*"
@@ -39,7 +40,7 @@ p115cipher = ">=0.0.3"
 posixpatht = ">=0.0.3"
 python-argtools = ">=0.0.1"
 python-asynctools = ">=0.0.10"
-python-concurrenttools = ">=0.0.6"
+python-concurrenttools = ">=0.0.7"
 python-cookietools = ">=0.0.2.1"
 python-dictattr = ">=0.0.4"
 python-encode_uri = ">=0.0.1"

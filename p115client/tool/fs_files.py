@@ -106,7 +106,7 @@ def iter_fs_files(
     if isinstance(payload, (int, str)):
         payload = {"cid": payload}
     payload = {
-        "asc": 0, "cid": 0, "fc_mix": 1, "o": "user_utime", "offset": 0, 
+        "asc": 1, "cid": 0, "fc_mix": 1, "o": "user_ptime", "offset": 0, 
         "limit": first_page_size, "show_dir": 1, **payload, 
     }
     cid = int(payload["cid"])
@@ -195,7 +195,7 @@ def iter_fs_files_threaded(
     if isinstance(payload, (int, str)):
         payload = {"cid": payload}
     payload = {
-        "asc": 1, "cid": 0, "fc_mix": 1, "o": "user_ctime", "offset": 0, 
+        "asc": 1, "cid": 0, "fc_mix": 1, "o": "user_ptime", "offset": 0, 
         "limit": page_size, "show_dir": 1, **payload, 
     }
     cid = int(payload["cid"])
@@ -301,7 +301,7 @@ async def iter_fs_files_asynchronized(
     if isinstance(payload, (int, str)):
         payload = {"cid": payload}
     payload = {
-        "asc": 1, "cid": 0, "fc_mix": 1, "o": "user_ctime", "offset": 0, 
+        "asc": 1, "cid": 0, "fc_mix": 1, "o": "user_ptime", "offset": 0, 
         "limit": page_size, "show_dir": 1, **payload, 
     }
     cid = int(payload["cid"])
