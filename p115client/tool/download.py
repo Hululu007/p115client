@@ -32,7 +32,7 @@ from warnings import warn
 from asynctools import async_chain_from_iterable
 from concurrenttools import run_as_async, run_as_thread
 from encode_uri import encode_uri_component_loose
-from iterutils import run_gen_step, run_gen_step_iter, Yield, YieldFrom
+from iterutils import chunked, run_gen_step, run_gen_step_iter, with_iter_next, Yield, YieldFrom
 from p115client import check_response, normalize_attr, P115Client, P115URL
 from p115client.exception import P115Warning
 from posixpatht import escape
@@ -403,26 +403,41 @@ def iter_files_with_url(
         id_to_dirnode=id_to_dirnode, 
         raise_for_changed_count=raise_for_changed_count, 
         async_=async_, 
+        **request_kwargs, 
     )
     def gen_step():
         if suffixes is None:
-            it = iter_files(client, cid, type=type, app=app, **params, **request_kwargs) # type: ignore
+            it = iter_files(
+                client, 
+                cid, 
+                type=type, 
+                app=app, 
+                **params, # type: ignore
+            )
         elif isinstance(suffixes, str):
-            it = iter_files(client, cid, suffix=suffixes, app=app, **params, **request_kwargs) # type: ignore
+            it = iter_files(
+                client, 
+                cid, 
+                suffix=suffixes, 
+                app=app, 
+                **params, # type: ignore
+            )
         else:
             for suffix in suffixes:
                 yield YieldFrom(
-                    iter_files_with_url(client, cid, suffixes=suffix, app=app, **params, **request_kwargs), # type: ignore
+                    iter_files_with_url(
+                        client, 
+                        cid, 
+                        suffixes=suffix, 
+                        app=app, 
+                        **params, # type: ignore
+                    ), 
                     identity=True, 
                 )
             return
-        do_next: Callable = anext if async_ else next
-        while True:
-            try:
-                attr = yield partial(do_next, it)
-            except (StopIteration, StopAsyncIteration):
-                break
-            else:
+        with with_iter_next(it) as get_next:
+            while True:
+                attr = yield get_next
                 if attr.get("violated", False):
                     if attr["size"] < 1024 * 1024 * 115:
                         attr["url"] = yield partial(
@@ -534,45 +549,62 @@ def iter_images_with_url(
         id_to_dirnode=id_to_dirnode, 
         raise_for_changed_count=raise_for_changed_count, 
         async_=async_, 
+        **request_kwargs
     )
     def gen_step():
         if suffixes is None:
-            it = iter_files(client, cid, type=2, app=app, **params, **request_kwargs) # type: ignore
+            it = iter_files(
+                client, 
+                cid, 
+                type=2, 
+                app=app, 
+                **params, # type: ignore
+            )
         elif isinstance(suffixes, str):
-            it = iter_files(client, cid, suffix=suffixes, app=app, **params, **request_kwargs) # type: ignore
+            it = iter_files(
+                client, 
+                cid, 
+                suffix=suffixes, 
+                app=app, 
+                **params, # type: ignore
+            )
         else:
             for suffix in suffixes:
                 yield YieldFrom(
-                    iter_images_with_url(client, cid, suffixes=suffix, app=app, **params, **request_kwargs), # type: ignore
+                    iter_images_with_url(
+                        client, 
+                        cid, 
+                        suffixes=suffix, 
+                        app=app, 
+                        **params, # type: ignore
+                    ), 
                     identity=True, 
                 )
             return
-        do_next: Callable = anext if async_ else next
-        while True:
-            try:
-                attr = yield partial(do_next, it)
-                attr["url"] = reduce_image_url_layers(attr["thumb"])
-            except (StopIteration, StopAsyncIteration):
-                break
-            except KeyError:
-                if attr.get("violated", False):
-                    if attr["size"] < 1024 * 1024 * 115:
+        with with_iter_next(it) as get_next:
+            while True:
+                attr = yield get_next
+                try:
+                    attr["url"] = reduce_image_url_layers(attr["thumb"])
+                except KeyError:
+                    if attr.get("violated", False):
+                        if attr["size"] < 1024 * 1024 * 115:
+                            attr["url"] = yield partial(
+                                client.download_url, 
+                                attr["pickcode"], 
+                                use_web_api=True, 
+                                async_=async_, 
+                                **request_kwargs, 
+                            )
+                        else:
+                            warn(f"unable to get url for {attr!r}", category=P115Warning)
+                    else:
                         attr["url"] = yield partial(
                             client.download_url, 
                             attr["pickcode"], 
-                            use_web_api=True, 
                             async_=async_, 
                             **request_kwargs, 
                         )
-                    else:
-                        warn(f"unable to get url for {attr!r}", category=P115Warning)
-                else:
-                    attr["url"] = yield partial(
-                        client.download_url, 
-                        attr["pickcode"], 
-                        async_=async_, 
-                        **request_kwargs, 
-                    )
             yield Yield(attr, identity=True)
     return run_gen_step_iter(gen_step, async_=async_)
 
@@ -664,10 +696,9 @@ def iter_subtitles_with_url(
     def gen_step():
         nonlocal suffixes
         if isinstance(suffixes, str):
-            suffixes = (suffixes,)
+            suffixes = suffixes,
         do_chain: Callable = async_chain_from_iterable if async_ else chain.from_iterable
-        do_next: Callable = anext if async_ else next
-        it = do_chain(
+        it = chunked(do_chain(
             iter_files(
                 client, 
                 cid, 
@@ -685,51 +716,46 @@ def iter_subtitles_with_url(
                 **request_kwargs, 
             )
             for suffix in suffixes
-        )
-        attr: dict
-        while True:
-            items: list[dict] = []
-            try:
-                for i in range(1_000):
-                    attr = yield partial(do_next, it)
-                    items.append(attr)
-            except (StopIteration, StopAsyncIteration):
-                pass
-            if not items:
-                break
-            try:
+        ), 1000)
+        do_next = anext if async_ else next
+        with with_iter_next(it) as get_next:
+            while True:
+                items: tuple[dict] = yield get_next
                 resp = yield client.fs_mkdir(
                     f"subtitle-{uuid4()}", 
                     async_=async_, 
                     **request_kwargs, 
                 )
-                scid = resp["cid"]
-                yield client.fs_copy(
-                    (attr["id"] for attr in items), 
-                    pid=scid, 
-                    async_=async_, 
-                    **request_kwargs, 
-                )
-                attr = yield do_next(iter_files_raw(
-                    client, 
-                    scid, 
-                    first_page_size=1, 
-                    base_url=True, 
-                    async_=async_, 
-                    **request_kwargs, 
-                ))
-                resp = yield client.fs_video_subtitle(
-                    attr["pc"], 
-                    async_=async_, 
-                    **request_kwargs, 
-                )
-                subtitles = {
-                    info["sha1"]: info["url"]
-                    for info in resp["data"]["list"] 
-                    if info.get("file_id")
-                }
-            finally:
-                yield client.fs_delete(scid, async_=async_, **request_kwargs)
+                check_response(resp)
+                try:
+                    scid = resp["cid"]
+                    resp = yield client.fs_copy(
+                        (attr["id"] for attr in items), 
+                        pid=scid, 
+                        async_=async_, 
+                        **request_kwargs, 
+                    )
+                    check_response(resp)
+                    attr = yield do_next(iter_files_raw(
+                        client, 
+                        scid, 
+                        first_page_size=1, 
+                        base_url=True, 
+                        async_=async_, # type: ignore
+                        **request_kwargs, 
+                    ))
+                    resp = yield client.fs_video_subtitle(
+                        attr["pc"], 
+                        async_=async_, 
+                        **request_kwargs, 
+                    )
+                    subtitles = {
+                        info["sha1"]: info["url"]
+                        for info in resp["data"]["list"] 
+                        if info.get("file_id")
+                    }
+                finally:
+                    yield client.fs_delete(scid, async_=async_, **request_kwargs)
             if subtitles:
                 for attr in items:
                     attr["url"] = subtitles[attr["sha1"]]
@@ -807,24 +833,23 @@ def iter_subtitle_batches(
     if batch_size <= 0:
         batch_size = 1_000
     def gen_step():
-        nonlocal file_ids
-        if not isinstance(file_ids, Sequence):
-            file_ids = tuple(file_ids)
         do_next: Callable = anext if async_ else next
-        for i in range(0, len(file_ids), batch_size):
+        for ids in chunked(file_ids, batch_size):
             try:
                 resp = yield client.fs_mkdir(
                     f"subtitle-{uuid4()}", 
                     async_=async_, 
                     **request_kwargs, 
                 )
+                check_response(resp)
                 scid = resp["cid"]
-                yield client.fs_copy(
-                    file_ids[i:i+batch_size], 
+                resp = yield client.fs_copy(
+                    ids, 
                     pid=scid, 
                     async_=async_, 
                     **request_kwargs, 
                 )
+                check_response(resp)
                 attr = yield do_next(iter_files_raw(
                     client, 
                     scid, 
@@ -838,6 +863,7 @@ def iter_subtitle_batches(
                     async_=async_, 
                     **request_kwargs, 
                 )
+                check_response(resp)
                 yield YieldFrom(
                     filter(lambda info: "file_id" in info, resp["data"]["list"]), 
                     identity=True, 
@@ -1718,17 +1744,15 @@ def iter_download_files(
                 "dirname": "/",
                 "posix_dirname": "/", 
             }
-            it = iterdir(
+            pickcodes: list[str] = []
+            with with_iter_next(iterdir(
                 client, 
                 id_to_dirnode=id_to_dirnode, 
                 app="android", 
                 raise_for_changed_count=True, 
                 async_=async_, # type: ignore
                 **request_kwargs, 
-            )
-            pickcodes: list[str] = []
-            try:
-                get_next = it.__anext__ if async_ else it.__next__ # type: ignore
+            )) as get_next:
                 while True:
                     attr = yield get_next
                     if attr["is_dir"]:
@@ -1740,8 +1764,6 @@ def iter_download_files(
                             "size": attr["size"],
                             **defaults, 
                         }, identity=True)
-            except (StopAsyncIteration, StopIteration):
-                pass
             for pickcode in pickcodes:
                 yield YieldFrom(run_gen_step_iter(gen_step(pickcode), async_=async_), identity=True)
             return
@@ -1752,26 +1774,9 @@ def iter_download_files(
             if info["sha1"]:
                 raise NotADirectoryError(ENOTDIR, info)
             pickcode = info["pick_code"]
-        folders = iter_download_nodes(
-            client, 
-            pickcode, 
-            files=False, 
-            max_workers=max_workers, 
-            async_=async_, 
-            **request_kwargs, 
-        )
-        files = iter_download_nodes(
-            client, 
-            pickcode, 
-            files=True, 
-            max_workers=max_workers, 
-            async_=async_, 
-            **request_kwargs, 
-        )
         ancestors_loaded: None | bool = False
-        load_ancestors_error = None
         def load_ancestors():
-            nonlocal ancestors_loaded, load_ancestors_error
+            nonlocal ancestors_loaded
             if cid:
                 resp = yield client.fs_files(
                     {"cid": cid, "limit": 1}, 
@@ -1781,16 +1786,18 @@ def iter_download_files(
                 check_response(resp)
                 for info in resp["path"][1:]:
                     id_to_dirnode[int(info["cid"])] = DirNode(info["name"], int(info["pid"]))
-                get_next = folders.__anext__ if async_ else folders.__next__ # type: ignore
             try:
-                while True:
-                    info = yield get_next
-                    id_to_dirnode[int(info["fid"])] = DirNode(info["fn"], int(info["pid"]))
-            except (StopAsyncIteration, StopIteration):
-                pass
-            except BaseException as e:
-                load_ancestors_error = e
-                raise
+                with with_iter_next(iter_download_nodes(
+                    client, 
+                    pickcode, 
+                    files=False, 
+                    max_workers=max_workers, 
+                    async_=async_, 
+                    **request_kwargs, 
+                )) as get_next:
+                    while True:
+                        info = yield get_next
+                        id_to_dirnode[int(info["fid"])] = DirNode(info["fn"], int(info["pid"]))
             finally:
                 ancestors_loaded = True
         if async_:
@@ -1799,8 +1806,14 @@ def iter_download_files(
             future = run_as_thread(run_gen_step, load_ancestors, async_=async_)
         cache: list[dict] = []
         add_to_cache = cache.append
-        get_next = files.__anext__ if async_ else files.__next__ # type: ignore
-        try:
+        with with_iter_next(iter_download_nodes(
+            client, 
+            pickcode, 
+            files=True, 
+            max_workers=max_workers, 
+            async_=async_, # type: ignore
+            **request_kwargs, 
+        )) as get_next:
             while True:
                 info = yield get_next
                 if ancestors_loaded is None:
@@ -1808,18 +1821,12 @@ def iter_download_files(
                 elif ancestors_loaded:
                     yield YieldFrom(map(norm_attr, cache), identity=True)
                     cache.clear()
-                    if load_ancestors_error is not None:
-                        raise load_ancestors_error
+                    yield future.result()
                     ancestors_loaded = None
                 else:
                     add_to_cache(info)
-        except (StopAsyncIteration, StopIteration):
-            pass
         if cache:
-            if async_:
-                yield future.result()
-            else:
-                future.result()
+            yield future.result()
             yield YieldFrom(map(norm_attr, cache), identity=True)
     return run_gen_step_iter(gen_step, async_=async_)
 

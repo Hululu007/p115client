@@ -24,6 +24,7 @@ from math import nan
 from operator import itemgetter
 from os import fsdecode, fstat, isatty, stat, PathLike, path as ospath
 from pathlib import Path, PurePath
+from posixpath import splitext
 from re import compile as re_compile, MULTILINE
 from sys import exc_info
 from _thread import start_new_thread
@@ -59,7 +60,7 @@ from undefined import undefined
 from urlopen import urlopen
 from yarl import URL
 
-from .const import CLIENT_API_MAP, SSOENT_TO_APP
+from .const import CLASS_TO_TYPE, CLIENT_API_MAP, SSOENT_TO_APP, SUFFIX_TO_TYPE
 from .exception import (
     AuthenticationError, BusyOSError, DataError, LoginError, NotSupportedError, 
     P115OSError, OperationalError, P115Warning, 
@@ -538,7 +539,7 @@ def normalize_attr_web(
         ("issct", "is_shortcut"), 
         ("ispl", "show_play_long"), 
         ("is_top", "is_top"), 
-        #("iv", "is_video"), 
+        ("iv", "is_video"), 
         ("m", "star"), 
         ("m", "is_mark"), 
         ("c", "violated"), 
@@ -580,6 +581,16 @@ def normalize_attr_web(
                 attr["defination_str"] = "video-origin"
             case _:
                 attr["defination_str"] = "video-sd"
+    if is_directory:
+        attr["type"] = 0
+    elif info.get("iv") or "vdi" in info:
+        attr["type"] = 4
+    elif type := CLASS_TO_TYPE.get(attr.get("class", "")):
+        attr["type"] = type
+    elif type := SUFFIX_TO_TYPE.get(splitext(attr["name"])[1].lower()):
+        attr["type"] = type
+    else:
+        attr["type"] = 99
     if keep_raw:
         attr["raw"] = info
     return attr
@@ -602,7 +613,7 @@ def normalize_attr_app(
     attr: AttrDict[str, Any] = dict_cls()
     if "aid" in info:
         attr["area_id"] = int(info["aid"])
-    attr["is_dir"] = attr["is_directory"] = info["fc"] == "0" # fc => file_category
+    is_directory = attr["is_dir"] = attr["is_directory"] = info["fc"] == "0" # fc => file_category
     attr["id"] = int(info["fid"])        # fid => file_id
     attr["parent_id"] = int(info["pid"]) # pid => parent_id
     if "pc" in info:
@@ -613,7 +624,7 @@ def normalize_attr_app(
     attr["labels"] = info["fl"]
     attr["ico"] = info.get("ico", "folder" if attr["is_dir"] else "")
     if "ftype" in info:
-        attr["ftype"] = int(info["ftype"] or 0)
+        attr["file_type"] = int(info["ftype"] or 0)
     if "thumb" in info:
         thumb = info["thumb"]
         if thumb.startswith("?"):
@@ -651,7 +662,7 @@ def normalize_attr_app(
         ("play_long", "play_long"), 
         ("muc", "cover"), 
         ("d_img", "d_img"), 
-        ("v_img", "v_img"), 
+        ("v_img", "video_img_url"), 
         ("audio_play_long", "audio_play_long"), 
         ("current_time", "current_time"), 
         ("last_time", "last_time"), 
@@ -659,6 +670,18 @@ def normalize_attr_app(
     ):
         if key in info:
             attr[name] = info[key]
+    if is_directory:
+        attr["type"] = 0
+    elif thumb := info.get("thumb") and thumb.startswith("?"):
+        attr["type"] = 2
+    elif "muc" in info:
+        attr["type"] = 3
+    elif info.get("isv") or "def" in info or "def2" in info or "v_img" in info:
+        attr["type"] = 4
+    elif type := SUFFIX_TO_TYPE.get(splitext(attr["name"])[1].lower()):
+        attr["type"] = type
+    else:
+        attr["type"] = 99
     if keep_raw:
         attr["raw"] = info
     return attr
@@ -673,8 +696,8 @@ def normalize_attr_app2(
     attr: AttrDict[str, Any] = dict_cls()
     if "aid" in info:
         attr["area_id"] = int(info["area_id"])
-    if "file_id" in info:
-        attr["is_dir"] = attr["is_directory"] = False
+    is_directory = attr["is_dir"] = attr["is_directory"] = "file_id" not in info
+    if is_directory:
         attr["id"] = int(info["file_id"])
         attr["parent_id"] = int(info["category_id"])
         attr["name"] = info["file_name"]
@@ -685,7 +708,7 @@ def normalize_attr_app2(
         if "file_description" in info:
             attr["desc"] = info["file_description"]
         if "file_tag" in info:
-            attr["ftype"] = int(info["file_tag"])
+            attr["file_type"] = int(info["file_tag"])
         if "music_cover" in info:
             attr["cover"] = info["music_cover"]
         if "user_pptime" in info:
@@ -695,7 +718,6 @@ def normalize_attr_app2(
         if "user_utime" in info:
             attr["utime"] = int(info["user_utime"])
     else:
-        attr["is_dir"] = attr["is_directory"] = True
         attr["id"] = int(info["category_id"])
         attr["parent_id"] = int(info["parent_id"])
         attr["name"] = info["category_name"]
@@ -734,17 +756,29 @@ def normalize_attr_app2(
             attr[name] = int(info[key] or 0) == 1
     for name in (
         "pick_time", "pick_expire", "file_status", "file_sort", "definition", 
-        "definition2", "play_long", "type", "current_time", "played_end", 
+        "definition2", "play_long", "current_time", "played_end", 
         "last_time", "cate_mark", "category_file_count", "category_order", 
     ):
         if name in info:
             attr[name] = int(info[name] or 0)
     for name in (
         "file_eda", "file_question", "file_answer", "password", "video_img_url", 
-        "play_url", "d_img", "v_img", 
+        "play_url", "d_img", 
     ):
         if name in info:
             attr[name] = info[name]
+    if is_directory:
+        attr["type"] = 0
+    elif "thumb_url" in info:
+        attr["type"] = 2
+    elif "music_cover" in info or "play_url" in info:
+        attr["type"] = 3
+    elif info.get("is_video") or "definition" in info or "definition2" in info or "video_img_url" in info:
+        attr["type"] = 4
+    elif type := SUFFIX_TO_TYPE.get(splitext(attr["name"])[1].lower()):
+        attr["type"] = type
+    else:
+        attr["type"] = 99
     if keep_raw:
         attr["raw"] = info
     return attr

@@ -8,101 +8,24 @@ __all__ = [
 ]
 __doc__ = "这个模块提供了一些和导出目录树有关的函数"
 
-from asyncio import sleep as async_sleep, create_task
+from asyncio import sleep as async_sleep
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Coroutine, Iterable, Iterator
-from contextlib import asynccontextmanager, contextmanager
 from functools import partial
-from inspect import isawaitable
-from io import BufferedReader, TextIOBase, TextIOWrapper
+from io import BufferedReader, TextIOWrapper
 from itertools import count
 from os import PathLike
 from re import compile as re_compile
-from _thread import start_new_thread
-from time import sleep, perf_counter
+from time import sleep, time
 from typing import cast, overload, Any, Final, IO, Literal
 
 from asynctools import ensure_async, ensure_aiter
 from filewrap import AsyncBufferedReader, AsyncTextIOWrapper
-from iterutils import run_gen_step, run_gen_step_iter, Yield, YieldFrom
+from iterutils import backgroud_loop, context, run_gen_step, run_gen_step_iter, Yield, YieldFrom
 from p115client import check_response, P115Client
 from posixpatht import escape
-from urlopen import urlopen
-
-from .iterdir import get_id_to_path
 
 
 CRE_TREE_PREFIX_match: Final = re_compile(r"^(?:\| )+\|-(.*)").match
-
-
-def format_time(t: int | float, /) -> str:
-    m, s = divmod(t, 60)
-    if m < 60:
-        return f"{m:02.0f}:{s:09.06f}"
-    h, m = divmod(m, 60)
-    if h < 24:
-        return f"{h:02.0f}:{m:02.0f}:{s:09.06f}"
-    d, h = divmod(h, 60)
-    return f"{d}d{h:02.0f}:{m:02.0f}:{s:09.06f}"
-
-
-@contextmanager
-def backgroud_loop(
-    call: None | Callable = None, 
-    /, 
-    interval: int | float = 0.05, 
-):
-    use_default_call = not callable(call)
-    if use_default_call:
-        start = perf_counter()
-        def call():
-            print(f"\r\x1b[K{format_time(perf_counter() - start)}", end="")
-    def run():
-        while running:
-            try:
-                call() # type: ignore
-            except Exception:
-                pass
-            if interval > 0:
-                sleep(interval) 
-    running = True
-    try:
-        yield start_new_thread(run, ())
-    finally:
-        running = False
-        if use_default_call:
-            print("\r\x1b[K", end="")
-
-
-@asynccontextmanager
-async def async_backgroud_loop(
-    call: None | Callable = None, 
-    /, 
-    interval: int | float = 0.05, 
-):
-    use_default_call = not callable(call)
-    if use_default_call:
-        start = perf_counter()
-        def call():
-            print(f"\r\x1b[K{format_time(perf_counter() - start)}", end="")
-    async def run():
-        while running:
-            try:
-                ret = call() # type: ignore
-                if isawaitable(ret):
-                    await ret
-            except Exception:
-                pass
-            if interval > 0:
-                await async_sleep(interval)
-    running = True
-    try:
-        task = create_task(run())
-        yield task
-    finally:
-        running = False
-        task.cancel()
-        if use_default_call:
-            print("\r\x1b[K", end="")
 
 
 @overload
@@ -434,6 +357,7 @@ def export_dir(
         client = P115Client(client, check_for_relogin=True)
     def gen_step():
         nonlocal export_file_ids, target_pid
+        from .iterdir import get_id_to_path
         if isinstance(export_file_ids, int):
             pass
         elif isinstance(export_file_ids, str):
@@ -539,7 +463,7 @@ def export_dir_result(
         if timeout is None or timeout <= 0:
             timeout = float("inf")
         do_sleep: Callable = async_sleep if async_ else sleep # type: ignore
-        expired_t = perf_counter() + timeout
+        expired_t = time() + timeout
         while True:
             resp = yield client.fs_export_dir_status(
                 export_id, 
@@ -548,7 +472,7 @@ def export_dir_result(
             )
             if data := check_response(resp)["data"]:
                 return data
-            remaining_seconds = expired_t - perf_counter()
+            remaining_seconds = expired_t - time()
             if remaining_seconds <= 0:
                 raise TimeoutError(export_id)
             if check_interval:
@@ -653,33 +577,23 @@ def export_dir_parse_iter(
                 async_=async_, 
                 **request_kwargs, 
             )
-        elif async_:
-            async def wait_for_result():
-                async with async_backgroud_loop(
-                    None if show_clock is True else show_clock, 
-                    interval=clock_interval, 
-                ):
-                    return await export_dir_result(
-                        client, 
-                        export_id, 
-                        timeout=timeout, 
-                        check_interval=check_interval, 
-                        async_=True, 
-                        **request_kwargs, 
-                    )
-            result = yield wait_for_result
         else:
-            with backgroud_loop(
-                None if show_clock is True else show_clock, 
-                interval=clock_interval, 
-            ):
-                result = export_dir_result(
+            result = yield context(
+                lambda *a: export_dir_result(
                     client, 
                     export_id, 
                     timeout=timeout, 
                     check_interval=check_interval, 
+                    async_=async_, 
                     **request_kwargs, 
-                )
+                ), 
+                backgroud_loop(
+                    None if show_clock is True else show_clock, 
+                    interval=clock_interval, 
+                    async_=async_, # type: ignore
+                ), 
+                async_=async_, # type: ignore
+            )
         try:
             try:
                 url: str = yield partial(

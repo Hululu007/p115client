@@ -27,7 +27,6 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from errno import EIO, ENOENT, ENOTDIR
 from functools import partial
-from hashlib import md5
 from itertools import chain, count, cycle, islice, takewhile
 from operator import itemgetter
 from re import compile as re_compile
@@ -1539,7 +1538,7 @@ def ensure_attr_path[D: dict](
                 attr.setdefault("path", "")
                 attr.setdefault("posixpath", "")
             yield Yield(attr, identity=True)
-    return run_gen_step(gen_step, async_=async_)
+    return run_gen_step_iter(gen_step, async_=async_)
 
 
 @overload
@@ -3434,7 +3433,7 @@ def iter_selected_nodes(
 @overload
 def iter_selected_nodes_by_pickcode(
     client: str | P115Client, 
-    ids: Iterable[int], 
+    ids: Iterable[int | str], 
     ignore_deleted: None | bool = True, 
     normalize_attr: None | Callable[[dict], dict] = None, 
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
@@ -3447,7 +3446,7 @@ def iter_selected_nodes_by_pickcode(
 @overload
 def iter_selected_nodes_by_pickcode(
     client: str | P115Client, 
-    ids: Iterable[int], 
+    ids: Iterable[int | str], 
     ignore_deleted: None | bool = True, 
     normalize_attr: None | Callable[[dict], dict] = None, 
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
@@ -3459,7 +3458,7 @@ def iter_selected_nodes_by_pickcode(
     ...
 def iter_selected_nodes_by_pickcode(
     client: str | P115Client, 
-    ids: Iterable[int], 
+    ids: Iterable[int | str], 
     ignore_deleted: None | bool = True, 
     normalize_attr: None | Callable[[dict], dict] = None, 
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
@@ -3474,7 +3473,7 @@ def iter_selected_nodes_by_pickcode(
         并发数较多时，容易发生 HTTP 链接中断现象
 
     :param client: 115 客户端或 cookies
-    :param ids: 一组文件或目录的 id
+    :param ids: 一组文件或目录的 id 或 pickcode
     :param ignore_deleted: 是否忽略已经被删除的
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典，如果为 ...，则忽略
@@ -3507,9 +3506,11 @@ def iter_selected_nodes_by_pickcode(
             partial(client.fs_supervision, base_url="https://webapi.115.com"), 
             partial(client.fs_supervision_app, base_url="https://proapi.115.com"), 
         )
-    def get_response(info: dict, /, get_method=cycle(methods).__next__):
+    def get_response(pickcode: str | dict, /, get_method=cycle(methods).__next__):
+        if isinstance(pickcode, dict):
+            pickcode = pickcode["pick_code"]
         return get_method()(
-            info["pick_code"], 
+            pickcode, 
             async_=async_, 
             **request_kwargs, 
         )
@@ -3525,7 +3526,23 @@ def iter_selected_nodes_by_pickcode(
         if normalize_attr is None:
             return info
         return normalize_attr(info)
-    it = iter_nodes_skim(client, ids, async_=async_, **request_kwargs)
+    ls_pickcode: list[str] = []
+    ls_id: list[int] = []
+    append = list.append
+    for val in ids:
+        if val:
+            if isinstance(val, int):
+                append(ls_id, val)
+            else:
+                append(ls_pickcode, val)
+    if ls_id:
+        it: Any = iter_nodes_skim(client, ls_id, async_=async_, **request_kwargs)
+        if async_:
+            it = chain(ls_pickcode, it)
+        else:
+            it = async_chain(ls_pickcode, it)
+    else:
+        it = ls_pickcode
     if async_:
         return async_filter(None, async_map(project, taskgroup_map( # type: ignore
             get_response, it, max_workers=max_workers, kwargs=request_kwargs)))
@@ -4349,6 +4366,14 @@ def iter_files_with_path_by_export_dir(
     .. important::
         相比较于 `iter_files`，这个函数专门针对获取路径的风控问题做了优化，会用到 导出目录树，尝试进行匹配，不能唯一确定的，会再用其它办法获取路径
 
+    .. note::
+        通过几个步骤一点点减少要检查的数据量：
+
+        1. unique name: 导出目录树中，唯一出现的名字，就可以直接确定同一个目录下所有节点的路径
+        2. unique listdir: 导出目录树中，一个目录下所有名字（可以理解为 listdir）的组合，只要它是唯一的，就能唯一确定同一个目录下所有节点的路径
+        3. repeat 1-2 for higher dir: 引入目录的名字后，再考虑 `1` 和 `2`，又可排除掉一部分
+        4. repeat 3: 通过反复引入更高层级的目录名字，反复执行 `3`，最后总能确定完整路径，最坏的情况就是直到 `cid` 为止才把所有未定项确定
+
     :param client: 115 客户端或 cookies
     :param cid: 目录 id，不能为 0 （受限于 export_dir 接口）
     :param async_: 是否异步
@@ -4360,7 +4385,7 @@ def iter_files_with_path_by_export_dir(
     if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     def gen_step():
-        do_foreach = async_foreach if async_ else foreach
+        append = list.append
         # 首先启动导出目录的后台任务
         export_id = yield export_dir(client, cid, async_=async_, **request_kwargs)
         # 名字 到 parent_id 的映射，如果名字不唯一，则 parent_id 设为 0
@@ -4370,102 +4395,128 @@ def iter_files_with_path_by_export_dir(
         def update_name_to_pid(attr: dict, /):
             pid = attr["parent_id"]
             name = attr["name"]
-            pid_to_files[pid].append(attr)
+            append(pid_to_files[pid], attr)
             if name in name_to_pid:
                 name_to_pid[name] = 0
             else:
                 name_to_pid[name] = pid
-        yield do_foreach(
+        yield foreach(
             update_name_to_pid, 
             iter_files(
                 client, 
                 cid, 
                 app="android", 
                 cooldown=0.5, 
-                async_=async_, 
+                async_=async_, # type: ignore
                 **request_kwargs, 
             ), 
         )
-        # 从导出的目录树文件中获取完整路径，再根据父目录对名字进行分组
+        # 从导出的目录树文件中获取完整路径，再根据所归属目录的路径对名字进行分组
         dirpatht_to_names: dict[tuple[str, ...], list[str]] = defaultdict(list)
         def update_dirpatht_to_names(patht: list[str], /):
-            dirpatht_to_names[tuple(patht[:-1])].append(patht[-1])
-        it = export_dir_parse_iter(
-            client, 
-            export_id=export_id, 
-            parse_iter=parse_export_dir_as_patht_iter, 
-            async_=async_, # type: ignore
-            **request_kwargs, 
+            append(dirpatht_to_names[tuple(patht[:-1])], patht[-1])
+        yield foreach(
+            update_dirpatht_to_names, 
+            export_dir_parse_iter(
+                client, 
+                export_id=export_id, 
+                parse_iter=parse_export_dir_as_patht_iter, 
+                async_=async_, # type: ignore
+                **request_kwargs, 
+            ), 
         )
-        if async_:
-            root = yield anext(it, None) # type: ignore
-        else:
-            root = next(it, None) # type: ignore
-        if root is None:
+        if not name_to_pid or not dirpatht_to_names:
             return
-        yield do_foreach(update_dirpatht_to_names, it)
         # 尽量从所收集到名字中移除目录
-        for t_patht in islice(dirpatht_to_names, 1, None):
-            dirpatht_to_names[t_patht[:-1]].remove(t_patht[-1])
-        # 收集所有名字到所归属的路径列表
-        name_to_list_dirpatht: dict[str, list[tuple[str, ...]]] = defaultdict(list)
-        for dirpatht, names in dirpatht_to_names.items():
+        for dir_patht in islice(dirpatht_to_names, 1, None):
+            dirpatht_to_names[dir_patht[:-1]].remove(dir_patht[-1])
+        # 收集所有名字到所归属目录的路径
+        name_to_dirpatht: dict[str, tuple[str, ...]] = {}
+        for dir_patht, names in dirpatht_to_names.items():
             for name in names:
-                name_to_list_dirpatht[name].append(dirpatht)
-        # 仅在目录树中出现的名字必是目录，直接予以删除
-        for name in name_to_list_dirpatht.keys() - name_to_pid.keys():
-            for dir_patht in name_to_list_dirpatht["name"]:
-                dirpatht_to_names[dir_patht] = [n for n in dirpatht_to_names[dir_patht] if n != name]
-        # 对名字列表进行排序然后计算摘要值
-        def hash_names(names: Iterable[str], /) -> str:
-            s = str(sorted(names)).encode("utf-8")
-            return f"{md5(s).hexdigest()}-{len(s)}"
+                if name in name_to_dirpatht:
+                    name_to_dirpatht[name] = ()
+                else:
+                    name_to_dirpatht[name] = dir_patht
         # 用唯一出现过的名字，尽量确定所有 parent_id 所对应的路径
         pid_to_dirpatht: dict[int, tuple[str, ...]] = {}
-        undetermined: dict[str, tuple[str, ...]] = {}
+        undetermined: dict[tuple[str, ...], tuple[str, ...]] = {}
         for dir_patht, names in dirpatht_to_names.items():
             if not names:
                 continue
             for name in names:
-                if (pid := name_to_pid.get(name)) and len(name_to_list_dirpatht.get(name, ())) == 1:
+                if (pid := name_to_pid.get(name)) and name_to_dirpatht[name]:
                     pid_to_dirpatht[pid] = dir_patht
                     break
             else:
-                hashed = hash_names(names)
-                if hashed in undetermined:
-                    undetermined[hashed] = ()
+                names.sort()
+                group_key = tuple(names)
+                if group_key in undetermined:
+                    undetermined[group_key] = ()
                 else:
-                    undetermined[hashed] = dir_patht
-                def detect_file(name):
+                    undetermined[group_key] = dir_patht
+                def detect_file(name: str, /) -> bool:
                     if ext := splitext(name)[-1][1:]:
-                        if ext.strip(digits):
-                            return ext.isalnum()
+                        return bool(ext.strip(digits)) and ext.isalnum()
                     return False
-                hashed2 = hash_names(filter(detect_file, names))
-                if hashed != hashed2:
-                    if hashed2 in undetermined:
-                        undetermined[hashed2] = ()
+                group_key2 = tuple(filter(detect_file, names))
+                if group_key != group_key2:
+                    if group_key2 in undetermined:
+                        undetermined[group_key2] = ()
                     else:
-                        undetermined[hashed2] = dir_patht
-        del name_to_pid, name_to_list_dirpatht, dirpatht_to_names
+                        undetermined[group_key2] = dir_patht
         # 假设文件名列表相同，就关联 parent_id 到它的路径（注意：这有可能出错，例如有空目录和某个文件同名时）
-        if len(pid_to_files) > len(pid_to_dirpatht):
-            for pid, files in pid_to_files.items():
-                if pid in pid_to_dirpatht:
-                    continue
-                hashed = hash_names(attr["name"] for attr in files)
-                if t_patht := undetermined.pop(hashed, ()):
-                    pid_to_dirpatht[pid] = t_patht
-        del undetermined
-        unbound_pids = pid_to_files.keys() - pid_to_dirpatht.keys()
-        add_pid = unbound_pids.add
-        do_through: Callable = async_through if async_ else through
-        id_to_dirnode: dict[int, DirNode] = {}
-        while unbound_pids:
-            if len(unbound_pids) >= 1000:
-                yield do_through(iter_selected_nodes_using_star_event(
+        if pids := pid_to_files.keys() - pid_to_dirpatht.keys():
+            for pid in pids:
+                group_key = tuple(sorted(attr["name"] for attr in pid_to_files[pid]))
+                if dir_patht := undetermined.get(group_key, ()):
+                    pid_to_dirpatht[pid] = dir_patht
+            pids = pid_to_files.keys() - pid_to_dirpatht.keys()
+            if pids:
+                for dir_patht in pid_to_dirpatht.values():
+                    del dirpatht_to_names[dir_patht]
+        del name_to_pid, name_to_dirpatht, undetermined
+        def update_pid_dict(info: dict, /):
+            fid = int(info["file_id"])
+            if name in name_to_pid:
+                name_to_pid[name] = 0
+            else:
+                name_to_pid[name] = fid
+            id_to_pickcode[fid] = info["pick_code"]
+        id_to_dirnode: dict[int, tuple[str, int] | DirNode] = {}
+        go_back_depth = 1
+        while pids:
+            id_to_pickcode: dict[int, str] = {}
+            name_to_pid = {}
+            yield foreach(
+                update_pid_dict, 
+                iter_nodes_skim(client, pids, async_=async_, **request_kwargs), 
+            )
+            name_idx = -go_back_depth
+            name_to_dirpatht = {}
+            name_to_list_dirpatht: dict[str, list[tuple[str, ...]]] = defaultdict(list)
+            for dir_patht in dirpatht_to_names:
+                if len(dir_patht) > go_back_depth:
+                    name = dir_patht[name_idx]
+                    append(name_to_list_dirpatht[name], dir_patht)
+                    dir_patht = dir_patht[:name_idx]
+                    if name in name_to_dirpatht:
+                        if name_to_dirpatht[name] != dir_patht:
+                            name_to_dirpatht[name] = ()
+                    else:
+                        name_to_dirpatht[name] = dir_patht
+            for name, pid in name_to_pid.items():
+                if dir_patht := name_to_dirpatht.get(name, ()):
+                    pid_to_dirpatht[pid] = dir_patht
+                    for dir_patht in name_to_list_dirpatht[name]:
+                        del dirpatht_to_names[dir_patht]
+                    del id_to_pickcode[pid]
+            # TODO: 再用掉名字组合后也是唯一的部分路径
+            # TODO: 再用掉名字组合后唯一的部分路径组合
+            if len(id_to_pickcode) >= 1000:
+                yield through(iter_selected_nodes_using_star_event(
                     client, 
-                    unbound_pids, 
+                    id_to_pickcode, 
                     normalize_attr=None, 
                     id_to_dirnode=id_to_dirnode, 
                     app="android", 
@@ -4474,24 +4525,24 @@ def iter_files_with_path_by_export_dir(
                     **request_kwargs, 
                 ))
             else:
-                yield do_through(iter_selected_nodes_by_pickcode(
+                yield through(iter_selected_nodes_by_pickcode(
                     client, 
-                    unbound_pids, 
+                    id_to_pickcode.values(), 
                     normalize_attr=None, 
                     id_to_dirnode=id_to_dirnode, 
                     ignore_deleted=None, 
                     async_=async_, # type: ignore
                     **request_kwargs, 
                 ))
-            unbound_pids.clear()
-            for fid, (name, pid) in id_to_dirnode.items():
-                if pid and pid not in id_to_dirnode and pid not in pid_to_dirpatht:
-                    add_pid(pid)
-        del unbound_pids, add_pid
+            pids = {
+                pid for id in id_to_pickcode
+                if (pid := id_to_dirnode[id][1]) and pid not in id_to_dirnode and pid not in pid_to_dirpatht
+            }
+            go_back_depth += 1
         for pid in pid_to_files.keys() - pid_to_dirpatht.keys():
             if pid not in id_to_dirnode:
                 continue
-            pids = [pid]
+            ls_pid = [pid]
             name, pid = id_to_dirnode[pid]
             names = [name]
             dir_patht = ()
@@ -4499,18 +4550,18 @@ def iter_files_with_path_by_export_dir(
                 if pid in pid_to_dirpatht:
                     dir_patht = pid_to_dirpatht[pid]
                     break
-                pids.append(pid)
+                append(ls_pid, pid)
                 name, pid = id_to_dirnode[pid]
-                names.append(name)
+                append(names, name)
             else:
                 if not pid:
                     dir_patht = ("",)
             if dir_patht:
-                pids.reverse()
+                ls_pid.reverse()
                 names.reverse()
-                for pid, name in zip(pids, names):
+                for pid, name in zip(ls_pid, names):
                     dir_patht = pid_to_dirpatht[pid] = (*dir_patht, name)
-        del id_to_dirnode
+        del id_to_dirnode, dirpatht_to_names
         # 迭代地返回所有文件节点信息
         for pid, files in pid_to_files.items():
             if pid not in pid_to_dirpatht:
