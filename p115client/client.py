@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__all__ = ["check_response", "normalize_attr", "normalize_attr_web", "normalize_attr_app", "normalize_attr_app2", "P115Client"]
+__all__ = [
+    "check_response", "normalize_attr", "normalize_attr_simple", "normalize_attr_web", 
+    "normalize_attr_app", "normalize_attr_app2", "P115Client", 
+]
 
 import errno
 
@@ -481,116 +484,134 @@ def check_response(resp: dict | Awaitable[dict], /) -> dict | Coroutine[Any, Any
 def normalize_attr_web(
     info: Mapping, 
     /, 
+    simple: bool = False, 
     keep_raw: bool = False, 
-    dict_cls: type[AttrDict] = AttrDict, 
-) -> AttrDict[str, Any]:
+    dict_cls: None | type[dict] = None, 
+) -> dict[str, Any]:
     """翻译 `P115Client.fs_files`、`P115Client.fs_search`、`P115Client.share_snap` 等接口响应的文件信息数据，使之便于阅读
 
     :param info: 原始数据
+    :param simple: 只提取少量必要字段 "is_dir", "id", "parent_id", "name", "sha1", "size", "pickcode", "is_collect", "ctime", "mtime"
     :param keep_raw: 是否保留原始数据，如果为 True，则保存到 "raw" 字段
     :param dict_cls: 字典类型
 
     :return: 翻译后的 dict 类型数据
     """
-    attr: AttrDict[str, Any] = dict_cls()
-    if "aid" in info:
-        attr["area_id"] = int(info["aid"])
-    is_directory = attr["is_dir"] = attr["is_directory"] = "fid" not in info
+    if dict_cls is None:
+        if simple:
+            dict_cls = dict
+        else:
+            dict_cls = AttrDict
+    attr: dict[str, Any] = dict_cls()
+    is_directory = attr["is_dir"] = "fid" not in info
+    if not simple:
+        attr["is_directory"] = is_directory
     if is_directory:
         attr["id"] = int(info["cid"])        # cid => category_id
         attr["parent_id"] = int(info["pid"]) # pid => parent_id
     else:
         attr["id"] = int(info["fid"])        # fid => file_id
         attr["parent_id"] = int(info["cid"])
-    if "pc" in info:
-        attr["pickcode"] = attr["pick_code"] = info["pc"]
-    if "pt" in info:
-        attr["pick_time"] = int(info["pt"] or 0)
-    if "e" in info:
-        attr["pick_expire"] = int(info["e"] or 0)
     attr["name"] = info["n"]
+    attr["sha1"] = info.get("sha") or ""
     attr["size"] = int(info.get("s") or 0)
-    attr["sha1"] = info.get("sha")
-    attr["labels"] = info["fl"]
-    if "score" in info:
-        attr["score"] = int(info.get("score") or 0)
-    attr["ico"] = info.get("ico", "folder" if is_directory else "")
-    if "te" in info:
-        attr["mtime"] = attr["user_utime"] = int(info["te"])
-    if "tp" in info:
-        attr["ctime"] = attr["user_ptime"] = int(info["tp"])
-    if "to" in info:
-        attr["atime"] = attr["user_otime"] = int(info["to"])
-    if "tu" in info:
-        attr["utime"] = int(info["tu"])
-    if t := info.get("t"):
-        if isinstance(t, (int, float)):
-            attr["time"] = t
-        elif t.isdecimal():
-            attr["time"] = int(t)
-    if "fdes" in info:
-        val = info["fdes"]
-        if isinstance(val, str):
-            attr["desc"] = val
-        attr["has_desc"] = bool(val)
-    for key, name in (
-        ("hdf", "hidden"), 
-        ("hdf", "is_private"), 
-        ("issct", "is_shortcut"), 
-        ("ispl", "show_play_long"), 
-        ("is_top", "is_top"), 
-        ("iv", "is_video"), 
-        ("m", "star"), 
-        ("m", "is_mark"), 
-        ("c", "violated"), 
-        ("c", "is_collect"), 
-        ("sh", "is_share"), 
-        #("d", "has_desc"), 
-        #("p", "has_pass"), 
-    ):
-        if key in info:
-            attr[name] = int(info[key] or 0) == 1
-    for key, name in (
-        ("dp", "dir_path"), 
-        ("style", "style"), 
-        ("ns", "name_show"), 
-        ("cc", "cover"), 
-        ("sta", "status"), 
-        ("class", "class"), 
-        ("u", "thumb"), 
-        ("play_long", "play_long"), 
-        ("audio_play_long", "audio_play_long"), 
-        ("current_time", "current_time"), 
-        ("last_time", "last_time"), 
-        ("played_end", "played_end"), 
-    ):
-        if key in info:
-            attr[name] = info[key]
-    if vdi := info.get("vdi"):
-        attr["defination"] = vdi
-        match vdi:
-            case 2:
-                attr["defination_str"] = "video-hd"
-            case 3:
-                attr["defination_str"] = "video-fhd"
-            case 4:
-                attr["defination_str"] = "video-1080p"
-            case 5:
-                attr["defination_str"] = "video-4k"
-            case 100:
-                attr["defination_str"] = "video-origin"
-            case _:
-                attr["defination_str"] = "video-sd"
-    if is_directory:
-        attr["type"] = 0
-    elif info.get("iv") or "vdi" in info:
-        attr["type"] = 4
-    elif type := CLASS_TO_TYPE.get(attr.get("class", "")):
-        attr["type"] = type
-    elif type := SUFFIX_TO_TYPE.get(splitext(attr["name"])[1].lower()):
-        attr["type"] = type
+    if "pc" in info:
+        attr["pickcode"] = info["pc"]
+        if not simple:
+            attr["pick_code"] = attr["pickcode"]
+            if "pt" in info:
+                attr["pick_time"] = int(info["pt"] or 0)
+            if "e" in info:
+                attr["pick_expire"] = int(info["e"] or 0)
+    if simple:
+        if "c" in info:
+            attr["is_collect"] = int(info["c"])
+        if "tp" in info:
+            attr["ctime"] = int(info["tp"])
+        if "te" in info:
+            attr["mtime"] = int(info["te"])
     else:
-        attr["type"] = 99
+        attr["labels"] = info["fl"]
+        if "score" in info:
+            attr["score"] = int(info.get("score") or 0)
+        attr["ico"] = info.get("ico", "folder" if is_directory else "")
+        if "te" in info:
+            attr["mtime"] = attr["user_utime"] = int(info["te"])
+        if "tp" in info:
+            attr["ctime"] = attr["user_ptime"] = int(info["tp"])
+        if "to" in info:
+            attr["atime"] = attr["user_otime"] = int(info["to"])
+        if "tu" in info:
+            attr["utime"] = int(info["tu"])
+        if t := info.get("t"):
+            if isinstance(t, (int, float)):
+                attr["time"] = t
+            elif t.isdecimal():
+                attr["time"] = int(t)
+        if "fdes" in info:
+            val = info["fdes"]
+            if isinstance(val, str):
+                attr["desc"] = val
+            attr["has_desc"] = bool(val)
+        for key, name in (
+            ("aid", "area_id"), 
+            ("hdf", "hidden"), 
+            ("hdf", "is_private"), 
+            ("issct", "is_shortcut"), 
+            ("ispl", "show_play_long"), 
+            ("is_top", "is_top"), 
+            ("iv", "is_video"), 
+            ("m", "star"), 
+            ("m", "is_mark"), 
+            ("c", "violated"), 
+            ("c", "is_collect"), 
+            ("sh", "is_share"), 
+            #("d", "has_desc"), 
+            #("p", "has_pass"), 
+        ):
+            if key in info:
+                attr[name] = int(info[key] or 0)
+        for key, name in (
+            ("dp", "dir_path"), 
+            ("style", "style"), 
+            ("ns", "name_show"), 
+            ("cc", "cover"), 
+            ("sta", "status"), 
+            ("class", "class"), 
+            ("u", "thumb"), 
+            ("play_long", "play_long"), 
+            ("audio_play_long", "audio_play_long"), 
+            ("current_time", "current_time"), 
+            ("last_time", "last_time"), 
+            ("played_end", "played_end"), 
+        ):
+            if key in info:
+                attr[name] = info[key]
+        if vdi := info.get("vdi"):
+            attr["defination"] = vdi
+            match vdi:
+                case 2:
+                    attr["defination_str"] = "video-hd"
+                case 3:
+                    attr["defination_str"] = "video-fhd"
+                case 4:
+                    attr["defination_str"] = "video-1080p"
+                case 5:
+                    attr["defination_str"] = "video-4k"
+                case 100:
+                    attr["defination_str"] = "video-origin"
+                case _:
+                    attr["defination_str"] = "video-sd"
+        if is_directory:
+            attr["type"] = 0
+        elif info.get("iv") or "vdi" in info:
+            attr["type"] = 4
+        elif type := CLASS_TO_TYPE.get(attr.get("class", "")):
+            attr["type"] = type
+        elif type := SUFFIX_TO_TYPE.get(splitext(attr["name"])[1].lower()):
+            attr["type"] = type
+        else:
+            attr["type"] = 99
     if keep_raw:
         attr["raw"] = info
     return attr
@@ -599,89 +620,107 @@ def normalize_attr_web(
 def normalize_attr_app(
     info: Mapping, 
     /, 
+    simple: bool = False, 
     keep_raw: bool = False, 
-    dict_cls: type[AttrDict] = AttrDict, 
-) -> AttrDict[str, Any]:
-    """翻译 `P115Client.fs_files_app` 等接口响应的文件信息数据，使之便于阅读
+    dict_cls: None | type[dict] = None, 
+) -> dict[str, Any]:
+    """翻译 `P115Client.fs_files_app` 接口响应的文件信息数据，使之便于阅读
 
     :param info: 原始数据
+    :param simple: 只提取少量必要字段 "is_dir", "id", "parent_id", "name", "sha1", "size", "pickcode", "is_collect", "ctime", "mtime"
     :param keep_raw: 是否保留原始数据，如果为 True，则保存到 "raw" 字段
     :param dict_cls: 字典类型
 
     :return: 翻译后的 dict 类型数据
     """
-    attr: AttrDict[str, Any] = dict_cls()
-    if "aid" in info:
-        attr["area_id"] = int(info["aid"])
-    is_directory = attr["is_dir"] = attr["is_directory"] = info["fc"] == "0" # fc => file_category
+    if dict_cls is None:
+        if simple:
+            dict_cls = dict
+        else:
+            dict_cls = AttrDict
+    attr: dict[str, Any] = dict_cls()
+    is_directory = attr["is_dir"] = info["fc"] == "0" # fc => file_category
+    if not simple:
+        attr["is_directory"] = is_directory
     attr["id"] = int(info["fid"])        # fid => file_id
     attr["parent_id"] = int(info["pid"]) # pid => parent_id
-    if "pc" in info:
-        attr["pickcode"] = attr["pick_code"] = info["pc"]
     attr["name"] = info["fn"]
+    sha1 = attr["sha1"] = info.get("sha1") or ""
     attr["size"] = int(info.get("fs") or 0)
-    sha1 = attr["sha1"] = info.get("sha1")
-    attr["labels"] = info["fl"]
-    attr["ico"] = info.get("ico", "folder" if attr["is_dir"] else "")
-    if "ftype" in info:
-        attr["file_type"] = int(info["ftype"] or 0)
-    if "thumb" in info:
-        thumb = info["thumb"]
-        if thumb.startswith("?"):
-            thumb = f"http://imgjump.115.com{thumb}&size=0&sha1={sha1}"
-        attr["thumb"] = thumb
-    if "uppt" in info: # pptime
-        attr["ctime"] = attr["user_ptime"] = int(info["uppt"])
-    if "upt" in info: # ptime
-        attr["mtime"] = attr["user_utime"] = int(info["upt"])
-    if "uet" in info: # utime
-        attr["utime"] = int(info["uet"])
-    for key, name in (
-        ("ism", "star"), 
-        ("ism", "is_mark"), 
-        ("is_top", "is_top"), 
-        ("isp", "hidden"), 
-        ("isp", "is_private"), 
-        ("ispl", "show_play_long"), 
-        ("iss", "is_share"), 
-        ("isv", "is_video"), 
-        ("issct", "is_shortcut"), 
-        ("ic", "violated"), 
-        ("ic", "is_collect"), 
-        ("unzip_status", "unzip_status"), 
-    ):
-        if key in info:
-            attr[name] = int(info[key] or 0) == 1
-    for key, name in (
-        ("def", "defination"), 
-        ("def2", "defination2"), 
-        ("fco", "cover"), 
-        ("fdesc", "desc"), 
-        ("flabel", "fflabel"), 
-        ("multitrack", "multitrack"), 
-        ("play_long", "play_long"), 
-        ("muc", "cover"), 
-        ("d_img", "d_img"), 
-        ("v_img", "video_img_url"), 
-        ("audio_play_long", "audio_play_long"), 
-        ("current_time", "current_time"), 
-        ("last_time", "last_time"), 
-        ("played_end", "played_end"), 
-    ):
-        if key in info:
-            attr[name] = info[key]
-    if is_directory:
-        attr["type"] = 0
-    elif thumb := info.get("thumb") and thumb.startswith("?"):
-        attr["type"] = 2
-    elif "muc" in info:
-        attr["type"] = 3
-    elif info.get("isv") or "def" in info or "def2" in info or "v_img" in info:
-        attr["type"] = 4
-    elif type := SUFFIX_TO_TYPE.get(splitext(attr["name"])[1].lower()):
-        attr["type"] = type
+    if "pc" in info:
+        attr["pickcode"] = info["pc"]
+        if not simple:
+            attr["pick_code"] = attr["pickcode"]
+    if simple:
+        if "ic" in info:
+            attr["is_collect"] = int(info["ic"])
+        if "uppt" in info:
+            attr["ctime"] = int(info["uppt"])
+        if "upt" in info:
+            attr["mtime"] = int(info["upt"])
     else:
-        attr["type"] = 99
+        attr["labels"] = info["fl"]
+        attr["ico"] = info.get("ico", "folder" if attr["is_dir"] else "")
+        if "ftype" in info:
+            attr["file_type"] = int(info["ftype"] or 0)
+        if "thumb" in info:
+            thumb = info["thumb"]
+            if thumb.startswith("?"):
+                thumb = f"http://imgjump.115.com{thumb}&size=0&sha1={sha1}"
+            attr["thumb"] = thumb
+        if "uppt" in info: # pptime
+            attr["ctime"] = attr["user_ptime"] = int(info["uppt"])
+        if "upt" in info: # ptime
+            attr["mtime"] = attr["user_utime"] = int(info["upt"])
+        if "uet" in info: # utime
+            attr["utime"] = int(info["uet"])
+        for key, name in (
+            ("aid", "area_id"), 
+            ("ism", "star"), 
+            ("ism", "is_mark"), 
+            ("is_top", "is_top"), 
+            ("isp", "hidden"), 
+            ("isp", "is_private"), 
+            ("ispl", "show_play_long"), 
+            ("iss", "is_share"), 
+            ("isv", "is_video"), 
+            ("issct", "is_shortcut"), 
+            ("ic", "violated"), 
+            ("ic", "is_collect"), 
+            ("unzip_status", "unzip_status"), 
+        ):
+            if key in info:
+                attr[name] = int(info[key] or 0)
+        for key, name in (
+            ("def", "defination"), 
+            ("def2", "defination2"), 
+            ("fco", "cover"), 
+            ("fdesc", "desc"), 
+            ("flabel", "fflabel"), 
+            ("multitrack", "multitrack"), 
+            ("play_long", "play_long"), 
+            ("muc", "cover"), 
+            ("d_img", "d_img"), 
+            ("v_img", "video_img_url"), 
+            ("audio_play_long", "audio_play_long"), 
+            ("current_time", "current_time"), 
+            ("last_time", "last_time"), 
+            ("played_end", "played_end"), 
+        ):
+            if key in info:
+                attr[name] = info[key]
+        if is_directory:
+            attr["type"] = 0
+        elif thumb := info.get("thumb") and thumb.startswith("?"):
+            attr["type"] = 2
+        elif "muc" in info:
+            attr["type"] = 3
+        elif info.get("isv") or "def" in info or "def2" in info or "v_img" in info:
+            attr["type"] = 4
+        elif type := SUFFIX_TO_TYPE.get(splitext(attr["name"])[1].lower()):
+            attr["type"] = type
+        else:
+            attr["type"] = 99
     if keep_raw:
         attr["raw"] = info
     return attr
@@ -690,95 +729,122 @@ def normalize_attr_app(
 def normalize_attr_app2(
     info: Mapping, 
     /, 
+    simple: bool = False, 
     keep_raw: bool = False, 
-    dict_cls: type[AttrDict] = AttrDict, 
-) -> AttrDict[str, Any]:
-    attr: AttrDict[str, Any] = dict_cls()
-    if "aid" in info:
-        attr["area_id"] = int(info["area_id"])
-    is_directory = attr["is_dir"] = attr["is_directory"] = "file_id" not in info
+    dict_cls: None | type[dict] = None, 
+) -> dict[str, Any]:
+    """翻译 `P115Client.fs_files_app2` 接口响应的文件信息数据，使之便于阅读
+
+    :param info: 原始数据
+    :param simple: 只提取少量必要字段 "is_dir", "id", "parent_id", "name", "sha1", "size", "pickcode", "is_collect", "ctime", "mtime"
+    :param keep_raw: 是否保留原始数据，如果为 True，则保存到 "raw" 字段
+    :param dict_cls: 字典类型
+
+    :return: 翻译后的 dict 类型数据
+    """
+    if dict_cls is None:
+        if simple:
+            dict_cls = dict
+        else:
+            dict_cls = AttrDict
+    attr: dict[str, Any] = dict_cls()
+    is_directory = attr["is_dir"] = "file_id" not in info
+    if not simple:
+        attr["is_directory"] = is_directory
     if is_directory:
         attr["id"] = int(info["file_id"])
         attr["parent_id"] = int(info["category_id"])
         attr["name"] = info["file_name"]
-        attr["sha1"] = info["sha1"]
-        attr["size"] = int(info["file_size"])
-        if "thumb_url" in info:
-            attr["thumb"] = info["thumb_url"]
-        if "file_description" in info:
-            attr["desc"] = info["file_description"]
-        if "file_tag" in info:
-            attr["file_type"] = int(info["file_tag"])
-        if "music_cover" in info:
-            attr["cover"] = info["music_cover"]
-        if "user_pptime" in info:
-            attr["ctime"] = attr["user_ptime"] = int(info["user_pptime"])
-        if "user_ptime" in info:
-            attr["mtime"] = attr["user_utime"] = int(info["user_ptime"])
-        if "user_utime" in info:
-            attr["utime"] = int(info["user_utime"])
     else:
         attr["id"] = int(info["category_id"])
         attr["parent_id"] = int(info["parent_id"])
         attr["name"] = info["category_name"]
-        attr["sha1"] = ""
-        attr["size"] = 0
-        if "category_desc" in info:
-            attr["desc"] = info["category_desc"]
-        if "category_cover" in info:
-            attr["cover"] = info["category_cover"]
-        if "pptime" in info:
-            attr["ctime"] = attr["user_ptime"] = int(info["pptime"])
-        if "ptime" in info:
-            attr["mtime"] = attr["user_utime"] = int(info["ptime"])
-        if "utime" in info:
-            attr["utime"] = int(info["utime"])
-    attr["pickcode"] = attr["pick_code"] = info["pick_code"]
-    attr["ico"] = info.get("ico", "folder" if attr["is_dir"] else "")
-    attr["labels"] = info["fl"]
-    for key, name in (
-        ("has_desc", "has_desc"), 
-        ("has_pass", "has_pass"), 
-        ("is_mark", "star"), 
-        ("is_mark", "is_mark"), 
-        ("is_top", "is_top"), 
-        ("is_private", "hidden"), 
-        ("is_private", "is_private"), 
-        ("show_play_long", "show_play_long"), 
-        ("is_share", "is_share"), 
-        ("is_video", "is_video"), 
-        ("is_collect", "violated"), 
-        ("is_collect", "is_collect"), 
-        ("can_delete", "can_delete"), 
-        ("file_category", "file_category"), 
-    ):
-        if key in info:
-            attr[name] = int(info[key] or 0) == 1
-    for name in (
-        "pick_time", "pick_expire", "file_status", "file_sort", "definition", 
-        "definition2", "play_long", "current_time", "played_end", 
-        "last_time", "cate_mark", "category_file_count", "category_order", 
-    ):
-        if name in info:
-            attr[name] = int(info[name] or 0)
-    for name in (
-        "file_eda", "file_question", "file_answer", "password", "video_img_url", 
-        "play_url", "d_img", 
-    ):
-        if name in info:
-            attr[name] = info[name]
-    if is_directory:
-        attr["type"] = 0
-    elif "thumb_url" in info:
-        attr["type"] = 2
-    elif "music_cover" in info or "play_url" in info:
-        attr["type"] = 3
-    elif info.get("is_video") or "definition" in info or "definition2" in info or "video_img_url" in info:
-        attr["type"] = 4
-    elif type := SUFFIX_TO_TYPE.get(splitext(attr["name"])[1].lower()):
-        attr["type"] = type
+    attr["sha1"] = info.get("sha1") or ""
+    attr["size"] = int(info.get("file_size") or 0)
+    if "pick_code" in info:
+        attr["pickcode"] = info["pick_code"]
+        if not simple:
+            attr["pick_code"] = attr["pickcode"]
+    if simple:
+        if "is_collect" in info:
+            attr["is_collect"] = int(info["is_collect"])
+        if "user_pptime" in info:
+            attr["ctime"] = int(info["user_pptime"])
+        if "user_ptime" in info:
+            attr["mtime"] = int(info["user_ptime"])
     else:
-        attr["type"] = 99
+        if is_directory:
+            if "thumb_url" in info:
+                attr["thumb"] = info["thumb_url"]
+            if "file_description" in info:
+                attr["desc"] = info["file_description"]
+            if "file_tag" in info:
+                attr["file_type"] = int(info["file_tag"])
+            if "music_cover" in info:
+                attr["cover"] = info["music_cover"]
+            if "user_pptime" in info:
+                attr["ctime"] = attr["user_ptime"] = int(info["user_pptime"])
+            if "user_ptime" in info:
+                attr["mtime"] = attr["user_utime"] = int(info["user_ptime"])
+            if "user_utime" in info:
+                attr["utime"] = int(info["user_utime"])
+        else:
+            if "category_desc" in info:
+                attr["desc"] = info["category_desc"]
+            if "category_cover" in info:
+                attr["cover"] = info["category_cover"]
+            if "pptime" in info:
+                attr["ctime"] = attr["user_ptime"] = int(info["pptime"])
+            if "ptime" in info:
+                attr["mtime"] = attr["user_utime"] = int(info["ptime"])
+            if "utime" in info:
+                attr["utime"] = int(info["utime"])
+        attr["ico"] = info.get("ico", "folder" if attr["is_dir"] else "")
+        attr["labels"] = info["fl"]
+        for key, name in (
+            ("area_id", "area_id"), 
+            ("has_desc", "has_desc"), 
+            ("has_pass", "has_pass"), 
+            ("is_mark", "star"), 
+            ("is_mark", "is_mark"), 
+            ("is_top", "is_top"), 
+            ("is_private", "hidden"), 
+            ("is_private", "is_private"), 
+            ("show_play_long", "show_play_long"), 
+            ("is_share", "is_share"), 
+            ("is_video", "is_video"), 
+            ("is_collect", "violated"), 
+            ("is_collect", "is_collect"), 
+            ("can_delete", "can_delete"), 
+            ("file_category", "file_category"), 
+        ):
+            if key in info:
+                attr[name] = int(info[key] or 0)
+        for name in (
+            "pick_time", "pick_expire", "file_status", "file_sort", "definition", 
+            "definition2", "play_long", "current_time", "played_end", 
+            "last_time", "cate_mark", "category_file_count", "category_order", 
+        ):
+            if name in info:
+                attr[name] = int(info[name] or 0)
+        for name in (
+            "file_eda", "file_question", "file_answer", "password", "video_img_url", 
+            "play_url", "d_img", 
+        ):
+            if name in info:
+                attr[name] = info[name]
+        if is_directory:
+            attr["type"] = 0
+        elif "thumb_url" in info:
+            attr["type"] = 2
+        elif "music_cover" in info or "play_url" in info:
+            attr["type"] = 3
+        elif info.get("is_video") or "definition" in info or "definition2" in info or "video_img_url" in info:
+            attr["type"] = 4
+        elif type := SUFFIX_TO_TYPE.get(splitext(attr["name"])[1].lower()):
+            attr["type"] = type
+        else:
+            attr["type"] = 99
     if keep_raw:
         attr["raw"] = info
     return attr
@@ -787,23 +853,33 @@ def normalize_attr_app2(
 def normalize_attr(
     info: Mapping, 
     /, 
+    simple: bool = False, 
     keep_raw: bool = False, 
-    dict_cls: type[AttrDict] = AttrDict, 
-) -> AttrDict[str, Any]:
+    dict_cls: None | type[dict] = None, 
+) -> dict[str, Any]:
     """翻译获取自罗列目录、搜索、获取文件信息等接口的数据，使之便于阅读
 
     :param info: 原始数据
+    :param simple: 只提取少量必要字段 "is_dir", "id", "parent_id", "name", "sha1", "size", "pickcode", "is_collect", "ctime", "mtime"
     :param keep_raw: 是否保留原始数据，如果为 True，则保存到 "raw" 字段
     :param dict_cls: 字典类型
 
     :return: 翻译后的 dict 类型数据
     """
     if "fn" in info:
-        return normalize_attr_app(info, keep_raw=keep_raw, dict_cls=dict_cls)
+        return normalize_attr_app(info, simple=simple, keep_raw=keep_raw, dict_cls=dict_cls)
     elif "file_id" in info or "category_id" in info:
-        return normalize_attr_app2(info, keep_raw=keep_raw, dict_cls=dict_cls)
+        return normalize_attr_app2(info, simple=simple, keep_raw=keep_raw, dict_cls=dict_cls)
     else:
-        return normalize_attr_web(info, keep_raw=keep_raw, dict_cls=dict_cls)
+        return normalize_attr_web(info, simple=simple, keep_raw=keep_raw, dict_cls=dict_cls)
+
+
+def normalize_attr_simple(
+    info: Mapping, 
+    /, 
+    keep_raw: bool = False, 
+) -> dict[str, Any]:
+    return normalize_attr(info, simple=True, keep_raw=keep_raw)
 
 
 class IgnoreCaseDict[V](dict[str, V]):

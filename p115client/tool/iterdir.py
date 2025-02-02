@@ -1394,13 +1394,13 @@ def ensure_attr_path[D: dict](
     async_: Literal[False, True] = False, 
     **request_kwargs, 
 ) -> Iterator[D] | AsyncIterator[D]:
-    """为一组文件信息添加 "path" 和 "posixpath" 或 "ancestors" 字段
+    """为一组文件信息添加 "path" 或 "ancestors" 字段
 
     :param client: 115 客户端或 cookies
     :param attrs: 一组文件或目录的信息
     :param page_size: 分页大小
     :param with_ancestors: 文件信息中是否要包含 "ancestors"
-    :param with_path: 文件信息中是否要包含 "path" 和 "posixpath"
+    :param with_path: 文件信息中是否要包含 "path"
     :param use_star: 获取目录信息时，是否允许使用星标
     :param life_event_cooldown: 冷却时间，大于 0 时，两次拉取操作事件的接口调用之间至少间隔这么多秒
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
@@ -1453,27 +1453,21 @@ def ensure_attr_path[D: dict](
             return ancestors
     if with_path:
         id_to_path: dict[int, str] = {}
-        id_to_posixpath: dict[int, str] = {}
-        def get_path(attr: dict | tuple[str, int] | DirNode, /) -> tuple[str, str]:
+        def get_path(attr: dict | tuple[str, int] | DirNode, /) -> str:
             if isinstance(attr, (DirNode, tuple)):
                 name, pid = attr
             else:
                 pid = attr["parent_id"]
                 name = attr["name"]
-            ename = name
             if escape is not None:
-                ename = escape(ename)
-            name = name.replace("/", "|")
+                name = escape(name)
             if pid == 0:
-                return "/" + ename, "/" + name
+                dirname = "/"
             elif pid in id_to_path:
-                return id_to_path[pid] + ename, id_to_posixpath[pid] + name
+                dirname = id_to_path[pid]
             else:
-                dirname, posix_dirname = get_path(id_to_dirnode[pid])
-                dirname += "/"
-                posix_dirname += "/"
-                id_to_path[pid], id_to_posixpath[pid] = dirname, posix_dirname
-                return dirname + ename, posix_dirname + name
+                dirname = id_to_path[pid] = get_path(id_to_dirnode[pid]) + "/"
+            return dirname + name
     def gen_step():
         if make_up_missing:
             pids: set[int] = set()
@@ -1522,7 +1516,7 @@ def ensure_attr_path[D: dict](
                 if with_ancestors:
                     attr["ancestors"] = get_ancestors(attr["id"], attr)
                 if with_path:
-                    attr["path"], attr["posixpath"] = get_path(attr)
+                    attr["path"] = get_path(attr)
             except Exception as e:
                 match errors:
                     case "raise":
@@ -1531,7 +1525,6 @@ def ensure_attr_path[D: dict](
                         warn(f"{type(e).__module__}.{type(e).__qualname__}: {e} of {attr}", category=P115Warning)
                 attr.setdefault("ancestors", None)
                 attr.setdefault("path", "")
-                attr.setdefault("posixpath", "")
             yield Yield(attr, identity=True)
     return run_gen_step_iter(gen_step, async_=async_)
 
@@ -1579,7 +1572,7 @@ def ensure_attr_path_by_category_get[D: dict](
     async_: Literal[False, True] = False, 
     **request_kwargs, 
 ) -> Iterator[D] | AsyncIterator[D]:
-    """为一组文件信息添加 "path" 和 "posixpath" 或 "ancestors" 字段
+    """为一组文件信息添加 "path" 或 "ancestors" 字段
 
     .. caution::
         风控非常严重，建议不要使用
@@ -1587,7 +1580,7 @@ def ensure_attr_path_by_category_get[D: dict](
     :param client: 115 客户端或 cookies
     :param attrs: 一组文件或目录的信息
     :param with_ancestors: 文件信息中是否要包含 "ancestors"
-    :param with_path: 文件信息中是否要包含 "path" 和 "posixpath"
+    :param with_path: 文件信息中是否要包含 "path"
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典，如果为 ...，则忽略
     :param app: 使用某个 app （设备）的接口
@@ -1643,12 +1636,12 @@ def ensure_attr_path_by_category_get[D: dict](
             if escape is not None:
                 name = escape(name)
             if pid == 0:
-                return "/" + name
+                dirname = "/"
             elif pid in id_to_path:
-                return id_to_path[pid] + name
+                dirname = id_to_path[pid]
             else:
                 dirname = id_to_path[pid] = get_path(id_to_dirnode[pid]) + "/"
-                return dirname + name
+            return dirname + name
     waiting: WeakValueDictionary[int, Any] = WeakValueDictionary()
     none: set[int] = set()
     if async_:
@@ -1913,7 +1906,7 @@ def iterdir(
     :param show_dir: 展示文件夹。0: 否，1: 是
     :param fc_mix: 文件夹置顶。0: 文件夹在文件之前，1: 文件和文件夹混合并按指定排序
     :param with_ancestors: 文件信息中是否要包含 "ancestors"
-    :param with_path: 文件信息中是否要包含 "path" 和 "posixpath"
+    :param with_path: 文件信息中是否要包含 "path"
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
@@ -2015,7 +2008,7 @@ def iterdir_limited(
     :param client: 115 客户端或 cookies
     :param cid: 目录 id
     :param with_ancestors: 文件信息中是否要包含 "ancestors"
-    :param with_path: 文件信息中是否要包含 "path" 和 "posixpath"
+    :param with_path: 文件信息中是否要包含 "path"
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
@@ -2379,7 +2372,7 @@ def iter_files(
     :param asc: 升序排列。0: 否，1: 是
     :param cur: 仅当前目录。0: 否（将遍历子目录树上所有叶子节点），1: 是
     :param with_ancestors: 文件信息中是否要包含 "ancestors"
-    :param with_path: 文件信息中是否要包含 "path" 和 "posixpath"
+    :param with_path: 文件信息中是否要包含 "path"
     :param use_star: 获取目录信息时，是否允许使用星标 （如果为 None，则采用流处理，否则采用批处理）
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
@@ -2433,12 +2426,12 @@ def iter_files(
             if escape is not None:
                 name = escape(name)
             if pid == 0:
-                return "/" + name
+                dirname = "/"
             elif pid in id_to_path:
-                return id_to_path[pid] + name
+                dirname = id_to_path[pid]
             else:
                 dirname = id_to_path[pid] = get_path(id_to_dirnode[pid]) + "/"
-                return dirname + name
+            return dirname + name
     def gen_step():
         it = iter_files_raw(
             client, 
@@ -2598,7 +2591,7 @@ def traverse_files(
     :param auto_splitting_threshold: 如果 `auto_splitting_tasks` 为 True，且目录内的文件数大于 `auto_splitting_threshold`，则分拆此任务到它的各个直接子目录，否则批量拉取
     :param auto_splitting_statistics_timeout: 如果执行统计超过此时间，则立即终止，并认为文件是无限多
     :param with_ancestors: 文件信息中是否要包含 "ancestors"
-    :param with_path: 文件信息中是否要包含 "path" 和 "posixpath"
+    :param with_path: 文件信息中是否要包含 "path"
     :param use_star: 获取目录信息时，是否允许使用星标 （如果为 None，则采用流处理，否则采用批处理）
     :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
@@ -4162,6 +4155,8 @@ def iter_files_with_path(
     asc: Literal[0, 1] = 1, 
     cur: Literal[0, 1] = 0, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
+    escape: None | Callable[[str], str] = escape, 
+    with_ancestors: bool = True, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     path_already: bool = False, 
     raise_for_changed_count: bool = False, 
@@ -4184,6 +4179,8 @@ def iter_files_with_path(
     asc: Literal[0, 1] = 1, 
     cur: Literal[0, 1] = 0, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
+    escape: None | Callable[[str], str] = escape, 
+    with_ancestors: bool = True, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     path_already: bool = False, 
     raise_for_changed_count: bool = False, 
@@ -4205,6 +4202,8 @@ def iter_files_with_path(
     asc: Literal[0, 1] = 1, 
     cur: Literal[0, 1] = 0, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
+    escape: None | Callable[[str], str] = escape, 
+    with_ancestors: bool = True, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     path_already: bool = False, 
     raise_for_changed_count: bool = False, 
@@ -4215,7 +4214,7 @@ def iter_files_with_path(
     async_: Literal[False, True] = False, 
     **request_kwargs, 
 ) -> Iterator[dict] | AsyncIterator[dict]:
-    """遍历目录树，获取文件信息（包含 "path"、"posixpath" 和 "ancestors"）
+    """遍历目录树，获取文件信息（包含 "path"，可选 "ancestors"）
 
     :param client: 115 客户端或 cookies
     :param cid: 目录 id
@@ -4244,6 +4243,8 @@ def iter_files_with_path(
     :param asc: 升序排列。0: 否，1: 是
     :param cur: 仅当前目录。0: 否（将遍历子目录树上所有叶子节点），1: 是
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
+    :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
+    :param with_ancestors: 文件信息中是否要包含 "ancestors"
     :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
     :param path_already: 如果为 True，则说明 id_to_dirnode 中已经具备构建路径所需要的目录节点，所以不会再去拉取目录节点的信息
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
@@ -4302,47 +4303,43 @@ def iter_files_with_path(
                     while True:
                         attr = yield get_next
                         yield run_gen_step(fetch_dirs(attr["pickcode"]), async_=async_)
-    id_to_ancestors: dict[int, list[dict]] = {}
-    def get_ancestors(id: int, attr: dict | tuple[str, int] | DirNode, /) -> list[dict]:
-        if isinstance(attr, (DirNode, tuple)):
-            name, pid = attr
-        else:
-            pid = attr["parent_id"]
-            name = attr["name"]
-        if pid == 0:
-            ancestors = [{"id": 0, "parent_id": 0, "name": ""}]
-        else:
-            if pid not in id_to_ancestors:
-                id_to_ancestors[pid] = get_ancestors(pid, id_to_dirnode[pid])
-            ancestors = [*id_to_ancestors[pid]]
-        ancestors.append({"id": id, "parent_id": pid, "name": name})
-        return ancestors
+    if with_ancestors:
+        id_to_ancestors: dict[int, list[dict]] = {}
+        def get_ancestors(id: int, attr: dict | tuple[str, int] | DirNode, /) -> list[dict]:
+            if isinstance(attr, (DirNode, tuple)):
+                name, pid = attr
+            else:
+                pid = attr["parent_id"]
+                name = attr["name"]
+            if pid == 0:
+                ancestors = [{"id": 0, "parent_id": 0, "name": ""}]
+            else:
+                if pid not in id_to_ancestors:
+                    id_to_ancestors[pid] = get_ancestors(pid, id_to_dirnode[pid])
+                ancestors = [*id_to_ancestors[pid]]
+            ancestors.append({"id": id, "parent_id": pid, "name": name})
+            return ancestors
     id_to_path: dict[int, str] = {}
-    id_to_posixpath: dict[int, str] = {}
-    def get_path(attr: dict | tuple[str, int] | DirNode, /) -> tuple[str, str]:
+    def get_path(attr: dict | tuple[str, int] | DirNode, /) -> str:
         if isinstance(attr, (DirNode, tuple)):
             name, pid = attr
         else:
             pid = attr["parent_id"]
             name = attr["name"]
-        ename = name
         if escape is not None:
-            ename = escape(ename)
-        name = name.replace("/", "|")
+            name = escape(name)
         if pid == 0:
-            return "/" + ename, "/" + name
+            dirname = "/"
         elif pid in id_to_path:
-            return id_to_path[pid] + ename, id_to_posixpath[pid] + name
+            dirname = id_to_path[pid]
         else:
-            dirname, posix_dirname = get_path(id_to_dirnode[pid])
-            dirname += "/"
-            posix_dirname += "/"
-            id_to_path[pid], id_to_posixpath[pid] = dirname, posix_dirname
-            return dirname + ename, posix_dirname + name
+            dirname = id_to_path[pid] = get_path(id_to_dirnode[pid]) + "/"
+        return dirname + name
     def update_path(attr: dict, /) -> dict:
         try:
-            attr["ancestors"] = get_ancestors(attr["id"], attr)
-            attr["path"], attr["posixpath"] = get_path(attr)
+            if with_ancestors:
+                attr["ancestors"] = get_ancestors(attr["id"], attr)
+            attr["path"] = get_path(attr)
         except KeyError:
             pass
         return attr
@@ -4403,6 +4400,7 @@ def iter_files_with_path(
 def iter_files_with_path_by_export_dir(
     client: str | P115Client, 
     cid: int, 
+    escape: None | Callable[[str], str] = escape, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -4412,6 +4410,7 @@ def iter_files_with_path_by_export_dir(
 def iter_files_with_path_by_export_dir(
     client: str | P115Client, 
     cid: int, 
+    escape: None | Callable[[str], str] = escape, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -4420,11 +4419,12 @@ def iter_files_with_path_by_export_dir(
 def iter_files_with_path_by_export_dir(
     client: str | P115Client, 
     cid: int, 
+    escape: None | Callable[[str], str] = escape, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
 ) -> Iterator[dict] | AsyncIterator[dict]:
-    """遍历目录树，获取文件信息（包含 "path" 和 "posixpath"）
+    """遍历目录树，获取文件信息（包含 "path"）
 
     .. important::
         相比较于 `iter_files`，这个函数专门针对获取路径的风控问题做了优化，会用到 导出目录树，尝试进行匹配，不能唯一确定的，会再用其它办法获取路径
@@ -4439,6 +4439,7 @@ def iter_files_with_path_by_export_dir(
 
     :param client: 115 客户端或 cookies
     :param cid: 目录 id，不能为 0 （受限于 export_dir 接口）
+    :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -4631,11 +4632,11 @@ def iter_files_with_path_by_export_dir(
                 continue
             dir_patht = pid_to_dirpatht[pid]
             dir_path = joins(dir_patht) + "/"
-            dir_posixpath = "/".join(n.replace("/", "|") for n in dir_patht) + "/"
             for attr in files:
                 name = attr["name"]
-                attr["path"] = dir_path + escape(name)
-                attr["posixpath"] = dir_posixpath + name.replace("/", "|")
+                if escape is not None:
+                    name = escape(name)
+                attr["path"] = dir_path + name
                 yield Yield(attr, identity=True)
     return run_gen_step_iter(gen_step, async_=async_)
 

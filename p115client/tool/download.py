@@ -3,9 +3,9 @@
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __all__ = [
-    "reduce_image_url_layers", "batch_get_url", "iter_url_batches", 
-    "iter_files_with_url", "iter_images_with_url", "iter_subtitles_with_url", 
-    "iter_subtitle_batches", "make_strm", "iter_download_nodes", "iter_download_files", 
+    "reduce_image_url_layers", "batch_get_url", "iter_url_batches", "iter_files_with_url", 
+    "iter_images_with_url", "iter_subtitles_with_url", "iter_subtitle_batches", "make_strm", 
+    "iter_download_nodes", "iter_download_files", 
 ]
 __doc__ = "这个模块提供了一些和下载有关的函数"
 
@@ -32,7 +32,7 @@ from asynctools import async_chain_from_iterable
 from concurrenttools import run_as_async, run_as_thread, thread_batch, async_batch
 from encode_uri import encode_uri_component_loose
 from iterutils import chunked, run_gen_step, run_gen_step_iter, with_iter_next, Yield, YieldFrom
-from p115client import check_response, normalize_attr, P115Client, P115URL
+from p115client import check_response, normalize_attr, normalize_attr_simple, P115Client, P115URL
 from p115client.exception import P115Warning
 from posixpatht import escape
 
@@ -41,6 +41,10 @@ from .iterdir import (
     get_path_to_cid, iterdir, iter_files, iter_files_raw, iter_files_with_path, unescape_115_charref, 
     DirNode, ID_TO_DIRNODE_CACHE, 
 )
+
+
+def posix_escape_name(name: str, /) -> str:
+    return name.replace("/", "|")
 
 
 def reduce_image_url_layers(url: str, /, size: str | int = "") -> str:
@@ -944,7 +948,7 @@ def make_strm(
     mode = "wb" if update else "xb"
     abspath_prefix_length = 1
     upserted: list[str] = []
-    skipped: list[str] = []
+    ignored: list[str] = []
     removed: list[str] = []
     append = list.append
     if discard:
@@ -960,7 +964,7 @@ def make_strm(
         if use_abspath is None:
             path = attr["name"]
         else:
-            path = attr["posixpath"][abspath_prefix_length:]
+            path = attr["path"][abspath_prefix_length:]
         if without_suffix:
             path = splitext(path)[0]
         relpath = normpath(path) + ".strm"
@@ -992,7 +996,7 @@ def make_strm(
             makedirs(dirname(path), exist_ok=True)
             yield write_url(path, urlb)
         except OSError:
-            append(skipped, path)
+            append(ignored, path)
             return
         append(upserted, path)
     def gen_step():
@@ -1009,7 +1013,7 @@ def make_strm(
                 root = yield get_path_to_cid(
                     client, 
                     cid, 
-                    escape=lambda name: name.replace("/", "|"), 
+                    escape=posix_escape_name, 
                     refresh=True, 
                     async_=async_, # type: ignore
                     **request_kwargs, 
@@ -1022,13 +1026,10 @@ def make_strm(
                     **request_kwargs
                 )
                 check_response(resp)
-                name = unescape_115_charref(resp["data"][0]["file_name"]).replace("/", "|")
+                name = posix_escape_name(unescape_115_charref(resp["data"][0]["file_name"]))
                 savedir = joinpath(savedir, name)
         params: dict[str, Any] = {}
-        if use_abspath is None:
-            params["id_to_dirnode"] = ...
-        else:
-            params["id_to_dirnode"] = id_to_dirnode
+        if use_abspath is not None:
             params["path_already"] = path_already
         yield (async_batch if async_ else thread_batch)(
             lambda attr: run_gen_step(save(attr), async_=async_), 
@@ -1038,9 +1039,13 @@ def make_strm(
                 order="file_name", 
                 suffix=suffix, 
                 type=type, 
-                app=app, 
+                normalize_attr=normalize_attr_simple, 
+                escape=posix_escape_name, 
+                with_ancestors=False, 
+                id_to_dirnode=id_to_dirnode, 
                 cooldown=fs_files_cooldown, 
                 max_workers=fs_files_max_workers, 
+                app=app, 
                 async_=async_, # type: ignore
                 **params, # type: ignore
                 **request_kwargs, 
@@ -1054,7 +1059,16 @@ def make_strm(
             else:
                 task.result()
                 do_discard()
-        return {"cost": time() - start_t, "upsert": upserted, "skip": skipped, "remove": removed}
+        return {
+            "cost": time() - start_t, 
+            "total": len(upserted) + len(ignored) + len(removed), 
+            "count_upsert": len(upserted), 
+            "count_ignore": len(ignored), 
+            "count_remove": len(removed), 
+            "upsert": upserted, 
+            "ignore": ignored, 
+            "remove": removed, 
+        }
     return run_gen_step(gen_step, async_=async_)
 
 
@@ -1193,16 +1207,44 @@ def iter_download_nodes(
     return run_gen_step_iter(gen_step, async_=async_)
 
 
+@overload
 def iter_download_files(
     client: str | P115Client, 
     cid: int = 0, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    escape: None | Callable[[str], str] = escape, 
+    with_ancestors: bool = True, 
+    max_workers: None | int = None, 
+    *, 
+    async_: Literal[False] = False, 
+    **request_kwargs, 
+) -> Iterator[dict]:
+    ...
+@overload
+def iter_download_files(
+    client: str | P115Client, 
+    cid: int = 0, 
+    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    escape: None | Callable[[str], str] = escape, 
+    with_ancestors: bool = True, 
+    max_workers: None | int = None, 
+    *, 
+    async_: Literal[True], 
+    **request_kwargs, 
+) -> AsyncIterator[dict]:
+    ...
+def iter_download_files(
+    client: str | P115Client, 
+    cid: int = 0, 
+    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    escape: None | Callable[[str], str] = escape, 
+    with_ancestors: bool = True, 
     max_workers: None | int = None, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
-):
-    """获取一个目录内所有的文件信息（简略），且包括 "dir_ancestors"、"dirname" 和 "posix_dirname"
+) -> Iterator[dict] | AsyncIterator[dict]:
+    """获取一个目录内所有的文件信息（简略），且包括 "dir_ancestors"、"dirname"
 
     .. note::
         并不提供文件的 id 和 name，但有 pickcode，如果需要获得 name，你可以在之后获取下载链接，然后从下载链接中获取实际的名字
@@ -1211,6 +1253,8 @@ def iter_download_files(
 
     :param client: 115 客户端或 cookies
     :param cid: 目录 id
+    :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
+    :param with_ancestors: 文件信息中是否要包含 "ancestors"
     :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
     :param max_workers: 最大并发数，如果为 None 或 <= 0，则默认为 20
     :param async_: 是否异步
@@ -1224,56 +1268,51 @@ def iter_download_files(
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
     else:
         id_to_dirnode = {}
-    id_to_ancestors: dict[int, list[dict]] = {}
-    def get_ancestors(id: int, attr: dict | tuple[str, int] | DirNode, /) -> list[dict]:
-        if isinstance(attr, (DirNode, tuple)):
-            name, pid = attr
-        else:
-            pid = attr["parent_id"]
-            name = attr["name"]
-        if pid == 0:
-            ancestors = [{"id": 0, "parent_id": 0, "name": ""}]
-        else:
-            if pid not in id_to_ancestors:
-                id_to_ancestors[pid] = get_ancestors(pid, id_to_dirnode[pid])
-            ancestors = [*id_to_ancestors[pid]]
-        ancestors.append({"id": id, "parent_id": pid, "name": name})
-        return ancestors
+    if with_ancestors:
+        id_to_ancestors: dict[int, list[dict]] = {}
+        def get_ancestors(id: int, attr: dict | tuple[str, int] | DirNode, /) -> list[dict]:
+            if isinstance(attr, (DirNode, tuple)):
+                name, pid = attr
+            else:
+                pid = attr["parent_id"]
+                name = attr["name"]
+            if pid == 0:
+                ancestors = [{"id": 0, "parent_id": 0, "name": ""}]
+            else:
+                if pid not in id_to_ancestors:
+                    id_to_ancestors[pid] = get_ancestors(pid, id_to_dirnode[pid])
+                ancestors = [*id_to_ancestors[pid]]
+            ancestors.append({"id": id, "parent_id": pid, "name": name})
+            return ancestors
     id_to_path: dict[int, str] = {}
-    id_to_posixpath: dict[int, str] = {}
-    def get_path(attr: dict | tuple[str, int] | DirNode, /) -> tuple[str, str]:
+    def get_path(attr: dict | tuple[str, int] | DirNode, /) -> str:
         if isinstance(attr, (DirNode, tuple)):
             name, pid = attr
         else:
             pid = attr["parent_id"]
             name = attr["name"]
-        ename = name
         if escape is not None:
-            ename = escape(ename)
-        name = name.replace("/", "|")
+            name = escape(name)
         if pid == 0:
-            return "/" + ename, "/" + name
+            dirname = "/"
         elif pid in id_to_path:
-            return id_to_path[pid] + ename, id_to_posixpath[pid] + name
+            dirname = id_to_path[pid]
         else:
-            dirname, posix_dirname = get_path(id_to_dirnode[pid])
-            dirname += "/"
-            posix_dirname += "/"
-            id_to_path[pid], id_to_posixpath[pid] = dirname, posix_dirname
-            return dirname + ename, posix_dirname + name
+            dirname = id_to_path[pid] = get_path(id_to_dirnode[pid]) + "/"
+        return dirname + name
     def norm_attr(info: dict, /) -> dict:
         pid = int(info["pid"])
         attr = {"parent_id": pid, "pickcode": info["pc"], "size": info["fs"]}
         pnode = id_to_dirnode[pid]
-        attr["dir_ancestors"] = get_ancestors(pid, pnode)
-        attr["dirname"], attr["posix_dirname"] = get_path(pnode)
+        if with_ancestors:
+            attr["dir_ancestors"] = get_ancestors(pid, pnode)
+        attr["dirname"] = get_path(pnode)
         return attr
     def gen_step(pickcode: str = ""):
         if not cid:
             defaults = {
                 "dir_ancestors": [{"id": 0, "parent_id": 0, "name": ""}],
                 "dirname": "/",
-                "posix_dirname": "/", 
             }
             pickcodes: list[str] = []
             with with_iter_next(iterdir(
