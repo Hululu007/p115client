@@ -13,7 +13,7 @@ __all__ = [
     "iter_selected_nodes", "iter_selected_nodes_by_pickcode", "iter_selected_nodes_using_category_get", 
     "iter_selected_nodes_using_edit", "iter_selected_nodes_using_star_event", 
     "iter_selected_dirs_using_star", "iter_files_with_dirname", "iter_files_with_path", 
-    "iter_files_with_path_by_export_dir", "iter_parents_3_level", 
+    "iter_files_with_path_by_export_dir", "iter_parents_3_level", "iter_dir_nodes", 
 ]
 __doc__ = "这个模块提供了一些和目录信息罗列有关的函数"
 
@@ -46,7 +46,10 @@ from iterutils import (
 )
 from iter_collect import iter_keyed_dups, iter_keyed_dups_async, SupportsLT
 from orjson import loads
-from p115client import check_response, normalize_attr, P115Client, P115OSError, P115Warning
+from p115client import (
+    check_response, normalize_attr, normalize_attr_simple, 
+    P115Client, P115OSError, P115Warning, 
+)
 from p115client.const import CLASS_TO_TYPE, SUFFIX_TO_TYPE
 from p115client.type import P115DictAttrLike
 from posixpatht import escape, joins, path_is_dir_form, splitext, splits
@@ -4735,4 +4738,104 @@ def iter_parents_3_level(
         ), 
         exclude_types=tuple, 
     )
+
+
+@overload
+def iter_dir_nodes(
+    client: str | P115Client, 
+    cid: int | str = 0, 
+    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    max_workers: None | int = None, 
+    *, 
+    async_: Literal[False] = False, 
+    **request_kwargs, 
+) -> Iterator[dict]:
+    ...
+@overload
+def iter_dir_nodes(
+    client: str | P115Client, 
+    cid: int | str = 0, 
+    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    max_workers: None | int = None, 
+    *, 
+    async_: Literal[True], 
+    **request_kwargs, 
+) -> AsyncIterator[dict]:
+    ...
+def iter_dir_nodes(
+    client: str | P115Client, 
+    cid: int | str = 0, 
+    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    max_workers: None | int = None, 
+    *, 
+    async_: Literal[False, True] = False, 
+    **request_kwargs, 
+) -> Iterator[dict] | AsyncIterator[dict]:
+    """遍历目录树，获取目录节点信息（简略）
+
+    :param client: 115 客户端或 cookies
+    :param cid: 目录 id 或 pickcode
+    :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
+    :param max_workers: 最大并发数
+    :param async_: 是否异步
+    :param request_kwargs: 其它请求参数
+
+    :return: 迭代器，返回此目录内的（仅目录）文件信息
+    """
+    if not isinstance(client, P115Client):
+        client = P115Client(client, check_for_relogin=True)
+    if id_to_dirnode is None:
+        id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
+    from .download import iter_download_nodes
+    def gen_step(id: int | str, /):
+        if id:
+            if isinstance(id, int):
+                resp = yield client.fs_file_skim(id, async_=async_, **request_kwargs)
+                check_response(resp)
+                pickcode = resp["data"][0]["pick_code"]
+            else:
+                pickcode = id
+            with with_iter_next(iter_download_nodes(
+                client, 
+                pickcode, 
+                files=False, 
+                max_workers=max_workers, 
+                async_=async_, 
+                **request_kwargs, 
+            )) as get_next_info:
+                while True:
+                    info = yield get_next_info
+                    id = int(info["fid"])
+                    parent_id = int(info["pid"])
+                    name = info["fn"]
+                    if id_to_dirnode is not ...:
+                        id_to_dirnode[id] = DirNode(name, parent_id)
+                    yield Yield(
+                        {"id": id, "parent_id": parent_id, "name": name}, 
+                        identity=True, 
+                    )
+        else:
+            with with_iter_next(iterdir(
+                client, 
+                ensure_file=False, 
+                normalize_attr=normalize_attr_simple, 
+                id_to_dirnode=id_to_dirnode, 
+                async_=async_, 
+                **request_kwargs, 
+            )) as get_next:
+                while True:
+                    attr = yield get_next
+                    yield Yield(
+                        {
+                            "id": attr["id"], 
+                            "parent_id": attr["parent_id"], 
+                            "name": attr["name"], 
+                        }, 
+                        identity=True, 
+                    )
+                    yield YieldFrom(
+                        run_gen_step_iter(gen_step(attr["pickcode"]), async_=async_), 
+                        identity=True, 
+                    )
+    return run_gen_step_iter(gen_step(cid or 0), async_=async_)
 

@@ -942,6 +942,7 @@ def make_strm(
     """
     if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
+    user_id = client.user_id
     origin = origin.rstrip("/")
     savedir = abspath(fsdecode(save_dir))
     makedirs(savedir, exist_ok=True)
@@ -985,10 +986,10 @@ def make_strm(
         path = normalize_path(attr)
         if complete_url:
             name = encode_uri_component_loose(attr["name"])
-            url = f"{origin}/{name}?pickcode={attr['pickcode']}&id={attr['id']}&sha1={attr['sha1']}&size={attr['size']}"
+            url = f"{origin}/{name}?user_id={user_id}&pickcode={attr['pickcode']}&id={attr['id']}&sha1={attr['sha1']}&size={attr['size']}"
             urlb = bytes(url, "utf-8")
         else:
-            url = f"{origin}?pickcode={attr['pickcode']}"
+            url = f"{origin}?user_id={user_id}&pickcode={attr['pickcode']}"
             urlb = bytes(url, "ascii")
         try:
             yield write_url(path, urlb)

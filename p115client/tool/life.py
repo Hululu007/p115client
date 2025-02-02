@@ -111,6 +111,8 @@ def iter_life_list(
     .. caution::
         115 并没有收集 复制文件 和 文件改名 的事件，以及第三方上传可能会没有 上传事件 ("upload_image_file" 和 "upload_file")
 
+        也没有从回收站的还原文件或目录的事件，但是只要你还原了，以前相应的删除事件就会消失
+
     :param client: 115 客户端或 cookies
     :param start_time: 开始时间（不含），若为 0 则从上 1 秒开始
     :param app: 使用某个 app （设备）的接口
@@ -221,6 +223,8 @@ def iter_life_behavior_once(
     .. caution::
         115 并没有收集 复制文件 和 文件改名 的事件，以及第三方上传可能会没有 上传事件 ("upload_image_file" 和 "upload_file")
 
+        也没有从回收站的还原文件或目录的事件，但是只要你还原了，以前相应的删除事件就会消失
+
     :param client: 115 客户端或 cookies
     :param from_time: 开始时间（含），若为 0 则从当前时间开始，若小于 0 则从最早开始
     :param from_id: 开始的事件 id （不含）
@@ -322,6 +326,8 @@ def iter_life_behavior(
     .. caution::
         115 并没有收集 复制文件 和 文件改名 的事件，以及第三方上传可能会没有 上传事件 ("upload_image_file" 和 "upload_file")
 
+        也没有从回收站的还原文件或目录的事件，但是只要你还原了，以前相应的删除事件就会消失
+
     :param client: 115 客户端或 cookies
     :param from_time: 开始时间（含），若为 0 则从当前时间开始，若小于 0 则从最早开始
     :param from_id: 开始的事件 id （不含）
@@ -420,6 +426,8 @@ def iter_life_behavior_list(
 
     .. caution::
         115 并没有收集 复制文件 和 文件改名 的事件，以及第三方上传可能会没有 上传事件 ("upload_image_file" 和 "upload_file")
+
+        也没有从回收站的还原文件或目录的事件，但是只要你还原了，以前相应的删除事件就会消失
 
     :param client: 115 客户端或 cookies
     :param from_time: 开始时间（含），若为 0 则从当前时间开始，若小于 0 则从最早开始
