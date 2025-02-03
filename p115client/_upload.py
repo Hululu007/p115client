@@ -10,8 +10,8 @@ __all__ = [
 
 from base64 import b64encode
 from collections.abc import (
-    AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Callable, Coroutine, Generator, ItemsView, 
-    Iterable, Iterator, Mapping, Sequence, Sized, 
+    AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Callable, Coroutine, Generator, 
+    ItemsView, Iterable, Iterator, Mapping, Sequence, Sized, 
 )
 from datetime import datetime
 from email.utils import formatdate
@@ -33,11 +33,12 @@ from filewrap import (
     progress_bytes_iter, progress_bytes_async_iter, 
 )
 from iterutils import (
-    foreach, async_foreach, async_through, through, run_gen_step, 
+    foreach, async_through, through, run_gen_step, 
     run_gen_step_iter, wrap_iter, wrap_aiter, Yield, 
 )
 
 from .exception import MultipartUploadAbort
+from .type import MultipartResumeData
 
 
 def buffer_length(b: Buffer, /) -> int:
@@ -210,7 +211,7 @@ def oss_upload_request[T](
     async_: bool = False, 
     **request_kwargs, 
 ) -> T:
-    """请求阿里云 OSS （115 目前所使用的阿里云的对象存储）的公用函数
+    """请求阿里云 OSS 的公用函数
     """
     headers, params = oss_upload_sign(
         bucket, 
@@ -772,6 +773,7 @@ def oss_multipart_upload(
     partsize: int = 10 * 1 << 20, 
     parts: None | list[dict] = None, 
     filesize: int = -1, 
+    collect_resume_data: None | Callable[[MultipartResumeData], Any] = None, 
     make_reporthook: None | Callable[[None | int], Callable[[int], Any] | Generator[int, Any, Any]] = None, 
     *, 
     async_: Literal[False] = False, 
@@ -792,6 +794,7 @@ def oss_multipart_upload(
     partsize: int = 10 * 1 << 20, 
     parts: None | list[dict] = None, 
     filesize: int = -1, 
+    collect_resume_data: None | Callable[[MultipartResumeData], Any] = None, 
     make_reporthook: None | Callable[[None | int], Callable[[int], Any] | Generator[int, Any, Any] | AsyncGenerator[int, Any]] = None, 
     *, 
     async_: Literal[True], 
@@ -811,6 +814,7 @@ def oss_multipart_upload(
     partsize: int = 10 * 1 << 20, # default to: 10 MB
     parts: None | list[dict] = None, 
     filesize: int = -1, 
+    collect_resume_data: None | Callable[[MultipartResumeData], Any] = None, 
     make_reporthook: None | Callable[[None | int], Callable[[int], Any] | Generator[int, Any, Any] | AsyncGenerator[int, Any]] = None, 
     *, 
     async_: Literal[False, True] = False, 
@@ -820,6 +824,7 @@ def oss_multipart_upload(
         nonlocal make_reporthook, parts, upload_id
         if parts is None:
             parts = []
+            add_part = parts.append
             if upload_id:
                 if async_:
                     async def async_request():
@@ -835,7 +840,7 @@ def oss_multipart_upload(
                         ):
                             if part["Size"] != partsize:
                                 break
-                            parts.append(part)
+                            add_part(part)
                     yield async_request
                 else:
                     for part in oss_multipart_part_iter(
@@ -849,7 +854,7 @@ def oss_multipart_upload(
                     ):
                         if part["Size"] != partsize:
                             break
-                        parts.append(part)
+                        add_part(part)
             else:
                 upload_id = yield oss_multipart_upload_init(
                     request, 
@@ -860,6 +865,9 @@ def oss_multipart_upload(
                     async_=async_, 
                     **request_kwargs, 
                 )
+        else:
+            parts = parts.copy()
+            add_part = parts.append
         upload_id = cast(str, upload_id)
         reporthook: None | Callable[[int], Any] | Generator[int, Any, Any] | AsyncGenerator[int, Any] = None
         close_reporthook: None | Callable = None
@@ -873,16 +881,18 @@ def oss_multipart_upload(
                 close_reporthook = reporthook.aclose
                 reporthook = reporthook.asend
                 yield partial(reporthook, None)
-        if async_:
-            batch: Callable = partial(async_foreach, threaded=False)
-        else:
-            batch = foreach
         try:
-            yield batch(
-                parts.append, 
+            resume_data: MultipartResumeData = {
+                "bucket": bucket, "object": object, "token": token, "callback": callback, 
+                "upload_id": upload_id, "partsize": partsize, "filesize": filesize, "parts": parts, 
+            }
+            if collect_resume_data is not None:
+                yield partial(collect_resume_data, resume_data)
+            yield foreach(
+                add_part, 
                 oss_multipart_upload_part_iter(
                     request, 
-                    file, 
+                    file, # type: ignore
                     url=url, 
                     bucket=bucket, 
                     object=object, 
@@ -890,7 +900,7 @@ def oss_multipart_upload(
                     upload_id=upload_id, 
                     part_number_start=len(parts)+1, 
                     partsize=partsize, 
-                    reporthook=reporthook, 
+                    reporthook=reporthook, # type: ignore
                     async_=async_, # type: ignore
                     **request_kwargs, 
                 ), 
@@ -907,11 +917,8 @@ def oss_multipart_upload(
                 async_=async_, # type: ignore
                 **request_kwargs, 
             ))
-        except BaseException as e:
-            raise MultipartUploadAbort({
-                "bucket": bucket, "object": object, "token": token, "callback": callback, 
-                "upload_id": upload_id, "partsize": partsize, "filesize": filesize, "parts": parts, 
-            }) from e
+        except Exception as e:
+            raise MultipartUploadAbort(resume_data) from e
         finally:
             if close_reporthook is not None:
                 yield close_reporthook

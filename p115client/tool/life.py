@@ -257,7 +257,7 @@ def iter_life_behavior_once(
         offset = 0
         while events:
             for event in events:
-                if from_id and int(event["id"]) == from_id or from_time and int(event["update_time"]) < from_time:
+                if from_id and int(event["id"]) <= from_id or from_time and int(event["update_time"]) < from_time:
                     return
                 fid = event["file_id"]
                 if fid not in seen:

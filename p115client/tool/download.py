@@ -23,7 +23,7 @@ from os.path import abspath, dirname, join as joinpath, normpath, splitext
 from queue import SimpleQueue
 from threading import Lock
 from time import time
-from typing import overload, Any, Final, Literal, TypedDict
+from typing import cast, overload, Any, Final, Literal, TypedDict
 from urllib.parse import quote, urlsplit
 from uuid import uuid4
 from warnings import warn
@@ -34,17 +34,12 @@ from encode_uri import encode_uri_component_loose
 from iterutils import chunked, run_gen_step, run_gen_step_iter, with_iter_next, Yield, YieldFrom
 from p115client import check_response, normalize_attr, normalize_attr_simple, P115Client, P115URL
 from p115client.exception import P115Warning
-from posixpatht import escape
 
 from .export_dir import export_dir_parse_iter
 from .iterdir import (
-    get_path_to_cid, iterdir, iter_files, iter_files_raw, iter_files_with_path, unescape_115_charref, 
-    DirNode, ID_TO_DIRNODE_CACHE, 
+    get_path_to_cid, iterdir, iter_files, iter_files_raw, iter_files_with_path, 
+    unescape_115_charref, posix_escape_name, DirNode, ID_TO_DIRNODE_CACHE, 
 )
-
-
-def posix_escape_name(name: str, /) -> str:
-    return name.replace("/", "|")
 
 
 def reduce_image_url_layers(url: str, /, size: str | int = "") -> str:
@@ -259,7 +254,7 @@ def iter_files_with_url(
     with_ancestors: bool = False, 
     with_path: bool = False, 
     use_star: None | bool = False, 
-    escape: None | Callable[[str], str] = escape, 
+    escape: None | bool | Callable[[str], str] = True, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
@@ -280,7 +275,7 @@ def iter_files_with_url(
     with_ancestors: bool = False, 
     with_path: bool = False, 
     use_star: None | bool = False, 
-    escape: None | Callable[[str], str] = escape, 
+    escape: None | bool | Callable[[str], str] = True, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
@@ -300,7 +295,7 @@ def iter_files_with_url(
     with_ancestors: bool = False, 
     with_path: bool = False, 
     use_star: None | bool = False, 
-    escape: None | Callable[[str], str] = escape, 
+    escape: None | bool | Callable[[str], str] = True, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
@@ -330,7 +325,13 @@ def iter_files_with_url(
     :param with_ancestors: 文件信息中是否要包含 "ancestors"
     :param with_path: 文件信息中是否要包含 "path"
     :param use_star: 获取目录信息时，是否允许使用星标 （如果为 None，则采用流处理，否则采用批处理）
-    :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
+    :param escape: 对文件名进行转义
+
+        - 如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
+        - 如果为 True，则使用 `posixpatht.escape`，会对文件名中 "/"，或单独出现的 "." 和 ".." 用 "\\" 进行转义
+        - 如果为 False，则使用 `posix_escape_name` 函数对名字进行转义，会把文件名中的 "/" 转换为 "|"
+        - 如果为 Callable，则用你所提供的调用，以或者转义后的名字
+
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
     :param app: 使用某个 app （设备）的接口
@@ -419,7 +420,7 @@ def iter_images_with_url(
     with_ancestors: bool = False, 
     with_path: bool = False, 
     use_star: None | bool = False, 
-    escape: None | Callable[[str], str] = escape, 
+    escape: None | bool | Callable[[str], str] = True, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
@@ -438,7 +439,7 @@ def iter_images_with_url(
     with_ancestors: bool = False, 
     with_path: bool = False, 
     use_star: None | bool = False, 
-    escape: None | Callable[[str], str] = escape, 
+    escape: None | bool | Callable[[str], str] = True, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
@@ -456,7 +457,7 @@ def iter_images_with_url(
     with_ancestors: bool = False, 
     with_path: bool = False, 
     use_star: None | bool = False, 
-    escape: None | Callable[[str], str] = escape, 
+    escape: None | bool | Callable[[str], str] = True, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
@@ -477,7 +478,13 @@ def iter_images_with_url(
     :param with_ancestors: 文件信息中是否要包含 "ancestors"
     :param with_path: 文件信息中是否要包含 "path"
     :param use_star: 获取目录信息时，是否允许使用星标 （如果为 None，则采用流处理，否则采用批处理）
-    :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
+    :param escape: 对文件名进行转义
+
+        - 如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
+        - 如果为 True，则使用 `posixpatht.escape`，会对文件名中 "/"，或单独出现的 "." 和 ".." 用 "\\" 进行转义
+        - 如果为 False，则使用 `posix_escape_name` 函数对名字进行转义，会把文件名中的 "/" 转换为 "|"
+        - 如果为 Callable，则用你所提供的调用，以或者转义后的名字
+
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
     :param app: 使用某个 app （设备）的接口
@@ -568,7 +575,7 @@ def iter_subtitles_with_url(
     with_ancestors: bool = False, 
     with_path: bool = False, 
     use_star: None | bool = False, 
-    escape: None | Callable[[str], str] = escape, 
+    escape: None | bool | Callable[[str], str] = True, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
@@ -587,7 +594,7 @@ def iter_subtitles_with_url(
     with_ancestors: bool = False, 
     with_path: bool = False, 
     use_star: None | bool = False, 
-    escape: None | Callable[[str], str] = escape, 
+    escape: None | bool | Callable[[str], str] = True, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
@@ -605,7 +612,7 @@ def iter_subtitles_with_url(
     with_ancestors: bool = False, 
     with_path: bool = False, 
     use_star: None | bool = False, 
-    escape: None | Callable[[str], str] = escape, 
+    escape: None | bool | Callable[[str], str] = True, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
@@ -631,7 +638,13 @@ def iter_subtitles_with_url(
     :param with_ancestors: 文件信息中是否要包含 "ancestors"
     :param with_path: 文件信息中是否要包含 "path"
     :param use_star: 获取目录信息时，是否允许使用星标 （如果为 None，则采用流处理，否则采用批处理）
-    :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
+    :param escape: 对文件名进行转义
+
+        - 如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
+        - 如果为 True，则使用 `posixpatht.escape`，会对文件名中 "/"，或单独出现的 "." 和 ".." 用 "\\" 进行转义
+        - 如果为 False，则使用 `posix_escape_name` 函数对名字进行转义，会把文件名中的 "/" 转换为 "|"
+        - 如果为 Callable，则用你所提供的调用，以或者转义后的名字
+
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
     :param app: 使用某个 app （设备）的接口
@@ -1213,7 +1226,7 @@ def iter_download_files(
     client: str | P115Client, 
     cid: int = 0, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
-    escape: None | Callable[[str], str] = escape, 
+    escape: None | bool | Callable[[str], str] = True, 
     with_ancestors: bool = True, 
     max_workers: None | int = None, 
     *, 
@@ -1226,7 +1239,7 @@ def iter_download_files(
     client: str | P115Client, 
     cid: int = 0, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
-    escape: None | Callable[[str], str] = escape, 
+    escape: None | bool | Callable[[str], str] = True, 
     with_ancestors: bool = True, 
     max_workers: None | int = None, 
     *, 
@@ -1238,7 +1251,7 @@ def iter_download_files(
     client: str | P115Client, 
     cid: int = 0, 
     id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
-    escape: None | Callable[[str], str] = escape, 
+    escape: None | bool | Callable[[str], str] = True, 
     with_ancestors: bool = True, 
     max_workers: None | int = None, 
     *, 
@@ -1254,7 +1267,13 @@ def iter_download_files(
 
     :param client: 115 客户端或 cookies
     :param cid: 目录 id
-    :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
+    :param escape: 对文件名进行转义
+
+        - 如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
+        - 如果为 True，则使用 `posixpatht.escape`，会对文件名中 "/"，或单独出现的 "." 和 ".." 用 "\\" 进行转义
+        - 如果为 False，则使用 `posix_escape_name` 函数对名字进行转义，会把文件名中的 "/" 转换为 "|"
+        - 如果为 Callable，则用你所提供的调用，以或者转义后的名字
+
     :param with_ancestors: 文件信息中是否要包含 "ancestors"
     :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
     :param max_workers: 最大并发数，如果为 None 或 <= 0，则默认为 20
@@ -1269,6 +1288,12 @@ def iter_download_files(
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
     else:
         id_to_dirnode = {}
+    if isinstance(escape, bool):
+        if escape:
+            from posixpatht import escape
+        else:
+            escape = posix_escape_name
+    escape = cast(None | Callable[[str], str], escape)
     if with_ancestors:
         id_to_ancestors: dict[int, list[dict]] = {}
         def get_ancestors(id: int, attr: dict | tuple[str, int] | DirNode, /) -> list[dict]:

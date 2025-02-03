@@ -22,7 +22,6 @@ from asynctools import ensure_async, ensure_aiter
 from filewrap import AsyncBufferedReader, AsyncTextIOWrapper
 from iterutils import backgroud_loop, context, run_gen_step, run_gen_step_iter, Yield, YieldFrom
 from p115client import check_response, P115Client
-from posixpatht import escape
 
 
 CRE_TREE_PREFIX_match: Final = re_compile(r"^(?:\| )+\|-(.*)").match
@@ -129,7 +128,7 @@ def parse_export_dir_as_path_iter(
     file: bytes | str | PathLike | Iterable[bytes | str], 
     /, 
     encoding: str = "utf-16", 
-    escape: None | Callable[[str], str] = escape, 
+    escape: None | bool | Callable[[str], str] = True, 
     close_file: bool = False, 
     *, 
     async_: Literal[False] = False, 
@@ -140,7 +139,7 @@ def parse_export_dir_as_path_iter(
     file: bytes | str | PathLike | Iterable[bytes | str] | AsyncIterable[bytes | str], 
     /, 
     encoding: str = "utf-16", 
-    escape: None | Callable[[str], str] = escape, 
+    escape: None | bool | Callable[[str], str] = True, 
     close_file: bool = False, 
     *, 
     async_: Literal[True], 
@@ -150,7 +149,7 @@ def parse_export_dir_as_path_iter(
     file: bytes | str | PathLike | Iterable[bytes | str] | AsyncIterable[bytes | str], 
     /, 
     encoding: str = "utf-16", 
-    escape: None | Callable[[str], str] = escape, 
+    escape: None | bool | Callable[[str], str] = True, 
     close_file: bool = False, 
     *, 
     async_: Literal[False, True] = False, 
@@ -159,7 +158,13 @@ def parse_export_dir_as_path_iter(
 
     :param file: 文件路径、打开的文件或者迭代器（每次返回一行）
     :param encoding: 字符编码，对字节数据使用，转换为字符串
-    :param escape: 对文件名进行转义的函数。如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
+    :param escape: 对文件名进行转义
+
+        - 如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
+        - 如果为 True，则使用 `posixpatht.escape`，会对文件名中 "/"，或单独出现的 "." 和 ".." 用 "\\" 进行转义
+        - 如果为 False，则使用 `posix_escape_name` 函数对名字进行转义，会把文件名中的 "/" 转换为 "|"
+        - 如果为 Callable，则用你所提供的调用，以或者转义后的名字
+
     :param close_file: 结束（包括异常退出）时尝试关闭 `file`
     :param async_: 是否异步
 
@@ -168,6 +173,12 @@ def parse_export_dir_as_path_iter(
     if isinstance(file, (bytes, str, PathLike)):
         file = open(file, encoding=encoding)
         close_file = True
+    if isinstance(escape, bool):
+        if escape:
+            from posixpatht import escape
+        else:
+            from .iterdir import posix_escape_name
+    escape = cast(None | Callable[[str], str], escape)
     def gen_step():
         it = ensure_aiter(file, threaded=True) if async_ else file
         do_next: Callable = anext if async_ else next # type: ignore
@@ -290,8 +301,6 @@ def parse_export_dir_as_patht_iter(
                     yield Yield(stack[:depth+1], identity=True)
                 name = m[1]
                 depth = (len(line) - len(name)) // 2 - from_top_root
-                if escape is not None:
-                    name = escape(name)
                 try:
                     stack[depth] = name
                 except IndexError:

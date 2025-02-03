@@ -27,6 +27,7 @@ from math import nan
 from operator import itemgetter
 from os import fsdecode, fstat, isatty, stat, PathLike, path as ospath
 from pathlib import Path, PurePath
+from platform import system
 from posixpath import splitext
 from re import compile as re_compile, MULTILINE
 from sys import exc_info
@@ -78,6 +79,16 @@ CRE_CLIENT_API_search: Final = re_compile(r"^ +((?:GET|POST) .*)", MULTILINE).se
 CRE_COOKIES_UID_search: Final = re_compile(r"(?<=\bUID=)[^\s;]+").search
 CRE_API_match: Final = re_compile(r"http://(web|pro)api.115.com(?=/|\?|#|$)").match
 ED2K_NAME_TRANSTAB: Final = dict(zip(b"/|", ("%2F", "%7C")))
+# 当前的系统平台
+SYS_PLATFORM = system()
+# 替换表，用于半角转全角，包括了 Windows 中不允许出现在文件名中的字符
+match SYS_PLATFORM:
+    case "Windows":
+        NAME_TANSTAB_FULLWIDH = {c: chr(c+65248) for c in b"\\/:*?|><"}
+    case "Darwin":
+        NAME_TANSTAB_FULLWIDH = {ord("/"): ":", ord(":"): "："}
+    case _:
+        NAME_TANSTAB_FULLWIDH = {ord("/"): "／"}
 
 get_anxia_origin = cycle(("http://anxia.com", "http://v.anxia.com")).__next__
 get_proapi_origin = cycle(("http://proapi.115.com", "https://proapi.115.com")).__next__
@@ -1604,12 +1615,12 @@ class P115Client:
             if not app:
                 raise ValueError("can't determine the login app")
             uid: str = yield self.login_without_app(async_=async_, **request_kwargs)
-            return (yield self.login_qrcode_scan_result(
+            return self.login_qrcode_scan_result(
                 uid, 
                 app, 
                 async_=async_, 
                 **request_kwargs, 
-            ))
+            )
         return run_gen_step(gen_step, async_=async_)
 
     @overload
@@ -1781,12 +1792,12 @@ class P115Client:
                     case _:
                         raise LoginError(errno.EIO, f"qrcode: aborted with {resp!r}")
             if app:
-                return (yield cls.login_qrcode_scan_result(
+                return cls.login_qrcode_scan_result(
                     qrcode_token["uid"], 
                     app, 
                     async_=async_, 
                     **request_kwargs, 
-                ))
+                )
             else:
                 return qrcode_token
         return run_gen_step(gen_step, async_=async_)
@@ -2261,7 +2272,7 @@ class P115Client:
                         if not cookies_:
                             raise ValueError("can't get new cookies")
                         headers["cookie"] = cookies_
-                    return (yield partial(request, url=url, method=method, **request_kwargs))
+                    return partial(request, url=url, method=method, **request_kwargs)
                 except BaseException as e:
                     exc = e
                     if cant_relogin or not need_set_cookies:
@@ -3080,14 +3091,14 @@ class P115Client:
             if "sign" not in payload:
                 resp = yield self.captcha_sign(async_=async_)
                 payload["sign"] = resp["sign"]
-            return (yield partial(
+            return partial(
                 self.request, 
                 url=api, 
                 method="POST", 
                 data=payload, 
                 async_=async_, 
                 **request_kwargs, 
-            ))
+            )
         return run_gen_step(gen_step, async_=async_)
 
     ########## Download API ##########
@@ -3477,6 +3488,7 @@ class P115Client:
 
         :payload:
             - pickcode: str
+            - dl: int = <default>
         """
         api = complete_webapi("/files/download", base_url=base_url)
         if isinstance(payload, str):
@@ -4824,6 +4836,7 @@ class P115Client:
             - fid[0]: int | str
             - fid[1]: int | str
             - ...
+            - ignore_warn: 0 | 1 = <default>
         """
         api = complete_webapi("/rb/delete", base_url=base_url)
         if isinstance(payload, (int, str)):
@@ -5853,7 +5866,7 @@ class P115Client:
               - 3: 音频
               - 4: 视频
               - 5: 压缩包
-              - 6: 应用
+              - 6: 软件/应用
               - 7: 书籍
               - 8: 其它
               - 9: 相当于 8
@@ -5989,7 +6002,7 @@ class P115Client:
               - 3: 音频
               - 4: 视频
               - 5: 压缩包
-              - 6: 应用
+              - 6: 软件/应用
               - 7: 书籍
               - 8: 其它
               - 9: 相当于 8
@@ -6114,7 +6127,7 @@ class P115Client:
               - 3: 音频
               - 4: 视频
               - 5: 压缩包
-              - 6: 应用
+              - 6: 软件/应用
               - 7: 书籍
               - 8: 其它
               - 9: 相当于 8
@@ -6204,10 +6217,13 @@ class P115Client:
             - fields: str = <default>
             - format: str = "json" 💡 返回格式，默认即可
             - hide_data: str = <default>
+            - is_asc: 0 | 1 = <default>
             - is_q: 0 | 1 = <default>
             - is_share: 0 | 1 = <default>
             - min_size: int = 0 💡 最小的文件大小
             - max_size: int = 0 💡 最大的文件大小
+            - natsort: 0 | 1 = <default>
+            - order: str = <default>
             - r_all: 0 | 1 = <default>
             - record_open_time: 0 | 1 = 1 💡 是否要记录目录的打开时间
             - scid: int | str = <default>
@@ -6226,7 +6242,7 @@ class P115Client:
               - 3: 音频
               - 4: 视频
               - 5: 压缩包
-              - 6: 应用
+              - 6: 软件/应用
               - 7: 书籍
               - 8: 其它
               - 9: 相当于 8
@@ -6399,7 +6415,7 @@ class P115Client:
               - 3: 音频
               - 4: 视频
               - 5: 压缩包
-              - 6: 应用
+              - 6: 软件/应用
               - 7: 书籍
 
             - file_label: int | str = <default> 💡 标签 id，多个用逗号 "," 隔开
@@ -7453,7 +7469,7 @@ class P115Client:
         :payload:
             - cid: int | str 💡 目录 id
             - file_id: int | str
-            - limit: int = <default> 💡 分页大小
+            - limit: int = <default> 💡 最多返回数量
             - offset: int = 0    💡 索引偏移，索引从 0 开始计算
             - is_asc: 0 | 1 = <default> 💡 是否升序排列
             - next: 0 | 1 = <default>
@@ -7890,7 +7906,7 @@ class P115Client:
 
         :payload:
             - offset: int = 0 💡 索引偏移，从 0 开始
-            - limit: int = 11500 💡 一页大小
+            - limit: int = 11500 💡 最多返回数量
             - keyword: str = <default> 💡 搜索关键词
             - sort: "name" | "update_time" | "create_time" = <default> 💡 排序字段
 
@@ -7947,7 +7963,7 @@ class P115Client:
 
         :payload:
             - offset: int = 0 💡 索引偏移，从 0 开始
-            - limit: int = 11500 💡 一页大小
+            - limit: int = 11500 💡 最多返回数量
             - keyword: str = <default> 💡 搜索关键词
             - sort: "name" | "update_time" | "create_time" = <default> 💡 排序字段
 
@@ -8500,58 +8516,16 @@ class P115Client:
 
         :payload:
             - pickcode: str 💡 提取码
+            - topic_id: int = <default>
+            - music_id: int = <default>
             - download: int = <default>
         """
         api = complete_webapi("/files/music", base_url=base_url)
         if isinstance(payload, str):
             payload = {"pickcode": payload}
-        request_kwargs.update(request=None, follow_redirects=False)
+        if not request_kwargs.get("request"):
+            request_kwargs["follow_redirects"] = False
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
-
-    @overload
-    def fs_music_set(
-        self, 
-        payload: dict, 
-        /, 
-        base_url: bool | str | Callable[[], str] = False, 
-        *, 
-        async_: Literal[False] = False, 
-        **request_kwargs, 
-    ) -> dict:
-        ...
-    @overload
-    def fs_music_set(
-        self, 
-        payload: dict, 
-        /, 
-        base_url: bool | str | Callable[[], str] = False, 
-        *, 
-        async_: Literal[True], 
-        **request_kwargs, 
-    ) -> Coroutine[Any, Any, dict]:
-        ...
-    def fs_music_set(
-        self, 
-        payload: dict, 
-        /, 
-        base_url: bool | str | Callable[[], str] = False, 
-        *, 
-        async_: Literal[False, True] = False, 
-        **request_kwargs, 
-    ) -> dict | Coroutine[Any, Any, dict]:
-        """从听单添加或移除音乐，或者给音乐加减星标
-
-        POST https://webapi.115.com/files/music
-
-        :payload:
-            - file_id: int
-            - topic_id: int = 0
-            - op: str = "add" 💡 操作类型："add": 添加到听单, "delete": 从听单删除, "fond": 设置星标
-            - fond: 0 | 1 = 1
-        """
-        api = complete_webapi("/files/music", base_url=base_url)
-        payload = {"op": "add", "fond": 1, "topic_id": 0, **payload}
-        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
     def fs_music_app(
@@ -8606,6 +8580,125 @@ class P115Client:
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
+    def fs_music_file_exist(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_music_file_exist(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_music_file_exist(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """检查音乐文件是否存在
+
+        GET https://webapi.115.com/files/music_file_exist
+
+        :payload:
+            - pickcode: str 💡 提取码
+            - topic_id: int = <default>
+            - music_id: int = <default>
+            - download: int = <default>
+        """
+        api = complete_webapi("/files/music_file_exist", base_url=base_url)
+        if isinstance(payload, str):
+            payload = {"pickcode": payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_music_fond_list(
+        self, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_music_fond_list(
+        self, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_music_fond_list(
+        self, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """罗列星标听单
+
+        GET https://webapi.115.com/files/music_fond_list
+        """
+        api = complete_webapi("/files/music_fond_list", base_url=base_url)
+        return self.request(url=api, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_music_fond_list_app(
+        self, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_music_fond_list_app(
+        self, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_music_fond_list_app(
+        self, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """罗列星标听单
+
+        GET https://proapi.115.com/android/music/music_fond_list
+        """
+        api = complete_proapi("/music/music_fond_list", base_url, app)
+        return self.request(url=api, async_=async_, **request_kwargs)
+
+    @overload
     def fs_music_fond_set(
         self, 
         payload: int | dict, 
@@ -8649,6 +8742,628 @@ class P115Client:
             payload = {"fond": 1, "topic_id": payload}
         else:
             payload = {"fond": 1, **payload}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_music_include_list(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_music_include_list(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_music_include_list(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """包含音乐的目录列表（专属文件）
+
+        GET https://webapi.115.com/files/include_music_list
+
+        :payload:
+            - asc: 0 | 1 = 0
+            - limit: int = 1150
+            - offset: int = 0
+            - order: str = "user_etime"
+        """
+        api = complete_webapi("/files/include_music_list", base_url=base_url)
+        if isinstance(payload, int):
+            payload = {"asc": 0, "limit": 1150, "order": "user_etime", "offset": payload}
+        else:
+            payload = {"asc": 0, "limit": 1150, "order": "user_etime", **payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_music_include_list_app(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_music_include_list_app(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_music_include_list_app(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """包含音乐的目录列表（专属文件）
+
+        GET https://proapi.115.com/android/music/include_music_list
+
+        :payload:
+            - asc: 0 | 1 = 0
+            - limit: int = 1150
+            - offset: int = 0
+            - order: str = "user_etime"
+        """
+        api = complete_proapi("/music/include_music_list", base_url, app)
+        if isinstance(payload, int):
+            payload = {"asc": 0, "limit": 1150, "order": "user_etime", "offset": payload}
+        else:
+            payload = {"asc": 0, "limit": 1150, "order": "user_etime", **payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_music_info(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_music_info(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_music_info(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取音乐封面等信息
+
+        GET https://webapi.115.com/files/music_info
+
+        :payload:
+            - pickcode: str 💡 提取码
+        """
+        api = complete_webapi("/files/music_info", base_url=base_url)
+        if isinstance(payload, str):
+            payload = {"pickcode": payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_music_info_app(
+        self, 
+        payload: str | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_music_info_app(
+        self, 
+        payload: str | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_music_info_app(
+        self, 
+        payload: str | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取音乐封面等信息
+
+        GET https://proapi.115.com/android/music/musicdetail
+
+        :payload:
+            - pickcode: str 💡 提取码
+        """
+        api = complete_proapi("/music/musicdetail", base_url, app)
+        if isinstance(payload, str):
+            payload = {"pickcode": payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_music_list(
+        self, 
+        payload: int | dict = 1, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_music_list(
+        self, 
+        payload: int | dict = 1, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_music_list(
+        self, 
+        payload: int | dict = 1, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """罗列听单中的文件
+
+        GET https://webapi.115.com/files/music_list
+
+        :payload:
+            - topic_id: int = 1 💡 听单 id。-1:星标 1:最近听过 2:最近接收 678469:临时听单(?)
+            - start: int = 0
+            - limit: int = 1150
+        """
+        api = complete_webapi("/files/music_list", base_url=base_url)
+        if isinstance(payload, int):
+            payload = {"start": 0, "limit": 1150, "topic_id": payload}
+        else:
+            payload = {"start": 0, "limit": 1150, "topic_id": 1, **payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_music_list_app(
+        self, 
+        payload: int | dict = 1, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_music_list_app(
+        self, 
+        payload: int | dict = 1, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_music_list_app(
+        self, 
+        payload: int | dict = 1, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """罗列听单中的文件
+
+        GET https://proapi.115.com/android/music/music_list
+
+        :payload:
+            - topic_id: int = 1 💡 听单 id。-1:星标 1:最近听过 2:最近接收 678469:临时听单(?)
+            - start: int = 0
+            - limit: int = 1150
+        """
+        api = complete_proapi("/music/music_list", base_url, app)
+        if isinstance(payload, int):
+            payload = {"start": 0, "limit": 1150, "topic_id": payload}
+        else:
+            payload = {"start": 0, "limit": 1150, "topic_id": 1, **payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_music_new(
+        self, 
+        payload: int | dict = 1, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_music_new(
+        self, 
+        payload: int | dict = 1, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_music_new(
+        self, 
+        payload: int | dict = 1, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """罗列听单或听单中的文件
+
+        GET https://webapi.115.com/files/musicnew
+
+        :payload:
+            - topic_id: int = 1 💡 听单 id。-1:星标 1:最近听过 2:最近接收 678469:临时听单(?)
+            - type: 0 | 1 = 0   💡 类型：0:文件 1:目录
+            - start: int = 0
+            - limit: int = 1150
+        """
+        api = complete_webapi("/files/musicnew", base_url=base_url)
+        if isinstance(payload, int):
+            payload = {"start": 0, "limit": 1150, "type": 0, "topic_id": payload}
+        else:
+            payload = {"start": 0, "limit": 1150, "type": 0, "topic_id": 1, **payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_music_new_app(
+        self, 
+        payload: int | dict = 1, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_music_new_app(
+        self, 
+        payload: int | dict = 1, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_music_new_app(
+        self, 
+        payload: int | dict = 1, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """罗列听单或听单中的文件
+
+        GET https://proapi.115.com/android/music/musicnew
+
+        :payload:
+            - topic_id: int = 1 💡 听单 id。-1:星标 1:最近听过 2:最近接收 678469:临时听单(?)
+            - type: 0 | 1 = 0   💡 类型：0:文件 1:目录
+        """
+        api = complete_proapi("/music/musicnew", base_url, app)
+        if isinstance(payload, int):
+            payload = {"type": 0, "topic_id": payload}
+        else:
+            payload = {"type": 0, "topic_id": 1, **payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_music_set(
+        self, 
+        payload: int | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_music_set(
+        self, 
+        payload: int | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_music_set(
+        self, 
+        payload: int | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """从听单添加或移除音乐，或者给音乐加减星标
+
+        POST https://webapi.115.com/files/music
+
+        :payload:
+            - file_id: int      💡 文件 id，多个用 "," 隔开（op 为 "add" 和 "delete" 时需要）
+            - music_id: int = 1 💡 音乐 id（op 为 "fond" 时需要）
+            - topic_id: int = 1 💡 听单 id
+            - op: str = "add"   💡 操作类型："add": 添加到听单, "delete": 从听单删除, "fond": 设置星标
+            - fond: 0 | 1 = 1   💡 是否星标（op 为 "fond" 时需要），这个星标和 music_id 有关，和 file_id 无关
+        """
+        api = complete_webapi("/files/music", base_url=base_url)
+        if isinstance(payload, int):
+            payload = {"op": "add", "topic_id": 1, "file_id": payload}
+        else:
+            payload = {"op": "add", "fond": 1, "music_id": 1, "topic_id": 1, **payload}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_music_status(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_music_status(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_music_status(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """音乐状态
+
+        GET https://webapi.115.com/files/music_status
+
+        :payload:
+            - pickcode: str 💡 提取码
+        """
+        api = complete_webapi("/files/music_status", base_url=base_url)
+        if isinstance(payload, str):
+            payload = {"pickcode": payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_music_topic_listnew(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_music_topic_listnew(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_music_topic_listnew(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """罗列听单
+
+        GET https://webapi.115.com/files/music_topic_listnew
+
+        .. caution::
+            似乎查询参数并没有效果
+
+        :payload:
+            - fond: 0 | 1 = 0   💡 是否星标
+            - start: int = 0    💡 开始索引
+            - limit: int = 1150 💡 最多返回数量
+        """
+        api = complete_webapi("/files/music_topic_listnew", base_url=base_url)
+        if isinstance(payload, int):
+            payload = {"fond": 0, "limit": 1150, "start": payload}
+        else:
+            payload = {"fond": 0, "limit": 1150, "start": 0, **payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_music_topic_listnew_app(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_music_topic_listnew_app(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_music_topic_listnew_app(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """罗列听单
+
+        GET https://proapi.115.com/android/music/musiclistnew
+
+        .. caution::
+            似乎查询参数并没有效果
+
+        :payload:
+            - fond: 0 | 1 = 0   💡 是否星标
+            - start: int = 0    💡 开始索引
+            - limit: int = 1150 💡 最多返回数量
+        """
+        api = complete_proapi("/music/musiclistnew", base_url, app)
+        if isinstance(payload, int):
+            payload = {"fond": 0, "limit": 1150, "start": payload}
+        else:
+            payload = {"fond": 0, "limit": 1150, "start": 0, **payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_music_topic_set(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_music_topic_set(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_music_topic_set(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """修改听单
+
+        POST https://webapi.115.com/files/music_topic
+
+        :payload:
+            - op: "edit" | "delete" | "add" 💡 操作类型："edit":改名 "delete":删除 "add":添加
+            - topic_id: int = <default> 💡 听单 id（op 不为 "add" 时需要）
+            - topic_name: str = <default> 💡 听单名字（op 为 "add" 和 "edit" 时需要）
+        """
+        api = complete_webapi("/files/music_topic", base_url=base_url)
+        if isinstance(payload, str):
+            payload = {"op": "add", "topic_name": payload}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -9175,7 +9890,7 @@ class P115Client:
               - 3: 音频
               - 4: 视频
               - 5: 压缩包
-              - 6: 应用
+              - 6: 软件/应用
               - 7: 书籍
               - 99: 仅文件
         """
@@ -9268,7 +9983,7 @@ class P115Client:
               - 3: 音频
               - 4: 视频
               - 5: 压缩包
-              - 6: 应用
+              - 6: 软件/应用
               - 7: 书籍
               - 99: 仅文件
 
@@ -10216,9 +10931,9 @@ class P115Client:
             - type: str = "" 💡 操作类型，若不指定则是全部
 
               - "upload_image_file": 1 💡 上传图片
-              - "upload_file":       2 💡 上传文件
-              - "star_image":        3 💡 设置图片星标
-              - "star_file":         4 💡 设置文件星标（不包括图片）
+              - "upload_file":       2 💡 上传文件或目录
+              - "star_image":        3 💡 给图片设置星标
+              - "star_file":         4 💡 给文件或目录设置星标（不包括图片）
               - "move_image_file":   5 💡 移动图片
               - "move_file":         6 💡 移动文件或目录（不包括图片）
               - "browse_image":      7 💡 浏览图片
@@ -10287,9 +11002,9 @@ class P115Client:
             - type: str = "" 💡 操作类型
 
               - "upload_image_file": 1 💡 上传图片
-              - "upload_file":       2 💡 上传文件
-              - "star_image":        3 💡 设置图片星标
-              - "star_file":         4 💡 设置文件星标（不包括图片）
+              - "upload_file":       2 💡 上传文件或目录
+              - "star_image":        3 💡 给图片设置星标
+              - "star_file":         4 💡 给文件或目录设置星标（不包括图片）
               - "move_image_file":   5 💡 移动图片
               - "move_file":         6 💡 移动文件或目录（不包括图片）
               - "browse_image":      7 💡 浏览图片
@@ -10451,6 +11166,60 @@ class P115Client:
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
+    def life_doc_behavior_post_app(
+        self, 
+        payload: int | str | Iterable[int | str] | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def life_doc_behavior_post_app(
+        self, 
+        payload: int | str | Iterable[int | str] | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def life_doc_behavior_post_app(
+        self, 
+        payload: int | str | Iterable[int | str] | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """推送事件：浏览文档 "browse_document"
+
+        POST https://proapi.115.com/android/files/doc_behavior
+
+        .. note::
+            如果提供的是目录的 id，则会把其中（直属的）文档记为浏览
+
+        :payload:
+            - file_id: int | str
+            - file_id[0]: int | str
+            - file_id[1]: int | str
+            - ...
+        """
+        api = complete_proapi("/files/doc_behavior", base_url, app)
+        if isinstance(payload, (int, str)):
+            payload = {"file_id": payload}
+        elif not isinstance(payload, dict):
+            payload = {f"file_id[{i}]": fid for i, fid in enumerate(payload)}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
     def life_has_data(
         self, 
         payload: int | dict = {}, 
@@ -10494,6 +11263,60 @@ class P115Client:
         if isinstance(payload, int):
             payload = {"start_time": payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def life_img_behavior_post_app(
+        self, 
+        payload: int | str | Iterable[int | str] | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def life_img_behavior_post_app(
+        self, 
+        payload: int | str | Iterable[int | str] | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def life_img_behavior_post_app(
+        self, 
+        payload: int | str | Iterable[int | str] | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """推送事件：浏览图片 "browse_image"
+
+        POST https://proapi.115.com/android/files/img_behavior
+
+        .. note::
+            如果提供的是目录的 id，则会把其中（直属的）图片记为浏览
+
+        :payload:
+            - file_id: int | str
+            - file_id[0]: int | str
+            - file_id[1]: int | str
+            - ...
+        """
+        api = complete_proapi("/files/img_behavior", base_url, app)
+        if isinstance(payload, (int, str)):
+            payload = {"file_id": payload}
+        elif not isinstance(payload, dict):
+            payload = {f"file_id[{i}]": fid for i, fid in enumerate(payload)}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
     def life_list(
@@ -11340,9 +12163,9 @@ class P115Client:
             request_kwargs["headers"] = {**(request_kwargs.get("headers") or {}), "Cookie": self.cookies_str}
             request_kwargs.setdefault("parse", ...)
             if request is None:
-                return (yield get_default_request()(url=api, async_=async_, **request_kwargs))
+                return get_default_request()(url=api, async_=async_, **request_kwargs)
             else:
-                return (yield request(url=api, **request_kwargs))
+                return request(url=api, **request_kwargs)
         return run_gen_step(gen_step, async_=async_)
 
     @overload
@@ -12465,6 +13288,59 @@ class P115Client:
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
+    def recyclebin_list_app(
+        self, 
+        payload: int | str | dict = 0, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def recyclebin_list_app(
+        self, 
+        payload: int | str | dict = 0, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def recyclebin_list_app(
+        self, 
+        payload: int | str | dict = 0, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """回收站：罗列
+
+        GET https://proapi.115.com/android/rb
+
+        :payload:
+            - aid: int | str = 7
+            - cid: int | str = 0
+            - limit: int = 32
+            - offset: int = 0
+            - format: str = "json"
+            - source: str = <default>
+        """ 
+        api = complete_proapi("/rb", base_url, app)
+        if isinstance(payload, (int, str)):
+            payload = {"aid": 7, "cid": 0, "limit": 32, "format": "json", "offset": payload}
+        else:
+            payload = {"aid": 7, "cid": 0, "limit": 32, "format": "json", "offset": 0, **payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
     def recyclebin_revert(
         self, 
         payload: int | str | Iterable[int | str] | dict, 
@@ -13299,7 +14175,7 @@ class P115Client:
               - 3: 音频
               - 4: 视频
               - 5: 压缩包
-              - 6: 应用
+              - 6: 软件/应用
               - 7: 书籍
               - 99: 仅文件
         """
@@ -14251,13 +15127,13 @@ class P115Client:
         data = {
             "appid": 0, 
             "appversion": "99.99.99.99", 
-            "behavior_type": 0, 
             "fileid": filesha1, 
             "filename": filename, 
             "filesize": filesize, 
             "sign_key": sign_key, 
             "sign_val": sign_val, 
             "target": target, 
+            "topupload": "true",  
             "userid": self.user_id, 
             "userkey": self.user_key, 
         }
@@ -14268,17 +15144,7 @@ class P115Client:
             "User-Agent": "Mozilla/5.0 115disk/99.99.99.99 115Browser/99.99.99.99 115wangpan_android/99.99.99.99", 
         }
         request_kwargs.setdefault("parse", parse_upload_init_response)
-        def gen_step():
-            resp = yield self.upload_init(async_=async_, **request_kwargs)
-            if resp["status"] == 2 and resp["statuscode"] == 0:
-                # NOTE: 再次调用一下上传接口，确保能在 life_list 接口中看到更新，目前猜测推送 upload_file 的事件信息，可能需要用 websocket，待破解
-                request_kwargs["parse"] = ...
-                if async_:
-                    create_task(to_thread(self.upload_init, **request_kwargs))
-                else:
-                    start_new_thread(partial(self.upload_init, **request_kwargs), ())
-            return resp
-        return run_gen_step(gen_step, async_=async_)
+        return self.upload_init(async_=async_, **request_kwargs)
 
     @overload
     def upload_file_init(
@@ -14516,12 +15382,12 @@ class P115Client:
             else:
                 headers, request_kwargs["data"] = encode_multipart_data(data, {"file": dataiter})
             request_kwargs["headers"] = {**request_kwargs.get("headers", {}), **headers}
-            return (yield self.request(
+            return self.request(
                 url=api, 
                 method="POST", 
                 async_=async_, 
                 **request_kwargs, 
-            ))
+            )
         return run_gen_step(gen_step, async_=async_)
 
     @overload
@@ -14533,12 +15399,12 @@ class P115Client:
         filename: None | str = None, 
         pid: int = 0, 
         filesize: int = -1, 
-        filesha1: None | str = None, 
+        filesha1: str = "", 
         partsize: int = 0, 
         upload_directly: None | bool = False, 
         multipart_resume_data: None | MultipartResumeData = None, 
+        collect_resume_data: None | Callable[[MultipartResumeData], Any] = None, 
         make_reporthook: None | Callable[[None | int], Callable[[int], Any] | Generator[int, Any, Any]] = None, 
-        close_file: bool = False, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -14553,12 +15419,12 @@ class P115Client:
         filename: None | str = None, 
         pid: int = 0, 
         filesize: int = -1, 
-        filesha1: None | str = None, 
+        filesha1: str = "", 
         partsize: int = 0, 
         upload_directly: None | bool = False, 
         multipart_resume_data: None | MultipartResumeData = None, 
+        collect_resume_data: None | Callable[[MultipartResumeData], Any] = None, 
         make_reporthook: None | Callable[[None | int], Callable[[int], Any] | Generator[int, Any, Any] | AsyncGenerator[int, Any]] = None, 
-        close_file: bool = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -14572,12 +15438,12 @@ class P115Client:
         filename: None | str = None, 
         pid: int = 0, 
         filesize: int = -1, 
-        filesha1: None | str = None, 
+        filesha1: str = "", 
         partsize: int = 0, 
         upload_directly: None | bool = False, 
         multipart_resume_data: None | MultipartResumeData = None, 
+        collect_resume_data: None | Callable[[MultipartResumeData], Any] = None, 
         make_reporthook: None | Callable[[None | int], Callable[[int], Any] | Generator[int, Any, Any] | AsyncGenerator[int, Any]] = None, 
-        close_file: bool = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -14595,10 +15461,11 @@ class P115Client:
         :param filename: 文件名，如果为 None，则会自动确定
         :param pid: 上传文件到此目录的 id
         :param filesize: 文件大小，如果为 -1，则会自动确定
-        :param filesha1: 文件的 sha1，如果为 None，则会自动确定
+        :param filesha1: 文件的 sha1，如果未提供，则会自动确定
         :param partsize: 分块上传的分块大小，如果 <= 0，则不进行分块上传
         :param upload_directly: 如果为 True，则使用网页版接口直接上传（优先级高于 `partsize`）
         :param multipart_resume_data: 如果不为 None，则断点续传，并且恢复相关参数（优先级高于 `upload_directly`）
+        :param collect_resume_data: 如果不为 None，则调用以输出分块上传的恢复数据（用于下次继续执行）
         :param make_reporthook: 调用以推送上传进度
 
             .. note::
@@ -14640,7 +15507,6 @@ class P115Client:
                                     print(f"\\r\\x1b[K{read_num} | {speed:.2f} MB/s", end="", flush=True)
                                 push((read_num, cur_t))
 
-        :param close_file: 是否要在上传结束后关闭文件
         :param async_: 是否异步
         :param request_kwargs: 其它请求参数
 
@@ -14648,40 +15514,8 @@ class P115Client:
         """
         def gen_step():
             nonlocal file, filename, filesize, filesha1
-            need_calc_filesha1 = (
-                not filesha1 and
-                not upload_directly and
-                multipart_resume_data is None
-            )
-            try:
-                file = getattr(file, "getbuffer")()
-            except (AttributeError, TypeError):
-                pass
-            read_range_bytes_or_hash: None | Callable = None
-            if isinstance(file, Buffer):
-                filesize = buffer_length(file)
-                if need_calc_filesha1:
-                    filesha1 = sha1(file).hexdigest()
-                if not upload_directly and multipart_resume_data is None and filesize >= 1 << 20:
-                    view = memoryview(file)
-                    def read_range_bytes_or_hash(sign_check: str, *, close: bool = False):
-                        start, end = map(int, sign_check.split("-"))
-                        return view[start:end+1]
-            elif isinstance(file, (str, PathLike)):
-                if not filename:
-                    filename = ospath.basename(fsdecode(file))
-                open_file: None | Callable[..., SupportsRead[Buffer]] = None
-                if isinstance(file, PathLike):
-                    open_file = getattr(file, "open", None)
-                if callable(open_file):
-                    open_file = partial(open_file, "rb")
-                else:
-                    open_file = cast(Callable[[], SupportsRead[Buffer]], partial(open, file, "rb"))
-                if async_:
-                    file = yield ensure_async(open_file, threaded=True)
-                else:
-                    file = open_file()
-                return (yield self.upload_file(
+            def do_upload(file):
+                return self.upload_file(
                     file=file, 
                     filename=filename, 
                     pid=pid, 
@@ -14689,14 +15523,47 @@ class P115Client:
                     filesha1=filesha1, 
                     partsize=partsize, 
                     upload_directly=upload_directly, 
-                    make_reporthook=make_reporthook, 
-                    close_file=True, 
+                    collect_resume_data=collect_resume_data, 
+                    make_reporthook=make_reporthook, # type: ignore
                     async_=async_, # type: ignore
                     **request_kwargs, 
-                ))
+                )
+            need_calc_filesha1 = (
+                not filesha1 and
+                not upload_directly and
+                multipart_resume_data is None
+            )
+            read_range_bytes_or_hash: None | Callable = None
+            try:
+                file = getattr(file, "getbuffer")()
+            except (AttributeError, TypeError):
+                pass
+            if isinstance(file, Buffer):
+                filesize = buffer_length(file)
+                if need_calc_filesha1:
+                    filesha1 = sha1(file).hexdigest()
+                if not upload_directly and multipart_resume_data is None and filesize >= 1 << 20:
+                    view = memoryview(file)
+                    def read_range_bytes_or_hash(sign_check: str, /) -> memoryview:
+                        start, end = map(int, sign_check.split("-"))
+                        return view[start:end+1]
+            elif isinstance(file, (str, PathLike)):
+                path = fsdecode(file)
+                if not filename:
+                    filename = ospath.basename(path)
+                if async_:
+                    async def request():
+                        from aiofile import async_open
+                        async with async_open(path, "rb") as file:
+                            setattr(file, "fileno", file.file.fileno)
+                            setattr(file, "seekable", lambda: True)
+                            return await do_upload(file)
+                    return request
+                else:
+                    return do_upload(open(path, "rb"))
             elif isinstance(file, SupportsRead):
-                seekable = False
                 seek = getattr(file, "seek", None)
+                seekable = False   
                 curpos = 0
                 if callable(seek):
                     if async_:
@@ -14718,19 +15585,7 @@ class P115Client:
                         else:
                             copyfileobj(fsrc, file)
                         file.seek(0)
-                        return (yield self.upload_file(
-                            file=file, 
-                            filename=filename, 
-                            pid=pid, 
-                            filesize=filesize, 
-                            filesha1=filesha1, 
-                            partsize=partsize, 
-                            upload_directly=upload_directly, 
-                            make_reporthook=make_reporthook, 
-                            close_file=False, 
-                            async_=async_, # type: ignore
-                            **request_kwargs, 
-                        ))
+                        return do_upload(file)
                     try:
                         if async_:
                             filesize, filesha1_obj = yield file_digest_async(file, "sha1")
@@ -14752,115 +15607,79 @@ class P115Client:
                                     filesize = (yield seek(0, 2)) - curpos
                                 finally:
                                     yield seek(curpos)
-                            else:
-                                filesize = 0
                 if not upload_directly and multipart_resume_data is None and filesize >= 1 << 20:
                     read: Callable[[int], Buffer] | Callable[[int], Awaitable[Buffer]]
                     if seekable:
                         if async_:
-                            read = ensure_async(file.read, threaded=True)
-                            async def read_range_bytes_or_hash(sign_check: str, *, close: bool = False):
+                            async_read = ensure_async(file.read, threaded=True)
+                            async def read_range_bytes_or_hash(sign_check: str, /):
                                 start, end = map(int, sign_check.split("-"))
-                                try:
-                                    await seek(curpos + start)
-                                    return await read(end - start + 1) # type: ignore
-                                finally:
-                                    if close:
-                                        await file_close(file)
-                                    else:
-                                        await seek(curpos)
+                                await seek(curpos + start)
+                                return await async_read(end - start + 1)
                         else:
                             read = cast(Callable[[int], Buffer], file.read)
-                            def read_range_bytes_or_hash(sign_check: str, *, close: bool = False):
+                            def read_range_bytes_or_hash(sign_check: str, /):
                                 start, end = map(int, sign_check.split("-"))
-                                try:
-                                    seek(curpos + start)
-                                    return read(end - start + 1)
-                                finally:
-                                    if close:
-                                        file_close(file)
-                                    else:
-                                        seek(curpos)
-                    else:
-                        filesize = 0
+                                seek(curpos + start)
+                                return read(end - start + 1)
             elif isinstance(file, (URL, SupportsGeturl)):
                 if isinstance(file, URL):
-                    url = str(file)
+                    url: str = str(file)
                 else:
                     url = file.geturl()
                 if async_:
                     from httpfile import AsyncHttpxFileReader
-                    file = yield AsyncHttpxFileReader.new(url)
+                    async def request():
+                        file = await AsyncHttpxFileReader.new(url)
+                        async with file:
+                            return await do_upload(file)
+                    return request
                 else:
-                    file = HTTPFileReader(url)
-                if not filename:
-                    filename = getattr(file, "name", "")
-                if filesize < 0:
-                    filesize = getattr(file, "length", -1)
-                return (yield self.upload_file(
-                    file=file, 
-                    filename=filename, 
-                    pid=pid, 
-                    filesize=filesize, 
-                    filesha1=filesha1, 
-                    partsize=partsize, 
-                    upload_directly=upload_directly, 
-                    make_reporthook=make_reporthook, 
-                    close_file=close_file, 
-                    async_=async_, # type: ignore
-                    **request_kwargs, 
-                ))
+                    with HTTPFileReader(url) as file:
+                        return do_upload(file)
             else:
                 if need_calc_filesha1:
                     if async_:
                         file = bytes_iter_to_async_reader(file) # type: ignore
                     else:
                         file = bytes_iter_to_reader(file) # type: ignore
-                    return (yield self.upload_file(
-                        file=file, 
-                        filename=filename, 
-                        pid=pid, 
-                        filesize=filesize, 
-                        filesha1=filesha1, 
-                        partsize=partsize, 
-                        upload_directly=upload_directly, 
-                        make_reporthook=make_reporthook, 
-                        close_file=close_file, 
-                        async_=async_, # type: ignore
-                        **request_kwargs, 
-                    ))
-                if not upload_directly and multipart_resume_data is None and filesize >= 1 << 20:
-                    filesize = 0
+                    return do_upload(file)
             if multipart_resume_data is not None:
                 bucket = multipart_resume_data["bucket"]
                 object = multipart_resume_data["object"]
-                url = multipart_resume_data.get("url", "") # type: ignore
+                url    = cast(str, multipart_resume_data.get("url", ""))
                 if not url:
                     url = self.upload_endpoint_url(bucket, object)
                 token = multipart_resume_data.get("token")
                 if not token:
                     token = self.upload_token
-                return (yield oss_multipart_upload(
+                return oss_multipart_upload(
                     self.request, 
                     file, # type: ignore
                     url=url, 
                     bucket=bucket, 
                     object=object, 
-                    token=multipart_resume_data.get("token"), # type: ignore
+                    token=token, 
                     callback=multipart_resume_data["callback"], 
                     upload_id=multipart_resume_data["upload_id"], 
                     partsize=multipart_resume_data["partsize"], 
                     filesize=multipart_resume_data.get("filesize", filesize), 
+                    collect_resume_data=collect_resume_data, 
                     make_reporthook=make_reporthook, # type: ignore
                     async_=async_, # type: ignore
                     **request_kwargs, 
-                ))
+                )
             if not filename:
+                filename = getattr(file, "name", "")
+                filename = ospath.basename(filename)
+            if filename:
+                filename = filename.translate(NAME_TANSTAB_FULLWIDH)
+            else:
                 filename = str(uuid4())
             if filesize < 0:
-                filesize = 0
+                filesize = getattr(file, "length", 0)
             if upload_directly:
-                return (yield self.upload_file_sample(
+                return self.upload_file_sample(
                     file, # type: ignore
                     filename=filename, 
                     filesize=filesize, 
@@ -14868,11 +15687,11 @@ class P115Client:
                     make_reporthook=make_reporthook, # type: ignore
                     async_=async_, # type: ignore
                     **request_kwargs, 
-                ))
+                )
             resp = yield self.upload_file_init(
                 filename=filename, 
                 filesize=filesize, 
-                filesha1=cast(str, filesha1), 
+                filesha1=filesha1, 
                 read_range_bytes_or_hash=read_range_bytes_or_hash, 
                 pid=pid, 
                 async_=async_, # type: ignore
@@ -14889,7 +15708,7 @@ class P115Client:
             url = self.upload_endpoint_url(bucket, object)
             token = self.upload_token
             if partsize <= 0:
-                resp = yield oss_upload(
+                return oss_upload(
                     self.request, 
                     file, # type: ignore
                     url=url, 
@@ -14903,7 +15722,7 @@ class P115Client:
                     **request_kwargs, 
                 )
             else:
-                resp = yield oss_multipart_upload(
+                return oss_multipart_upload(
                     self.request, 
                     file, # type: ignore
                     url=url, 
@@ -14913,40 +15732,11 @@ class P115Client:
                     token=token, 
                     partsize=partsize, 
                     filesize=filesize, 
+                    collect_resume_data=collect_resume_data, 
                     make_reporthook=make_reporthook, # type: ignore
                     async_=async_, # type: ignore
                     **request_kwargs, 
                 )
-            if resp["state"]:
-                call = partial(
-                    self.upload_file_init, 
-                    filename=filename, 
-                    filesize=filesize, 
-                    filesha1=filesha1, 
-                    read_range_bytes_or_hash=(
-                        None if read_range_bytes_or_hash is None 
-                        else partial(read_range_bytes_or_hash, close=close_file)
-                    ), 
-                    pid=pid, 
-                    **request_kwargs, 
-                )
-                if async_:
-                    create_task(to_thread(call))
-                else:
-                    start_new_thread(call, ())
-            elif close_file:
-                if isinstance(file, Generator):
-                    file.close()
-                elif isinstance(file, AsyncGenerator):
-                    yield file.aclose
-                elif async_:
-                    if hasattr(file, "aclose"):
-                        yield file.aclose
-                    elif hasattr(file, "close"):
-                        yield file.close
-                elif hasattr(file, "close"):
-                    file.close()
-            return resp
         return run_gen_step(gen_step, async_=async_)
 
     ########## User API ##########
@@ -15376,11 +16166,46 @@ class P115Client:
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
-        """获取此账户的网页版设置（提示：较为复杂，自己抓包研究）
+        """获取此账户的设置
 
         GET https://115.com/?ac=setting&even=saveedit&is_wl_tpl=1
         """
         api = complete_api("/?ac=setting&even=saveedit&is_wl_tpl=1", base_url=base_url)
+        return self.request(url=api, async_=async_, **request_kwargs)
+
+    @overload
+    def user_setting2(
+        self, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def user_setting2(
+        self, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def user_setting2(
+        self, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取此账户的设置
+
+        GET https://115.com/?ct=user_setting&ac=get
+        """
+        api = complete_api("/?ct=user_setting&ac=get", base_url=base_url)
         return self.request(url=api, async_=async_, **request_kwargs)
 
     @overload
@@ -16245,13 +17070,13 @@ class P115Client:
             bytes_range = yield from get_bytes_range(start, stop)
             if not bytes_range:
                 return b""
-            return (yield self.read_bytes_range(
+            return self.read_bytes_range(
                 url, 
                 bytes_range=bytes_range, 
                 headers=headers, 
                 async_=async_, 
                 **request_kwargs, 
-            ))
+            )
         return run_gen_step(gen_step, async_=async_)
 
     @overload
@@ -16359,14 +17184,14 @@ class P115Client:
                 stop: int | None = offset + size
             else:
                 stop = None
-            return (yield self.read_bytes(
+            return self.read_bytes(
                 url, 
                 start=offset, 
                 stop=stop, 
                 headers=headers, 
                 async_=async_, 
                 **request_kwargs, 
-            ))
+            )
         return run_gen_step(gen_step, async_=async_)
 
 
@@ -16377,3 +17202,4 @@ for name, method in P115Client.__dict__.items():
     if match is not None:
         CLIENT_API_MAP[match[1]] = "P115Client." + name
 
+# TODO: 提供一个可随时终止和暂停的上传功能，并且可以输出进度条和获取进度
