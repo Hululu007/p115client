@@ -5816,6 +5816,18 @@ class P115Client:
 
             在根目录下且 `fc_mix=0` 且是特殊名字 ("我的接收", "手机相册", "云下载", "我的时光记录")（即 sys_dir），会在整个文件列表的最前面但在置顶之后，这时可从返回信息的 "sys_count" 字段知道数目
 
+        .. note::
+            当 type=1 时，suffix_type 的取值的含义：
+
+                - (不填): 全部
+                - 1: 文字（word，即 doc 和 docx 等）
+                - 2: 表格（excel，即 xls 和 xlsx 等）
+                - 3: 演示（ppt，即 ppt 和 pptx 等）
+                - 4: pdf
+                - 5: txt
+                - 6: xmind
+                - 7: 其它
+
         :payload:
             - cid: int | str = 0 💡 目录 id
             - limit: int = 32 💡 分页大小，目前最大值是 1,150，以前是没限制的
@@ -5858,6 +5870,7 @@ class P115Client:
             - star: 0 | 1 = <default> 💡 是否星标文件
             - stdir: 0 | 1 = <default>
             - suffix: str = <default> 💡 后缀名（优先级高于 `type`）
+            - suffix_type: int = <default>
             - type: int = <default> 💡 文件类型
 
               - 0: 全部（仅当前目录）
@@ -7429,7 +7442,7 @@ class P115Client:
     @overload
     def fs_imglist(
         self, 
-        payload: dict, 
+        payload: int | str | dict, 
         /, 
         base_url: bool | str | Callable[[], str] = False, 
         *, 
@@ -7440,7 +7453,7 @@ class P115Client:
     @overload
     def fs_imglist(
         self, 
-        payload: dict, 
+        payload: int | str | dict, 
         /, 
         base_url: bool | str | Callable[[], str] = False, 
         *, 
@@ -7450,7 +7463,7 @@ class P115Client:
         ...
     def fs_imglist(
         self, 
-        payload: dict, 
+        payload: int | str | dict, 
         /, 
         base_url: bool | str | Callable[[], str] = False, 
         *, 
@@ -7458,17 +7471,18 @@ class P115Client:
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
         """获取目录中的图片列表和基本信息
-        
-        .. attention::
-            目前尚不清楚此接口如何使用，所以暂时不要使用，除非你知道怎么用
-
-            请用 `P115Client.fs_files(..., type=2)` 作为替代
 
         GET https://webapi.115.com/files/imglist
 
+        .. danger::
+            这个函数大概是有 bug 的，不推荐使用
+
+        .. attention::
+            只能获取直属于 `cid` 所在目录的图片，不会遍历整个目录树
+
         :payload:
-            - cid: int | str 💡 目录 id
-            - file_id: int | str
+            - cid: int | str     💡 目录 id
+            - file_id: int | str 💡 不能是 0，可以不同于 `cid`，必须是任何一个有效的 id（单纯是被检查一下）
             - limit: int = <default> 💡 最多返回数量
             - offset: int = 0    💡 索引偏移，索引从 0 开始计算
             - is_asc: 0 | 1 = <default> 💡 是否升序排列
@@ -7483,6 +7497,12 @@ class P115Client:
               - 上一次打开时间："user_otime"
         """
         api = complete_webapi("/files/imglist", base_url=base_url)
+        if isinstance(payload, (int, str)):
+            payload = {"limit": 32, "offset": 0, "cid": payload}
+        else:
+            payload = {"limit": 32, "offset": 0, "cid": 0, **payload}
+        if cid := payload.get("cid"):
+            payload.setdefault("file_id", cid)
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -12369,6 +12389,700 @@ class P115Client:
         """
         api = "https://msg.115.com/?ct=im&ac=get_websocket_host"
         return self.request(url=api, async_=async_, **request_kwargs)
+
+    ########## Note API ##########
+
+    @overload
+    def note_bookmark_list(
+        self, 
+        payload: int | str | dict = "", 
+        /, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def note_bookmark_list(
+        self, 
+        payload: int | str | dict = "", 
+        /, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def note_bookmark_list(
+        self, 
+        payload: int | str | dict = "", 
+        /, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """罗列书签（网址收藏夹）
+
+        GET https://bookmark.115.com/api/bookmark_list.php
+
+        .. note::
+            这个接口支持 GET 和 POST 请求方法
+
+        :payload:
+            - search_value: str = ""
+            - parent_id: int = 0
+            - limit: int = 1150
+            - offset: int = 0
+        """
+        api = "https://bookmark.115.com/api/bookmark_list.php"
+        if isinstance(payload, int):
+            payload = {"limit": 1150, "offset": payload}
+        elif isinstance(payload, str):
+            payload = {"limit": 1150, "search_value": payload}
+        else:
+            payload = {"limit": 1150, **payload}
+        if request_kwargs.get("method", "").upper() == "POST":
+            return self.request(url=api, data=payload, async_=async_, **request_kwargs)
+        else:
+            return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def note_cate_add(
+        self, 
+        payload: str | dict, 
+        /, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def note_cate_add(
+        self, 
+        payload: str | dict, 
+        /, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def note_cate_add(
+        self, 
+        payload: str | dict, 
+        /, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """添加记录分类
+
+        POST https://note.115.com/?ct=note&ac=addcate
+
+        :payload:
+            - cname: str 💡 最多允许 20 个字符
+        """
+        api = "https://note.115.com/?ct=note&ac=addcate"
+        if isinstance(payload, str):
+            payload = {"cname": payload}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def note_cate_del(
+        self, 
+        payload: int | dict, 
+        /, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def note_cate_del(
+        self, 
+        payload: int | dict, 
+        /, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def note_cate_del(
+        self, 
+        payload: int | dict, 
+        /, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """删除记录分类
+
+        POST https://note.115.com/?ct=note&ac=delcate
+
+        :payload:
+            - cid: int 💡 分类 id
+            - action: str = <default>
+        """
+        api = "https://note.115.com/?ct=note&ac=delcate"
+        if isinstance(payload, int):
+            payload = {"cid": payload}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def note_cate_update(
+        self, 
+        payload: dict, 
+        /, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def note_cate_update(
+        self, 
+        payload: dict, 
+        /, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def note_cate_update(
+        self, 
+        payload: dict, 
+        /, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """改名记录分类
+
+        POST https://note.115.com/?ct=note&ac=upcate
+
+        :payload:
+            - cid: int   💡 分类 id
+            - cname: str 💡 分类名，最多 20 个字符
+        """
+        api = "https://note.115.com/?ct=note&ac=upcate"
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def note_cate_list(
+        self, 
+        payload: bool | dict = True, 
+        /, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def note_cate_list(
+        self, 
+        payload: bool | dict = True, 
+        /, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def note_cate_list(
+        self, 
+        payload: bool | dict = True, 
+        /, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取记录分类列表
+
+        GET https://note.115.com/?ct=note&ac=cate
+
+        :payload:
+            - has_picknews: 0 | 1 = 1 💡 是否显示 id 为负数的分类
+        """
+        api = "https://note.115.com/?ct=note&ac=cate"
+        if isinstance(payload, bool):
+            payload = {"has_picknews": int(payload)}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def note_del(
+        self, 
+        payload: int | str | Iterable[int | str] | dict, 
+        /, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def note_del(
+        self, 
+        payload: int | str | Iterable[int | str] | dict, 
+        /, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def note_del(
+        self, 
+        payload: int | str | Iterable[int | str] | dict, 
+        /, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """删除记录
+
+        POST https://note.115.com/?ct=note&ac=delete
+
+        :payload:
+            - nid: int | str 💡 记录 id，多个用 "," 隔开
+        """
+        api = "https://note.115.com/?ct=note&ac=delete"
+        if isinstance(payload, (int, str)):
+            payload = {"nid": payload}
+        elif not isinstance(payload, dict):
+            payload = {"nid": ",".join(map(str, payload))}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def note_detail(
+        self, 
+        payload: int | dict, 
+        /, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def note_detail(
+        self, 
+        payload: int | dict, 
+        /, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def note_detail(
+        self, 
+        payload: int | dict, 
+        /, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取记录（笔记）数据
+
+        GET https://note.115.com/?ct=note&ac=detail
+
+        :payload:
+            - nid: int 💡 记录 id
+        """
+        api = "https://note.115.com/?ct=note&ac=detail"
+        if isinstance(payload, int):
+            payload = {"nid": payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def note_fav_list(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def note_fav_list(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def note_fav_list(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取星标记录（笔记）列表
+
+        GET https://note.115.com/?ct=note&ac=get_fav_note_list
+
+        :payload:
+            - start: int = 0    💡 开始索引，从 0 开始
+            - limit: int = 1150 💡 最多返回数量
+        """
+        api = "https://note.115.com/?ct=note&ac=get_fav_note_list"
+        if isinstance(payload, int):
+            payload = {"limit": 1150, "start": payload}
+        else:
+            payload = {"limit": 1150, "start": 0, **payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def note_fav_set(
+        self, 
+        payload: int | dict, 
+        /, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def note_fav_set(
+        self, 
+        payload: int | dict, 
+        /, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def note_fav_set(
+        self, 
+        payload: int | dict, 
+        /, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """给记录添加或去除星标
+
+        POST https://note.115.com/?ct=note&ac=fav
+
+        :payload:
+            - note_id: int 💡 记录 id
+            - op: "add" | "del" = "add" 💡 操作类型："add":添加 "del":去除
+        """
+        api = "https://note.115.com/?ct=note&ac=fav"
+        if isinstance(payload, int):
+            payload = {"op": "add", "note_id": payload}
+        else:
+            payload = {"op": "add", **payload}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def note_is_fav(
+        self, 
+        payload: int | str | Iterable[int | str] |dict, 
+        /, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def note_is_fav(
+        self, 
+        payload: int | str | Iterable[int | str] |dict, 
+        /, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def note_is_fav(
+        self, 
+        payload: int | str | Iterable[int | str] |dict, 
+        /, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """检查记录是否被星标
+
+        .. note::
+            这个接口支持 GET 和 POST 请求方法
+
+        GET https://note.115.com/api/2.0/api.php?ac=is_fav
+
+        :payload:
+            - note_id: int | str 💡 多个用逗号隔开
+        """
+        api = "https://note.115.com/api/2.0/api.php?ac=is_fav"
+        if isinstance(payload, (int, str)):
+            payload = {"note_id": payload}
+        elif not isinstance(payload, dict):
+            payload = {"note_id": ",".join(map(str, payload))}
+        if request_kwargs.get("method", "").upper() == "POST":
+            return self.request(url=api, data=payload, async_=async_, **request_kwargs)
+        else:
+            return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def note_list(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def note_list(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def note_list(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取记录（笔记）列表
+
+        GET https://note.115.com/?ct=note
+
+        :payload:
+            - ac: "" | "all" = "all"  💡 如果为 "all"，则显示完整信息，如果为 ""，则显示简要信息（只有标题，没有内容文本）
+            - start: int = 0          💡 开始索引，从 0 开始
+            - page_size: int = 1150   💡 分页大小，相当于 `limit`
+            - cid: int = 0            💡 分类 id：0:全部 -10:云收藏 -15:消息备忘
+            - has_picknews: 0 | 1 = 1 💡 是否显示 id 为负数的分类
+            - keyword: str = <default>
+            - recently: 0 | 1 = <default> 💡 是否为最近
+        """
+        api = "https://note.115.com/?ct=note"
+        if isinstance(payload, int):
+            payload = {"ac": "all", "cid": 0, "has_picknews": 1, "page_size": 1150, "start": payload}
+        else:
+            payload = {"ac": "all", "cid": 0, "has_picknews": 1, "page_size": 1150, "start": 0, **payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def note_save(
+        self, 
+        payload: str | dict | list, 
+        /, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def note_save(
+        self, 
+        payload: str | dict | list, 
+        /, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def note_save(
+        self, 
+        payload: str | dict | list, 
+        /, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """保存记录（笔记）
+
+        POST https://note.115.com/?ct=note&ac=save
+
+        :payload:
+            - content: str         💡 记录的文本，最多 50000 个字符
+            - cid: int = 0         💡 分类 id
+            - is_html: 0 | 1 = 0   💡 是否 HTML，如果为 1，则会自动加上标签（例如 <p>），以使内容成为合法的 HTML
+            - nid: int = <default> 💡 记录 id，如果提供就是更新，否则就是新建
+            - pickcodes: str = <default>
+            - subject: str = <default> 💡 标题，最多 927 个字节，可以为空
+            - toc_ids: int | str = <default>
+            - tags: str = <default>    💡 标签文本
+            - tags[]: str = <default>  💡 标签文本（多个用 "[]" 后缀）
+            - ...
+            - tags[0]: str = <default> 💡 标签文本（多个用 "[0]","[1]",... 后缀）
+            - tags[1]: str = <default> 💡 标签文本
+            - ...
+        """
+        api = "https://note.115.com/?ct=note&ac=save"
+        if isinstance(payload, str):
+            payload = {"content": payload}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def note_search(
+        self, 
+        payload: str | dict, 
+        /, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def note_search(
+        self, 
+        payload: str | dict, 
+        /, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def note_search(
+        self, 
+        payload: str | dict, 
+        /, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """搜索记录（笔记）
+
+        .. note::
+            这个接口支持 GET 和 POST 请求方法
+
+        GET https://note.115.com/api/2.0/api.php?ac=search
+
+        :payload:
+            - q: str 💡 搜索词
+            - start: int = 0          💡 开始索引，从 0 开始
+            - limit: int = 1150       💡 最多返回数量
+            - count: int = <default>
+            - cid: int = 0            💡 分类 id
+            - has_picknews: 0 | 1 = 1 💡 是否显示 id 为负数的分类
+            - create_time1: str = <default>
+            - create_time2: str = <default>
+            - start_time: str = <default>    💡 开始日期，格式为 YYYY-MM-DD
+            - end_time: str = <default>      💡 结束日期（含），格式为 YYYY-MM-DD
+            - tag_arr: str = <default>    💡 标签文本
+            - tag_arr[]: str = <default>  💡 标签文本（多个用 "[]" 后缀）
+            - ...
+            - tag_arr[0]: str = <default> 💡 标签文本（多个用 "[0]","[1]",... 后缀）
+            - tag_arr[1]: str = <default> 💡 标签文本
+            - ...
+        """
+        api = "https://note.115.com/api/2.0/api.php?ac=search"
+        if isinstance(payload, str):
+            payload = {"has_picknews": 1, "limit": 1150, "start": 0, "q": payload}
+        else:
+            payload = {"has_picknews": 1, "limit": 1150, "start": 0, **payload}
+        if request_kwargs.get("method", "").upper() == "POST":
+            return self.request(url=api, data=payload, async_=async_, **request_kwargs)
+        else:
+            return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def note_tag_color(
+        self, 
+        payload: str | Iterable[str] | dict, 
+        /, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def note_tag_color(
+        self, 
+        payload: str | Iterable[str] | dict, 
+        /, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def note_tag_color(
+        self, 
+        payload: str | Iterable[str] | dict, 
+        /, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """上传标签，返回标签并提供颜色
+
+        POST https://note.115.com/api/2.0/api.php?ac=get_tag_color
+
+        :payload:
+            - tags: str = <default>    💡 标签文本
+            - tags[]: str = <default>  💡 标签文本（多个用 "[]" 后缀）
+            - ...
+            - tags[0]: str = <default> 💡 标签文本（多个用 "[0]","[1]",... 后缀）
+            - tags[1]: str = <default> 💡 标签文本
+            - ...
+        """
+        api = "https://note.115.com/api/2.0/api.php?ac=get_tag_color"
+        if isinstance(payload, str):
+            payload = {"tags": payload}
+        elif payload and not isinstance(payload, dict) and not (isinstance(payload, Sequence) and not isinstance(payload[0], str)):
+            payload = {f"tags[{i}]": t for i, t in enumerate(payload)}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def note_tag_latest(
+        self, 
+        payload: str | dict = "", 
+        /, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def note_tag_latest(
+        self, 
+        payload: str | dict = "", 
+        /, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def note_tag_latest(
+        self, 
+        payload: str | dict = "", 
+        /, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取最近使用的标签
+
+        .. note::
+            这个接口支持 GET 和 POST 请求方法
+
+        GET https://note.115.com/api/2.0/api.php?ac=get_latest_tags
+
+        :payload:
+            - q: str = ""                💡 搜索词
+            - is_return_color: 0 | 1 = 1 💡 是否返回颜色
+            - limit: int = 1150          💡 最多返回数量
+        """
+        api = "https://note.115.com/api/2.0/api.php?ac=get_latest_tags"
+        if isinstance(payload, str):
+            payload = {"is_return_color": 1, "limit": 1150, "q": payload}
+        else:
+            payload = {"is_return_color": 1, "limit": 1150, **payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def note_update_cate(
+        self, 
+        payload: dict, 
+        /, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def note_update_cate(
+        self, 
+        payload: dict, 
+        /, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def note_update_cate(
+        self, 
+        payload: dict, 
+        /, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """修改记录的分类
+
+        POST https://note.115.com/?ct=note&ac=update_note_cate
+
+        :payload:
+            - cid: int 💡 分类 id
+            - nid: int | str 💡 记录 id，多个用 "," 隔开
+        """
+        api = "https://note.115.com/?ct=note&ac=update_note_cate"
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     ########## Offline Download API ##########
 
