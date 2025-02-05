@@ -687,6 +687,8 @@ def normalize_attr_app(
             attr["utime"] = int(info["uet"])
         for key, name in (
             ("aid", "area_id"), 
+            ("fatr", "audio_play_long"), 
+            ("fta", "status"), 
             ("ism", "star"), 
             ("ism", "is_mark"), 
             ("is_top", "is_top"), 
@@ -706,17 +708,20 @@ def normalize_attr_app(
             ("def", "defination"), 
             ("def2", "defination2"), 
             ("fco", "cover"), 
+            ("fco", "folder_cover"), 
             ("fdesc", "desc"), 
             ("flabel", "fflabel"), 
             ("multitrack", "multitrack"), 
             ("play_long", "play_long"), 
             ("muc", "cover"), 
+            ("muc", "music_cover"), 
             ("d_img", "d_img"), 
             ("v_img", "video_img_url"), 
             ("audio_play_long", "audio_play_long"), 
             ("current_time", "current_time"), 
             ("last_time", "last_time"), 
             ("played_end", "played_end"), 
+            ("uo", "source_url"), 
         ):
             if key in info:
                 attr[name] = info[key]
@@ -1162,21 +1167,17 @@ class P115Client:
         """
         return P115Cookies.from_cookiejar(self.cookiejar)
 
-    @property
+    @locked_cacheproperty
     def headers(self, /) -> MutableMapping:
         """请求头，无论同步还是异步请求都共用这个请求头
         """
-        try:
-            return self.__dict__["headers"]
-        except KeyError:
-            from multidict import CIMultiDict
-            headers = self.__dict__["headers"] = CIMultiDict({
-                "accept": "application/json, text/plain, */*", 
-                "accept-encoding": "gzip, deflate", 
-                "connection": "keep-alive", 
-                "user-agent": "Mozilla/5.0 AppleWebKit/600 Safari/600 Chrome/124.0.0.0", 
-            })
-            return headers
+        from multidict import CIMultiDict
+        return CIMultiDict({
+            "accept": "application/json, text/plain, */*", 
+            "accept-encoding": "gzip, deflate", 
+            "connection": "keep-alive", 
+            "user-agent": "Mozilla/5.0 AppleWebKit/600 Safari/600 Chrome/124.0.0.0", 
+        })
 
     @locked_cacheproperty
     def user_id(self, /) -> int:
@@ -4451,7 +4452,7 @@ class P115Client:
 
         :payload:
             - cid: int | str
-            - aid: int | str = 1 💡 area_id。1:网盘文件 7:回收站 120:已删除
+            - aid: int | str = 1 💡 area_id。1:正常文件 7:回收站文件 12:瞬间文件 120:彻底删除文件、简历附件
         """
         api = complete_webapi("/category/get", base_url=base_url)
         if isinstance(payload, (int, str)):
@@ -4498,7 +4499,7 @@ class P115Client:
 
         :payload:
             - cid: int | str
-            - aid: int | str = 1 💡 area_id。1:网盘文件 7:回收站 120:已删除
+            - aid: int | str = 1 💡 area_id。1:正常文件 7:回收站文件 12:瞬间文件 120:彻底删除文件、简历附件
         """
         api = complete_proapi("/2.0/category/get", base_url, app)
         if isinstance(payload, (int, str)):
@@ -4843,14 +4844,12 @@ class P115Client:
             payload = {"fid": payload}
         elif not isinstance(payload, dict):
             payload = {f"fid[{i}]": fid for i, fid in enumerate(payload)}
-        if not payload:
-            return {"state": False, "message": "no op"}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
     def fs_delete_app(
         self, 
-        payload: int | str | dict, 
+        payload: int | str | dict | Iterable[int | str], 
         /, 
         app: str = "android", 
         base_url: bool | str | Callable[[], str] = False, 
@@ -4862,7 +4861,7 @@ class P115Client:
     @overload
     def fs_delete_app(
         self, 
-        payload: int | str | dict, 
+        payload: int | str | dict | Iterable[int | str], 
         /, 
         app: str = "android", 
         base_url: bool | str | Callable[[], str] = False, 
@@ -4873,7 +4872,7 @@ class P115Client:
         ...
     def fs_delete_app(
         self, 
-        payload: int | str | dict, 
+        payload: int | str | dict | Iterable[int | str], 
         /, 
         app: str = "android", 
         base_url: bool | str | Callable[[], str] = False, 
@@ -4887,17 +4886,15 @@ class P115Client:
 
         :payload:
             - file_ids: int | str 💡 文件或目录的 id，多个用逗号 "," 隔开
-            - file_ids[]: int | str
-            - ...
-            - file_ids[0]: int | str
-            - file_ids[1]: int | str
-            - ...
             - user_id: int | str = <default> 💡 不用管
         """
         api = complete_proapi("/rb/delete", base_url, app)
         if isinstance(payload, (int, str)):
-            payload = {"file_ids": payload}
-        payload["user_id"] = self.user_id
+            payload = {"file_ids": payload, "user_id": self.user_id}
+        elif isinstance(payload, dict):
+            payload = dict(payload, user_id=self.user_id)
+        else:
+            payload = {"file_ids": ",".join(map(str, payload)), "user_id": self.user_id}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -5833,7 +5830,7 @@ class P115Client:
             - limit: int = 32 💡 分页大小，目前最大值是 1,150，以前是没限制的
             - offset: int = 0 💡 分页开始的索引，索引从 0 开始计算
 
-            - aid: int | str = 1 💡 area_id。1:网盘文件 7:回收站 120:已删除
+            - aid: int | str = 1 💡 area_id。1:正常文件 7:回收站文件 12:瞬间文件 120:彻底删除文件、简历附件
             - asc: 0 | 1 = <default> 💡 是否升序排列。0:降序 1:升序
             - code: int | str = <default>
             - count_folders: 0 | 1 = 1 💡 统计文件数和目录数
@@ -5960,7 +5957,7 @@ class P115Client:
                 2. fc_mix 无论怎么设置，都和 fc_mix=0 的效果相同（即目录总是置顶），但设置为 custom_order=2 就好了
 
         .. hint::
-            置顶无效。
+            置顶无效，但可以知道是否置顶了。
 
             在根目录下且 fc_mix=0 且是特殊名字 ("我的接收", "手机相册", "云下载", "我的时光记录")，会在整个文件列表的最前面，这时可从返回信息的 "sys_count" 字段知道数目
 
@@ -5969,12 +5966,12 @@ class P115Client:
             - limit: int = 32 💡 分页大小，最大值不一定，看数据量，7,000 应该总是安全的，10,000 有可能报错，但有时也可以 20,000 而成功
             - offset: int = 0 💡 分页开始的索引，索引从 0 开始计算
 
-            - aid: int | str = 1 💡 area_id。1:网盘文件 7:回收站 120:已删除
+            - aid: int | str = 1 💡 area_id。1:正常文件 7:回收站文件 12:瞬间文件 120:彻底删除文件、简历附件
             - asc: 0 | 1 = <default> 💡 是否升序排列。0:降序 1:升序
             - code: int | str = <default>
             - count_folders: 0 | 1 = 1 💡 统计文件数和目录数
-            - cur: 0 | 1 = <default> 💡 是否只搜索当前目录
-            - custom_order: 0 | 1 | 2 = <default> 💡 启用自定义排序，如果指定了 "asc"、"fc_mix"、"o" 中其一，则此参数会被自动设置为 2
+            - cur: 0 | 1 = <default>   💡 是否只显示当前目录
+            - custom_order: 0 | 1 | 2 = <default> 💡 是否使用记忆排序。0:使用记忆排序（自定义排序失效） 1:使用自定义排序（不使用记忆排序） 2:自定义排序（非目录置顶）。如果指定了 "asc"、"fc_mix"、"o" 中其一，则此参数会被自动设置为 2
             - date: str = <default> 💡 筛选日期
             - fc_mix: 0 | 1 = <default> 💡 是否目录和文件混合，如果为 0 则目录在前（目录置顶）
             - fields: str = <default>
@@ -6000,10 +5997,10 @@ class P115Client:
             - r_all: 0 | 1 = <default>
             - record_open_time: 0 | 1 = 1 💡 是否要记录目录的打开时间
             - scid: int | str = <default>
-            - show_dir: 0 | 1 = 1
+            - show_dir: 0 | 1 = 1 💡 是否展示目录：1:展示 0:不展示
             - snap: 0 | 1 = <default>
             - source: str = <default>
-            - sys_dir: int | str = <default>
+            - sys_dir: int | str = <default> 💡 系统通用目录
             - star: 0 | 1 = <default> 💡 是否星标文件
             - stdir: 0 | 1 = <default>
             - suffix: str = <default> 💡 后缀名（优先级高于 `type`）
@@ -6094,7 +6091,7 @@ class P115Client:
             - limit: int = 32 💡 分页大小，最大值不一定，看数据量，7,000 应该总是安全的，10,000 有可能报错，但有时也可以 20,000 而成功
             - offset: int = 0 💡 分页开始的索引，索引从 0 开始计算
 
-            - aid: int | str = 1 💡 area_id。1:网盘文件 7:回收站 120:已删除
+            - aid: int | str = 1 💡 area_id。1:正常文件 7:回收站文件 12:瞬间文件 120:彻底删除文件、简历附件
             - asc: 0 | 1 = <default> 💡 是否升序排列。0:降序 1:升序
             - code: int | str = <default>
             - count_folders: 0 | 1 = 1 💡 统计文件数和目录数
@@ -6219,7 +6216,7 @@ class P115Client:
             - limit: int = 32 💡 分页大小，最大值是 1,200
             - offset: int = 0 💡 分页开始的索引，索引从 0 开始计算
 
-            - aid: int | str = 1 💡 area_id。1:网盘文件 7:回收站 120:已删除
+            - aid: int | str = 1 💡 area_id。1:正常文件 7:回收站文件 12:瞬间文件 120:彻底删除文件、简历附件
             - asc: 0 | 1 = <default> 💡 是否升序排列。0:降序 1:升序
             - code: int | str = <default>
             - count_folders: 0 | 1 = 1 💡 统计文件数和目录数
@@ -7548,7 +7545,7 @@ class P115Client:
             - limit: int = 32    💡 一页大小，建议控制在 <= 9000，不然会报错
             - offset: int = 0    💡 索引偏移，索引从 0 开始计算
 
-            - aid: int | str = 1 💡 area_id。1:网盘文件 7:回收站 120:已删除
+            - aid: int | str = 1 💡 area_id。1:正常文件 7:回收站文件 12:瞬间文件 120:彻底删除文件、简历附件
             - asc: 0 | 1 = <default> 💡 是否升序排列
             - cur: 0 | 1 = <default> 💡 只罗列当前目录
             - o: str = <default> 💡 用某字段排序
@@ -8340,7 +8337,7 @@ class P115Client:
         """新建目录
 
         .. todo::
-            待破解
+            待破解 # 使用 name[] 会报错 "目录名称不能为空"
 
         POST https://proapi.115.com/android/1.0/folder/update
         """
@@ -8446,10 +8443,9 @@ class P115Client:
 
         POST https://proapi.115.com/android/files/move
 
-        .. todo::
-            待破解（还不知道上级 id 是什么字段）
-
-            - ids: int | str 💡 文件或目录 id，多个用逗号 "," 隔开
+        :payload:
+            - ids: int | str    💡 文件或目录 id，多个用逗号 "," 隔开
+            - to_cid: int | str 💡 目标目录 id
             - user_id: int | str = <default> 💡 不用管
         """
         api = complete_proapi("/files/move", base_url, app)
@@ -9877,7 +9873,7 @@ class P115Client:
             下面指定的很多参数其实是一点效果都没有的，具体可以实际验证
 
         :payload:
-            - aid: int | str = 1 💡 area_id。1:网盘文件 7:回收站 120:已删除
+            - aid: int | str = 1 💡 area_id。1:正常文件 7:回收站文件 12:瞬间文件 120:彻底删除文件、简历附件
             - asc: 0 | 1 = <default> 💡 是否升序排列
             - cid: int | str = 0 💡 目录 id
             - count_folders: 0 | 1 = <default> 💡 是否统计目录数，这样就会增加 "folder_count" 和 "file_count" 字段作为统计
@@ -9896,7 +9892,7 @@ class P115Client:
               - "user_otime": 上一次打开时间
 
             - offset: int = 0  💡 索引偏移，索引从 0 开始计算
-            - pick_code: str = <default> 💡 提取码
+            - pick_code: str = <default> 💡 是否查询提取码，如果该值为 1 则查询提取码为 `search_value` 的文件
             - search_value: str = "." 💡 搜索文本，可以是 sha1
             - show_dir: 0 | 1 = 1     💡 是否显示目录
             - source: str = <default> 💡 来源
@@ -9969,12 +9965,12 @@ class P115Client:
             最多只能取回前 10,000 条数据，也就是 limit + offset <= 10_000
 
         :payload:
-            - aid: int | str = 1 💡 area_id。1:网盘文件 7:回收站 120:已删除
+            - aid: int | str = 1 💡 area_id。1:正常文件 7:回收站文件 12:瞬间文件 120:彻底删除文件、简历附件
             - asc: 0 | 1 = <default> 💡 是否升序排列
-            - cid: int | str = 0 💡 目录 id
+            - cid: int | str = 0 💡 目录 id。cid=-1 时，表示不返回列表任何内容
             - count_folders: 0 | 1 = <default>
             - date: str = <default> 💡 筛选日期
-            - fc: 0 | 1 = <default>
+            - fc: 0 | 1 = <default> 💡 只显示文件或目录。1:只显示目录 2:只显示文件
             - fc_mix: 0 | 1 = <default> 💡 是否目录和文件混合，如果为 0 则目录在前（目录置顶）
             - file_label: int | str = <default> 💡 标签 id
             - format: str = "json" 💡 输出格式（不用管）
@@ -9989,7 +9985,7 @@ class P115Client:
               - "user_otime": 上一次打开时间
 
             - offset: int = 0  💡 索引偏移，索引从 0 开始计算
-            - pick_code: str = <default>
+            - pick_code: str = <default> 💡 是否查询提取码，如果该值为 1 则查询提取码为 `search_value` 的文件
             - search_value: str = "." 💡 搜索文本，可以是 sha1
             - show_dir: 0 | 1 = 1
             - source: str = <default>
@@ -10010,6 +10006,103 @@ class P115Client:
             - version: str = <default> 💡 版本号，比如 3.1
         """
         api = complete_proapi("/files/search", base_url, app)
+        if isinstance(payload, str):
+            payload = {
+                "aid": 1, "cid": 0, "format": "json", "limit": 32, "offset": 0, 
+                "show_dir": 1, "search_value": payload, 
+            }
+        else:
+            payload = {
+                "aid": 1, "cid": 0, "format": "json", "limit": 32, "offset": 0, 
+                "show_dir": 1, "search_value": ".", **payload, 
+            }
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_search_app2(
+        self, 
+        payload: str | dict = ".", 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_search_app2(
+        self, 
+        payload: str | dict = ".", 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_search_app2(
+        self, 
+        payload: str | dict = ".", 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """搜索文件或目录（提示：好像最多只能罗列前 10,000 条数据，也就是 limit + offset <= 10_000）
+
+        GET https://proapi.115.com/android/2.0/ufile/search
+
+        .. attention::
+            最多只能取回前 10,000 条数据，也就是 limit + offset <= 10_000
+
+        :payload:
+            - aid: int | str = 1 💡 area_id。1:正常文件 7:回收站文件 12:瞬间文件 120:彻底删除文件、简历附件
+            - asc: 0 | 1 = <default> 💡 是否升序排列
+            - cid: int | str = 0 💡 目录 id。cid=-1 时，表示不返回列表任何内容
+            - count_folders: 0 | 1 = <default>
+            - date: str = <default> 💡 筛选日期
+            - fc: 0 | 1 = <default> 💡 只显示文件或目录。1:只显示目录 2:只显示文件
+            - fc_mix: 0 | 1 = <default> 💡 是否目录和文件混合，如果为 0 则目录在前（目录置顶）
+            - file_label: int | str = <default> 💡 标签 id
+            - format: str = "json" 💡 输出格式（不用管）
+            - gte_day: str 💡 搜索结果匹配的开始时间；格式：YYYY-MM-DD
+            - limit: int = 32 💡 一页大小，意思就是 page_size
+            - lte_day: str 💡 搜索结果匹配的结束时间；格式：YYYY-MM-DD
+            - o: str = <default> 💡 用某字段排序
+
+              - "file_name": 文件名
+              - "file_size": 文件大小
+              - "file_type": 文件种类
+              - "user_utime": 修改时间
+              - "user_ptime": 创建时间
+              - "user_otime": 上一次打开时间
+
+            - offset: int = 0  💡 索引偏移，索引从 0 开始计算
+            - pick_code: str = <default> 💡 是否查询提取码，如果该值为 1 则查询提取码为 `search_value` 的文件
+            - search_value: str = "." 💡 搜索文本，可以是 sha1
+            - show_dir: 0 | 1 = 1
+            - source: str = <default>
+            - star: 0 | 1 = <default>
+            - suffix: str = <default>
+            - type: int = <default> 💡 文件类型
+
+              - 0: 全部（仅当前目录）
+              - 1: 文档
+              - 2: 图片
+              - 3: 音频
+              - 4: 视频
+              - 5: 压缩包
+              - 6: 软件/应用
+              - 7: 书籍
+              - 99: 仅文件
+
+            - version: str = <default> 💡 版本号，比如 3.1
+        """
+        api = complete_proapi("/2.0/ufile/search", base_url, app)
         if isinstance(payload, str):
             payload = {
                 "aid": 1, "cid": 0, "format": "json", "limit": 32, "offset": 0, 
@@ -10656,7 +10749,7 @@ class P115Client:
         if isinstance(payload, str):
             payload = {"pickcode": payload, "user_id": self.user_id}
         else:
-            payload.setdefault("user_id", self.user_id)
+            payload = dict(payload, user_id=self.user_id)
         def parse(_, content: bytes, /) -> dict:
             json = json_loads(content)
             if json["state"] or json.get("errno") == 409:
@@ -11405,7 +11498,7 @@ class P115Client:
                 - 浏览文件：type=1&file_behavior_type=2
                 - 星标文件：type=1&file_behavior_type=3
                 - 移动文件：type=1&file_behavior_type=4
-                - 文件夹：type=1&file_behavior_type=5
+                - 目录：type=1&file_behavior_type=5
                 - 备份：type=1&file_behavior_type=6
                 - 删除文件：type=1&file_behavior_type=7
                 - 账号安全：type=2
@@ -13858,7 +13951,7 @@ class P115Client:
     @overload
     def recyclebin_clean(
         self, 
-        payload: int | str | Iterable[int | str] | dict, 
+        payload: int | str | Iterable[int | str] | dict = {}, 
         /, 
         password: str = "", 
         base_url: bool | str | Callable[[], str] = False, 
@@ -13870,7 +13963,7 @@ class P115Client:
     @overload
     def recyclebin_clean(
         self, 
-        payload: int | str | Iterable[int | str] | dict, 
+        payload: int | str | Iterable[int | str] | dict = {}, 
         /, 
         password: str = "", 
         base_url: bool | str | Callable[[], str] = False, 
@@ -13905,7 +13998,64 @@ class P115Client:
         elif not isinstance(payload, dict):
             payload = {f"rid[{i}]": rid for i, rid in enumerate(payload)}
         if password:
-            payload["password"] = password
+            payload.setdefault("password", password)
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def recyclebin_clean_app(
+        self, 
+        payload: int | str | Iterable[int | str] | dict = {}, 
+        /, 
+        password: str = "", 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def recyclebin_clean_app(
+        self, 
+        payload: int | str | Iterable[int | str] | dict = {}, 
+        /, 
+        password: str = "", 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def recyclebin_clean_app(
+        self, 
+        payload: int | str | Iterable[int | str] | dict = {}, 
+        /, 
+        password: str = "", 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """回收站：删除或清空
+
+        POST https://proapi.115.com/android/rb/secret_del
+
+        :payload:
+            - tid: int | str 💡 多个用 "," 隔开
+            - password: int | str = <default> 💡 密码，是 6 位数字
+            - user_id: int = <default> 💡 不用管
+        """
+        api = complete_proapi("/rb/secret_del", base_url, app)
+        if isinstance(payload, (int, str)):
+            payload = {"tid": payload, "user_id": self.user_id}
+        elif isinstance(payload, dict):
+            payload = dict(payload, user_id=self.user_id)
+        else:
+            payload = {"tid": ",".join(map(str, payload)), "user_id": self.user_id}
+        if password:
+            payload.setdefault("password", password)
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -14099,6 +14249,56 @@ class P115Client:
             payload = {"rid[0]": payload}
         elif not isinstance(payload, dict):
             payload = {f"rid[{i}]": rid for i, rid in enumerate(payload)}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def recyclebin_revert_app(
+        self, 
+        payload: int | str | Iterable[int | str] | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def recyclebin_revert_app(
+        self, 
+        payload: int | str | Iterable[int | str] | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def recyclebin_revert_app(
+        self, 
+        payload: int | str | Iterable[int | str] | dict, 
+        /, 
+        app: str = "android", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """回收站：还原
+
+        POST https://proapi.115.com/android/rb/revert
+
+        :payload:
+            - tid: int | str 💡 多个用 "," 隔开
+            - user_id: int = <default> 💡 不用管
+        """
+        api = complete_proapi("/rb/revert", base_url, app)
+        if isinstance(payload, (int, str)):
+            payload = {"tid": payload}
+        elif not isinstance(payload, dict):
+            payload = {"tid": ",".join(map(str, payload))}
+        payload.setdefault("user_id", self.user_id)
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     ########## Share API ##########
@@ -17917,3 +18117,4 @@ for name, method in P115Client.__dict__.items():
         CLIENT_API_MAP[match[1]] = "P115Client." + name
 
 # TODO: 提供一个可随时终止和暂停的上传功能，并且可以输出进度条和获取进度
+# TODO: 引入开放接口 https://www.yuque.com/115yun/open

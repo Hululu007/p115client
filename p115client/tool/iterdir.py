@@ -18,7 +18,7 @@ __all__ = [
 __doc__ = "这个模块提供了一些和目录信息罗列有关的函数"
 
 from asyncio import create_task, sleep as async_sleep, Lock as AsyncLock
-from collections import defaultdict, deque
+from collections import defaultdict
 from collections.abc import (
     AsyncIterable, AsyncIterator, Callable, Collection, Coroutine, Iterable, Iterator, 
     Mapping, Sequence, 
@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from errno import EIO, ENOENT, ENOTDIR
 from functools import partial
 from itertools import chain, count, cycle, islice, takewhile
+from math import inf
 from operator import itemgetter
 from re import compile as re_compile
 from string import digits, hexdigits
@@ -40,11 +41,11 @@ from weakref import WeakValueDictionary
 from asynctools import async_chain, async_filter, async_map, to_list
 from concurrenttools import run_as_thread, taskgroup_map, threadpool_map
 from iterutils import (
-    chunked, async_foreach, ensure_aiter, foreach, flatten, iter_unique,   
-    run_gen_step, run_gen_step_iter, through, async_through, with_iter_next, 
-    Yield, YieldFrom, 
+    bfs_gen, chunked, async_foreach, ensure_aiter, foreach, flatten, 
+    iter_unique, run_gen_step, run_gen_step_iter, through, async_through, 
+    with_iter_next, Yield, YieldFrom, 
 )
-from iter_collect import iter_keyed_dups, iter_keyed_dups_async, SupportsLT
+from iter_collect import iter_keyed_dups, SupportsLT
 from orjson import loads
 from p115client import (
     check_response, normalize_attr, normalize_attr_simple, 
@@ -55,7 +56,7 @@ from p115client.type import P115DictAttrLike
 from posixpatht import joins, path_is_dir_form, splitext, splits
 
 from .edit import update_desc, update_star
-from .fs_files import iter_fs_files, iter_fs_files_threaded, iter_fs_files_asynchronized
+from .fs_files import is_timeouterror, iter_fs_files, iter_fs_files_threaded, iter_fs_files_asynchronized
 from .life import iter_life_behavior_once, life_show
 
 
@@ -312,7 +313,7 @@ def get_path_to_cid(
 def get_file_count(
     client: str | P115Client, 
     cid: int = 0, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -322,7 +323,7 @@ def get_file_count(
 def get_file_count(
     client: str | P115Client, 
     cid: int = 0, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -331,7 +332,7 @@ def get_file_count(
 def get_file_count(
     client: str | P115Client, 
     cid: int = 0, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -436,7 +437,7 @@ def get_file_count(
 def get_ancestors(
     client: str | P115Client, 
     attr: dict, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -446,7 +447,7 @@ def get_ancestors(
 def get_ancestors(
     client: str | P115Client, 
     attr: dict, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -455,7 +456,7 @@ def get_ancestors(
 def get_ancestors(
     client: str | P115Client, 
     attr: dict, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -577,7 +578,7 @@ def get_ancestors_to_cid(
     client: str | P115Client, 
     cid: int = 0, 
     refresh: bool = False, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None  | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
     *, 
     async_: Literal[False] = False, 
@@ -589,7 +590,7 @@ def get_ancestors_to_cid(
     client: str | P115Client, 
     cid: int = 0, 
     refresh: bool = False, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None  | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
     *, 
     async_: Literal[True], 
@@ -600,7 +601,7 @@ def get_ancestors_to_cid(
     client: str | P115Client, 
     cid: int = 0, 
     refresh: bool = False, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None  | dict[int, tuple[str, int] | DirNode] = None, 
     app: str = "web", 
     *, 
     async_: Literal[False, True] = False, 
@@ -2591,11 +2592,10 @@ def traverse_files(
     suffix: str = "", 
     type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
     auto_splitting_tasks: bool = True, 
-    auto_splitting_threshold: int = 150_000, 
+    auto_splitting_threshold: int = 300_000, 
     auto_splitting_statistics_timeout: None | int | float = 5, 
     with_ancestors: bool = False, 
     with_path: bool = False, 
-    use_star: None | bool = False, 
     escape: None | bool | Callable[[str], str] = True, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
@@ -2616,11 +2616,10 @@ def traverse_files(
     suffix: str = "", 
     type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
     auto_splitting_tasks: bool = True, 
-    auto_splitting_threshold: int = 150_000, 
+    auto_splitting_threshold: int = 300_000, 
     auto_splitting_statistics_timeout: None | int | float = 5, 
     with_ancestors: bool = False, 
     with_path: bool = False, 
-    use_star: None | bool = False, 
     escape: None | bool | Callable[[str], str] = True, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
@@ -2640,11 +2639,10 @@ def traverse_files(
     suffix: str = "", 
     type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
     auto_splitting_tasks: bool = True, 
-    auto_splitting_threshold: int = 150_000, 
+    auto_splitting_threshold: int = 300_000, 
     auto_splitting_statistics_timeout: None | int | float = 5, 
     with_ancestors: bool = False, 
     with_path: bool = False, 
-    use_star: None | bool = False, 
     escape: None | bool | Callable[[str], str] = True, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
@@ -2678,7 +2676,6 @@ def traverse_files(
     :param auto_splitting_statistics_timeout: 如果执行统计超过此时间，则立即终止，并认为文件是无限多
     :param with_ancestors: 文件信息中是否要包含 "ancestors"
     :param with_path: 文件信息中是否要包含 "path"
-    :param use_star: 获取目录信息时，是否允许使用星标 （如果为 None，则采用流处理，否则采用批处理）
     :param escape: 对文件名进行转义
 
         - 如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
@@ -2696,28 +2693,6 @@ def traverse_files(
 
     :return: 迭代器，返回此目录内的（仅文件）文件信息
     """
-    from httpx import ReadTimeout
-
-    if not auto_splitting_tasks:
-        return iter_files(
-            client, 
-            cid, 
-            page_size=page_size, 
-            suffix=suffix, 
-            type=type, 
-            with_ancestors=with_ancestors, 
-            with_path=with_path, 
-            use_star=use_star, 
-            escape=escape, 
-            normalize_attr=normalize_attr, 
-            id_to_dirnode=id_to_dirnode, 
-            raise_for_changed_count=raise_for_changed_count, 
-            app=app, 
-            cooldown=cooldown, 
-            max_workers=max_workers, 
-            async_=async_, # type: ignore
-            **request_kwargs, 
-        )
     suffix = suffix.strip(".")
     if not (type or suffix):
         raise ValueError("please set the non-zero value of suffix or type")
@@ -2725,103 +2700,70 @@ def traverse_files(
         suffix = "." + suffix.lower()
     if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
-    if page_size <= 0:
-        page_size = 10_000
-    elif page_size < 16:
-        page_size = 16
-    if auto_splitting_threshold < 16:
-        auto_splitting_threshold = 16
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
     elif id_to_dirnode is ... and (with_ancestors or with_path):
         id_to_dirnode = {}
-    if app in ("", "web", "desktop", "harmony"):
-        fs_files: Callable = client.fs_files
-    else:
-        fs_files = partial(client.fs_files_app, app=app)
-    dq: deque[int] = deque()
-    get, put = dq.pop, dq.appendleft
-    put(cid)
+    auto_splitting_tasks = auto_splitting_tasks and auto_splitting_threshold > 0
     def gen_step():
-        while dq:
-            try:
-                if cid := get():
-                    # NOTE: 必要时也可以根据不同的扩展名进行分拆任务，通过 client.fs_files_second_type({"cid": cid, "type": type}) 获取目录内所有的此种类型的扩展名，并且如果响应为空时，则直接退出
-                    try:
-                        payload = {
-                            "asc": 0, "cid": cid, "cur": 0, "limit": 16, "o": "user_utime", "offset": 0, 
-                            "show_dir": 0, "suffix": suffix, "type": type, 
-                        }
-                        resp = check_response((yield fs_files(
-                            payload, 
-                            async_=async_, 
-                            **{
-                                **request_kwargs, 
-                                "timeout": auto_splitting_statistics_timeout, 
-                            }, 
-                        )))
-                        if cid and int(resp["path"][-1]["cid"]) != cid:
-                            continue
-                        if id_to_dirnode is not ...:
-                            for info in resp["path"][1:]:
-                                id_to_dirnode[int(info["cid"])] = DirNode(info["name"], int(info["pid"]))
-                    except (ReadTimeout, TimeoutError):
-                        file_count = float("inf")
-                    else:
-                        file_count = int(resp.get("count") or 0)
-                    if file_count <= auto_splitting_threshold:
-                        if file_count <= 16:
-                            attrs = map(normalize_attr, resp["data"])
-                            if with_ancestors or with_path:
-                                if use_star is None:
-                                    attrs = ensure_attr_path_by_category_get( # type: ignore
-                                        client, 
-                                        attrs, 
-                                        with_ancestors=with_ancestors, 
-                                        with_path=with_path, 
-                                        escape=escape, 
-                                        id_to_dirnode=id_to_dirnode, 
-                                        app=app, 
-                                        async_=async_, 
-                                        **request_kwargs, 
-                                    )
-                                else:
-                                    attrs = ensure_attr_path( # type: ignore
-                                        client, 
-                                        attrs, 
-                                        page_size=page_size, 
-                                        with_ancestors=with_ancestors, 
-                                        with_path=with_path, 
-                                        use_star=use_star, 
-                                        escape=escape, 
-                                        id_to_dirnode=id_to_dirnode, 
-                                        app=app, 
-                                        async_=async_, 
-                                        **request_kwargs, 
-                                    )
-                            yield YieldFrom(attrs, identity=True)
-                        else:
-                            yield YieldFrom(iter_files(
-                                client, 
-                                cid, 
-                                page_size=page_size, 
-                                suffix=suffix, 
-                                type=type, 
-                                with_ancestors=with_ancestors, 
-                                with_path=with_path, 
-                                use_star=use_star, 
-                                escape=escape, 
-                                normalize_attr=normalize_attr, 
-                                id_to_dirnode=id_to_dirnode, 
-                                raise_for_changed_count=raise_for_changed_count, 
-                                app=app, 
-                                cooldown=cooldown, 
-                                max_workers=max_workers, 
-                                async_=async_, # type: ignore
-                                **request_kwargs, 
-                            ))
-                        continue
-                it = iterdir(
+        nonlocal cid
+        if auto_splitting_tasks:
+            get_count = partial(
+                get_file_count, 
+                client, 
+                id_to_dirnode=id_to_dirnode, 
+                **{**request_kwargs, "timeout": auto_splitting_statistics_timeout}
+            )
+        gen = bfs_gen(cid)
+        send = gen.send
+        for cid in gen:
+            if auto_splitting_tasks:
+                try:
+                    file_count: float = yield get_count(cid, async_=async_)
+                except Exception as e:
+                    if not is_timeouterror(e):
+                        raise
+                    file_count = inf
+            else:
+                file_count = 0
+            if file_count <= auto_splitting_threshold:
+                if with_ancestors or with_path:
+                    yield YieldFrom(iter_files_with_path(
+                        client, 
+                        cid, 
+                        page_size=page_size, 
+                        suffix=suffix, 
+                        type=type, 
+                        with_ancestors=with_ancestors, 
+                        with_path=with_path, 
+                        escape=escape, 
+                        normalize_attr=normalize_attr, 
+                        id_to_dirnode=id_to_dirnode, 
+                        raise_for_changed_count=raise_for_changed_count, 
+                        app=app, 
+                        cooldown=cooldown, 
+                        max_workers=max_workers, 
+                        async_=async_, # type: ignore
+                        **request_kwargs, 
+                    ), identity=True)
+                else:
+                    yield YieldFrom(iter_files(
+                        client, 
+                        cid, 
+                        page_size=page_size, 
+                        suffix=suffix, 
+                        type=type, 
+                        normalize_attr=normalize_attr, 
+                        id_to_dirnode=id_to_dirnode, 
+                        raise_for_changed_count=raise_for_changed_count, 
+                        app=app, 
+                        cooldown=cooldown, 
+                        max_workers=max_workers, 
+                        async_=async_, # type: ignore
+                        **request_kwargs, 
+                    ), identity=True)
+            else:
+                with with_iter_next(iterdir(
                     client, 
                     cid, 
                     page_size=page_size, 
@@ -2834,22 +2776,17 @@ def traverse_files(
                     raise_for_changed_count=raise_for_changed_count, 
                     async_=async_, 
                     **request_kwargs, 
-                )
-                if async_:
-                    it = yield to_list(it)
-                for attr in cast(Iterable, it):
+                )) as get_next:
+                    attr = yield get_next
                     if attr.get("is_dir") or attr.get("is_directory"):
-                        put(attr["id"])
-                    else:
-                        ext = splitext(attr["name"])[1].lower()
-                        if suffix:
-                            if suffix != ext:
-                                continue
-                        elif 0 < type <= 7 and type_of_attr(attr) != type:
-                            continue
-                        yield attr
-            except FileNotFoundError:
-                pass
+                        send(attr["id"])
+                    elif (
+                        suffix and 
+                        suffix == splitext(attr["name"])[1].lower() or 
+                        type > 7 or 
+                        type_of_attr(attr) == type
+                    ):
+                        yield Yield(attr, identity=True)
     return run_gen_step_iter(gen_step, async_=async_)
 
 
@@ -2862,9 +2799,12 @@ def iter_dupfiles[K](
     page_size: int = 0, 
     suffix: str = "", 
     type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
-    auto_splitting_tasks: bool = True, 
-    auto_splitting_threshold: int = 150_000, 
+    auto_splitting_tasks: bool = False, 
+    auto_splitting_threshold: int = 300_000, 
     auto_splitting_statistics_timeout: None | int | float = 5, 
+    with_ancestors: bool = False, 
+    with_path: bool = False, 
+    escape: None | bool | Callable[[str], str] = True, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
@@ -2884,9 +2824,12 @@ def iter_dupfiles[K](
     page_size: int = 0, 
     suffix: str = "", 
     type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
-    auto_splitting_tasks: bool = True, 
-    auto_splitting_threshold: int = 150_000, 
+    auto_splitting_tasks: bool = False, 
+    auto_splitting_threshold: int = 300_000, 
     auto_splitting_statistics_timeout: None | int | float = 5, 
+    with_ancestors: bool = False, 
+    with_path: bool = False, 
+    escape: None | bool | Callable[[str], str] = True, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
@@ -2905,9 +2848,12 @@ def iter_dupfiles[K](
     page_size: int = 0, 
     suffix: str = "", 
     type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
-    auto_splitting_tasks: bool = True, 
-    auto_splitting_threshold: int = 150_000, 
+    auto_splitting_tasks: bool = False, 
+    auto_splitting_threshold: int = 300_000, 
     auto_splitting_statistics_timeout: None | int | float = 5, 
+    with_ancestors: bool = False, 
+    with_path: bool = False, 
+    escape: None | bool | Callable[[str], str] = True, 
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     raise_for_changed_count: bool = False, 
@@ -2945,6 +2891,15 @@ def iter_dupfiles[K](
     :param auto_splitting_tasks: 是否根据统计信息自动拆分任务
     :param auto_splitting_threshold: 如果 `auto_splitting_tasks` 为 True，且目录内的文件数大于 `auto_splitting_threshold`，则分拆此任务到它的各个直接子目录，否则批量拉取
     :param auto_splitting_statistics_timeout: 如果执行统计超过此时间，则立即终止，并认为文件是无限多
+    :param with_ancestors: 文件信息中是否要包含 "ancestors"
+    :param with_path: 文件信息中是否要包含 "path"
+    :param escape: 对文件名进行转义
+
+        - 如果为 None，则不处理；否则，这个函数用来对文件名中某些符号进行转义，例如 "/" 等
+        - 如果为 True，则使用 `posixpatht.escape`，会对文件名中 "/"，或单独出现的 "." 和 ".." 用 "\\" 进行转义
+        - 如果为 False，则使用 `posix_escape_name` 函数对名字进行转义，会把文件名中的 "/" 转换为 "|"
+        - 如果为 Callable，则用你所提供的调用，以或者转义后的名字
+
     :param normalize_attr: 把数据进行转换处理，使之便于阅读
     :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
@@ -2955,37 +2910,27 @@ def iter_dupfiles[K](
 
     :return: 迭代器，返回 key 和 重复文件信息 的元组
     """
-    it: Iterator[dict] | AsyncIterator[dict] = traverse_files(
-        client, 
-        cid, 
-        page_size=page_size, 
-        suffix=suffix, 
-        type=type, 
-        auto_splitting_tasks=auto_splitting_tasks, 
-        auto_splitting_threshold=auto_splitting_threshold, 
-        auto_splitting_statistics_timeout=auto_splitting_statistics_timeout, 
-        normalize_attr=normalize_attr, 
-        id_to_dirnode=id_to_dirnode, 
-        raise_for_changed_count=raise_for_changed_count, 
-        app=app, 
-        cooldown=cooldown, 
-        async_=async_, # type: ignore
-        **request_kwargs, 
+    return iter_keyed_dups(
+        traverse_files(
+            client, 
+            cid, 
+            page_size=page_size, 
+            suffix=suffix, 
+            type=type, 
+            auto_splitting_tasks=auto_splitting_tasks, 
+            auto_splitting_threshold=auto_splitting_threshold, 
+            auto_splitting_statistics_timeout=auto_splitting_statistics_timeout, 
+            normalize_attr=normalize_attr, 
+            id_to_dirnode=id_to_dirnode, 
+            raise_for_changed_count=raise_for_changed_count, 
+            app=app, 
+            cooldown=cooldown, 
+            async_=async_, # type: ignore
+            **request_kwargs, 
+        ), 
+        key=key, 
+        keep_first=keep_first, 
     )
-    if async_:
-        it = cast(AsyncIterator[dict], it)
-        return iter_keyed_dups_async(
-            it, 
-            key=key, 
-            keep_first=keep_first, 
-        )
-    else:
-        it = cast(Iterator[dict], it)
-        return iter_keyed_dups(
-            it, 
-            key=key, 
-            keep_first=keep_first, 
-        )
 
 
 @overload
@@ -4249,7 +4194,7 @@ def iter_files_with_path(
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     escape: None | bool | Callable[[str], str] = True, 
     with_ancestors: bool = True, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     path_already: bool = False, 
     raise_for_changed_count: bool = False, 
     app: str = "android", 
@@ -4273,7 +4218,7 @@ def iter_files_with_path(
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     escape: None | bool | Callable[[str], str] = True, 
     with_ancestors: bool = True, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     path_already: bool = False, 
     raise_for_changed_count: bool = False, 
     app: str = "android", 
@@ -4296,7 +4241,7 @@ def iter_files_with_path(
     normalize_attr: Callable[[dict], dict] = normalize_attr, 
     escape: None | bool | Callable[[str], str] = True, 
     with_ancestors: bool = True, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     path_already: bool = False, 
     raise_for_changed_count: bool = False, 
     app: str = "android", 
@@ -4857,7 +4802,7 @@ def iter_parents_3_level(
 def iter_dir_nodes(
     client: str | P115Client, 
     cid: int | str = 0, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     max_workers: None | int = None, 
     *, 
     async_: Literal[False] = False, 
@@ -4868,7 +4813,7 @@ def iter_dir_nodes(
 def iter_dir_nodes(
     client: str | P115Client, 
     cid: int | str = 0, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     max_workers: None | int = None, 
     *, 
     async_: Literal[True], 
@@ -4878,7 +4823,7 @@ def iter_dir_nodes(
 def iter_dir_nodes(
     client: str | P115Client, 
     cid: int | str = 0, 
-    id_to_dirnode: None | dict[int, tuple[str, int] | DirNode] = None, 
+    id_to_dirnode: None | EllipsisType | dict[int, tuple[str, int] | DirNode] = None, 
     max_workers: None | int = None, 
     *, 
     async_: Literal[False, True] = False, 
