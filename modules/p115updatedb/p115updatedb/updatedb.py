@@ -2,7 +2,10 @@
 # encoding: utf-8
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__all__ = ["updatedb_life_iter", "updatedb_life", "updatedb_one", "updatedb_tree", "updatedb"]
+__all__ = [
+    "updatedb_life_iter", "updatedb_life", "updatedb_one", "updatedb_tree", 
+    "updatedb", "iter_fs_event", 
+]
 
 import logging
 
@@ -11,6 +14,7 @@ from errno import EBUSY
 from functools import partial
 from itertools import takewhile
 from math import inf, isnan, isinf
+from os import PathLike
 from posixpath import splitext
 from sqlite3 import connect, Connection, Cursor
 from string import digits
@@ -20,9 +24,9 @@ from warnings import warn
 
 from concurrenttools import run_as_thread
 from iterutils import bfs_gen
-from orjson import dumps
-from p115client import check_response, P115Client
-from p115client.const import CLASS_TO_TYPE, SUFFIX_TO_TYPE
+from orjson import dumps, loads
+from p115client import check_response, normalize_attr_simple, P115Client
+from p115client.const import SUFFIX_TO_TYPE
 from p115client.exception import BusyOSError, P115Warning
 from p115client.tool.fs_files import iter_fs_files, iter_fs_files_threaded
 from p115client.tool.iterdir import (
@@ -677,54 +681,8 @@ def normalize_attr(info: Mapping, /) -> dict:
 
     :return: 经过规范化后的数据
     """
-    def typeof(attr):
-        if attr["is_dir"]:
-            return 0
-        if int(info.get("iv", info.get("isv", 0))):
-            return 4
-        if "muc" in info:
-            return 3
-        if fclass := info.get("class", ""):
-            if type := CLASS_TO_TYPE.get(fclass):
-                return type
-            else:
-                return 99
-        if type := SUFFIX_TO_TYPE.get(splitext(attr["name"])[1].lower()):
-            return type
-        elif "play_long" in info:
-            return 4
-        return 99
-    if "fn" in info:
-        is_dir = info["fc"] == "0"
-        attr = {
-            "id": int(info["fid"]), 
-            "parent_id": int(info["pid"]), 
-            "pickcode": info["pc"], 
-            "sha1": info.get("sha1") or "", 
-            "name": info["fn"], 
-            "size": int(info.get("fs") or 0), 
-            "is_dir": is_dir, 
-            "ctime": int(info["uppt"]), 
-            "mtime": int(info["upt"]), 
-            "is_collect": int(info.get("ic") or 0) == 1, 
-            "is_alive": 1, 
-        }
-    else:
-        is_dir = "fid" not in info
-        attr = {
-            "id": int(info["cid" if is_dir else "fid"]), 
-            "parent_id": int(info["pid" if is_dir else "cid"]), 
-            "pickcode": info["pc"], 
-            "sha1": info.get("sha") or "", 
-            "name": info["n"], 
-            "size": int(info.get("s") or 0), 
-            "is_dir": is_dir, 
-            "ctime": int(info.get("tp") or 0), 
-            "mtime": int(info.get("te") or 0), 
-            "is_collect": int(info.get("c") or 0) == 1, 
-            "is_alive": 1, 
-        }
-    attr["type"] = typeof(attr)
+    attr = normalize_attr_simple(info)
+    attr["is_alive"] = 1
     return attr
 
 
@@ -1121,4 +1079,36 @@ def updatedb(
             if recursive and need_to_split_tasks:
                 for cid in iter_descendants_fast(con, id, fields=False, ensure_file=False, max_depth=1):
                     send(cid)
+
+
+def iter_fs_event(
+    dbfile: bytes | str | PathLike, 
+    from_id: int = -1, 
+    sleep_interval: float = 0.1, 
+) -> Iterator[dict]:
+    """从数据库拉取文件系统事件
+
+    :param dbfile: 数据库文件路径
+    :param from_id: 从大于此 id 的数据开始拉取，如果小于 0，则从最新开始
+    :param sleep_interval: 当一次拉取未拉到任何数据，将会休眠的时间
+
+    :return: 迭代器，产生文件系统事件
+    """
+    with connect(dbfile) as con:
+        if from_id < 0:
+            from_id, = con.execute("SELECT COALESCE(max(ROWID), 0) FROM event").fetchone()
+        while True:
+            if sleep_interval > 0:
+                start_t = time()
+            for cur_from_id, event in con.execute(
+                "SELECT ROWID, fs FROM event WHERE ROWID > ?", 
+                (from_id,), 
+            ):
+                if event:
+                    yield loads(event)
+            if from_id == cur_from_id:
+                if sleep_interval > 0 and (diff := start_t + sleep_interval - time()) > 0:
+                    sleep(diff)
+            else:
+                from_id = cur_from_id
 

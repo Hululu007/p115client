@@ -29,6 +29,7 @@ reference/tool/iterdir
 reference/tool/life
 reference/tool/pool
 reference/tool/request
+reference/tool/upload
 reference/tool/xys
 ```
 

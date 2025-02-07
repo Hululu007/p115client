@@ -22,6 +22,7 @@ from urllib.parse import parse_qsl, quote, urlencode, unquote, urlsplit, urlunsp
 from blacksheep import json, text, Application, FromJSON, Request, Response, Router
 from blacksheep.client import ClientSession
 from blacksheep.contents import Content, FormContent
+from blacksheep.exceptions import HTTPException
 from blacksheep.server.remotes.forwarding import ForwardedHeadersMiddleware
 from cachedict import LRUDict, TLRUDict
 from orjson import dumps, loads, OPT_INDENT_2, OPT_SORT_KEYS
@@ -92,6 +93,12 @@ def get_user_id_from_cookies(cookies: str, /) -> int:
     if match is None:
         return 0
     return int(match[0].partition("_")[0])
+
+
+def check_response(resp: Response, /) -> Response:
+    if resp.status >= 400:
+        raise HTTPException(resp.status)
+    return resp
 
 
 class Url(str):
@@ -178,7 +185,9 @@ def make_application(
         request: Request, 
         exc: Exception, 
     ):
-        if isinstance(exc, ValueError):
+        if isinstance(exc, HTTPException):
+            return text(str(exc), exc.status)
+        elif isinstance(exc, ValueError):
             return text(str(exc), 400)
         elif isinstance(exc, FileNotFoundError):
             return text(str(exc), 404)
@@ -265,6 +274,7 @@ def make_application(
         if pickcode := ID_TO_PICKCODE.get((user_id, id), ""):
             return pickcode
         resp = await client.get(f"http://web.api.115.com/files/file?file_id={id}", headers={"Cookie": cookies})
+        check_response(resp)
         json = loads(cast(bytes, await resp.read()))
         if not (json and json["state"]):
             raise FileNotFoundError(ENOENT, json)
@@ -279,6 +289,7 @@ def make_application(
         if pickcode := SHA1_TO_PICKCODE.get((user_id, sha1), ""):
             return pickcode
         resp = await client.get(f"http://web.api.115.com/files/shasearch?sha1={sha1}", headers={"Cookie": cookies})
+        check_response(resp)
         json = loads(cast(bytes, await resp.read()))
         if not (json and json["state"]):
             raise FileNotFoundError(ENOENT, json)
@@ -307,6 +318,7 @@ def make_application(
                     f"{get_base_url()}/files/getid?{urlencode({'path': dir_})}", 
                     headers={"Cookie": cookies}, 
                 )
+                check_response(resp)
                 json = loads(cast(bytes, await resp.read()))
                 parent_id = int(json.get("id") or 0)
                 if not parent_id:
@@ -338,10 +350,12 @@ def make_application(
         if suffix.isalnum():
             payload["suffix"] = suffix
         resp = await client.get(f"{api}?{urlencode(payload)}", headers={"Cookie": cookies})
+        check_response(resp)
         json = loads(cast(bytes, await resp.read()))
         if get_first(json, "errno", "errNo") == 20021:
             payload.pop("suffix")
             resp = await client.get(f"{api}?{urlencode(payload)}", headers={"Cookie": cookies})
+            check_response(resp)
             json = loads(cast(bytes, await resp.read()))
         if not json["state"] or not json["count"]:
             raise FileNotFoundError(ENOENT, json)
@@ -380,10 +394,12 @@ def make_application(
         if suffix.isalnum():
             payload["suffix"] = suffix
         resp = await client.get(f"{api}?{urlencode(payload)}", headers={"Cookie": cookies})
+        check_response(resp)
         json = loads(cast(bytes, await resp.read()))
         if get_first(json, "errno", "errNo") == 20021:
             payload.pop("suffix")
             resp = await client.get(f"{api}?{urlencode(payload)}", headers={"Cookie": cookies})
+            check_response(resp)
             json = loads(cast(bytes, await resp.read()))
         if not json["state"] or not json["data"]["count"]:
             raise FileNotFoundError(ENOENT, json)
@@ -400,7 +416,6 @@ def make_application(
         user_agent: str = "", 
         app: str = "android", 
         user_id: int = 0, 
-        get_base_url: Callable[[], str] = cycle(("http://pro.api.115.com", "http://proapi.115.com")).__next__, 
     ) -> Url:
         if user_id:
             cookies = d_cookies[user_id]
@@ -413,16 +428,17 @@ def make_application(
             return r[1]
         if app == "chrome":
             resp = await client.post(
-                f"{get_base_url()}/app/chrome/downurl", 
+                "http://proapi.115.com/app/chrome/downurl", 
                 content=FormContent([("data", encrypt(f'{{"pickcode":"{pickcode}"}}').decode("utf-8"))]), 
                 headers={"User-Agent": user_agent, "Cookie": cookies}, 
             )
         else:
             resp = await client.post(
-                f"{get_base_url()}/{app or 'android'}/2.0/ufile/download", 
+                f"http://proapi.115.com/{app or 'android'}/2.0/ufile/download", 
                 content=FormContent([("data", encrypt(f'{{"pick_code":"{pickcode}"}}').decode("utf-8"))]), 
                 headers={"User-Agent": user_agent, "Cookie": cookies}, 
             )
+        check_response(resp)
         json = loads(cast(bytes, await resp.read()))
         if not json["state"]:
             raise OSError(EIO, json)
@@ -451,7 +467,6 @@ def make_application(
         file_id: int, 
         app: str = "", 
         user_id: int = 0, 
-        get_base_url: Callable[[], str] = cycle(("http://pro.api.115.com", "http://proapi.115.com")).__next__, 
     ) -> Url:
         if user_id:
             cookies = d_cookies[user_id]
@@ -462,15 +477,16 @@ def make_application(
         payload = {"share_code": share_code, "receive_code": receive_code, "file_id": file_id}
         if app:
             resp = await client.get(
-                f"{get_base_url()}/{app}/2.0/share/downurl?{urlencode(payload)}", 
+                f"http://proapi.115.com/{app}/2.0/share/downurl?{urlencode(payload)}", 
                 headers={"Cookie": cookies}, 
             )
         else:
             resp = await client.post(
-                f"{get_base_url()}/app/share/downurl", 
+                f"http://proapi.115.com/app/share/downurl", 
                 content=FormContent([("data", encrypt(dumps(payload)).decode("utf-8"))]), 
                 headers={"Cookie": cookies}, 
             )
+        check_response(resp)
         json = loads(cast(bytes, await resp.read()))
         if not json["state"]:
             if json.get("errno") == 4100008 and RECEIVE_CODE_MAP.pop(share_code, None):
@@ -503,6 +519,7 @@ def make_application(
             f"http://web.api.115.com/share/shareinfo?share_code={share_code}", 
             headers={"Cookie": cookies}, 
         )
+        check_response(resp)
         json = loads(cast(bytes, await resp.read()))
         if not json["state"]:
             raise FileNotFoundError(ENOENT, json)

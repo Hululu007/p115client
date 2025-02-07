@@ -11,4 +11,6 @@ from .iterdir import *
 from .life import *
 from .pool import *
 from .request import *
+from .upload import *
 from .xys import *
+

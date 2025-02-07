@@ -61,7 +61,6 @@ from property import locked_cacheproperty
 from re import compile as re_compile
 from startfile import startfile, startfile_async # type: ignore
 from undefined import undefined
-from urlopen import urlopen
 from yarl import URL
 
 from .const import CLASS_TO_TYPE, CLIENT_API_MAP, SSOENT_TO_APP, SUFFIX_TO_TYPE
@@ -502,7 +501,7 @@ def normalize_attr_web(
     """翻译 `P115Client.fs_files`、`P115Client.fs_search`、`P115Client.share_snap` 等接口响应的文件信息数据，使之便于阅读
 
     :param info: 原始数据
-    :param simple: 只提取少量必要字段 "is_dir", "id", "parent_id", "name", "sha1", "size", "pickcode", "is_collect", "ctime", "mtime"
+    :param simple: 只提取少量必要字段 "is_dir", "id", "parent_id", "name", "sha1", "size", "pickcode", "is_collect", "ctime", "mtime", "type"
     :param keep_raw: 是否保留原始数据，如果为 True，则保存到 "raw" 字段
     :param dict_cls: 字典类型
 
@@ -613,16 +612,16 @@ def normalize_attr_web(
                     attr["defination_str"] = "video-origin"
                 case _:
                     attr["defination_str"] = "video-sd"
-        if is_directory:
-            attr["type"] = 0
-        elif info.get("iv") or "vdi" in info:
-            attr["type"] = 4
-        elif type := CLASS_TO_TYPE.get(attr.get("class", "")):
-            attr["type"] = type
-        elif type := SUFFIX_TO_TYPE.get(splitext(attr["name"])[1].lower()):
-            attr["type"] = type
-        else:
-            attr["type"] = 99
+    if is_directory:
+        attr["type"] = 0
+    elif info.get("iv") or "vdi" in info:
+        attr["type"] = 4
+    elif type := CLASS_TO_TYPE.get(attr.get("class", "")):
+        attr["type"] = type
+    elif type := SUFFIX_TO_TYPE.get(splitext(attr["name"])[1].lower()):
+        attr["type"] = type
+    else:
+        attr["type"] = 99
     if keep_raw:
         attr["raw"] = info
     return attr
@@ -638,7 +637,7 @@ def normalize_attr_app(
     """翻译 `P115Client.fs_files_app` 接口响应的文件信息数据，使之便于阅读
 
     :param info: 原始数据
-    :param simple: 只提取少量必要字段 "is_dir", "id", "parent_id", "name", "sha1", "size", "pickcode", "is_collect", "ctime", "mtime"
+    :param simple: 只提取少量必要字段 "is_dir", "id", "parent_id", "name", "sha1", "size", "pickcode", "is_collect", "ctime", "mtime", "type"
     :param keep_raw: 是否保留原始数据，如果为 True，则保存到 "raw" 字段
     :param dict_cls: 字典类型
 
@@ -725,18 +724,18 @@ def normalize_attr_app(
         ):
             if key in info:
                 attr[name] = info[key]
-        if is_directory:
-            attr["type"] = 0
-        elif thumb := info.get("thumb") and thumb.startswith("?"):
-            attr["type"] = 2
-        elif "muc" in info:
-            attr["type"] = 3
-        elif info.get("isv") or "def" in info or "def2" in info or "v_img" in info:
-            attr["type"] = 4
-        elif type := SUFFIX_TO_TYPE.get(splitext(attr["name"])[1].lower()):
-            attr["type"] = type
-        else:
-            attr["type"] = 99
+    if is_directory:
+        attr["type"] = 0
+    elif (thumb := info.get("thumb")) and thumb.startswith("?"):
+        attr["type"] = 2
+    elif "muc" in info:
+        attr["type"] = 3
+    elif info.get("isv") or "def" in info or "def2" in info or "v_img" in info:
+        attr["type"] = 4
+    elif type := SUFFIX_TO_TYPE.get(splitext(attr["name"])[1].lower()):
+        attr["type"] = type
+    else:
+        attr["type"] = 99
     if keep_raw:
         attr["raw"] = info
     return attr
@@ -752,7 +751,7 @@ def normalize_attr_app2(
     """翻译 `P115Client.fs_files_app2` 接口响应的文件信息数据，使之便于阅读
 
     :param info: 原始数据
-    :param simple: 只提取少量必要字段 "is_dir", "id", "parent_id", "name", "sha1", "size", "pickcode", "is_collect", "ctime", "mtime"
+    :param simple: 只提取少量必要字段 "is_dir", "id", "parent_id", "name", "sha1", "size", "pickcode", "is_collect", "ctime", "mtime", "type"
     :param keep_raw: 是否保留原始数据，如果为 True，则保存到 "raw" 字段
     :param dict_cls: 字典类型
 
@@ -849,18 +848,18 @@ def normalize_attr_app2(
         ):
             if name in info:
                 attr[name] = info[name]
-        if is_directory:
-            attr["type"] = 0
-        elif "thumb_url" in info:
-            attr["type"] = 2
-        elif "music_cover" in info or "play_url" in info:
-            attr["type"] = 3
-        elif info.get("is_video") or "definition" in info or "definition2" in info or "video_img_url" in info:
-            attr["type"] = 4
-        elif type := SUFFIX_TO_TYPE.get(splitext(attr["name"])[1].lower()):
-            attr["type"] = type
-        else:
-            attr["type"] = 99
+    if is_directory:
+        attr["type"] = 0
+    elif "thumb_url" in info:
+        attr["type"] = 2
+    elif "music_cover" in info or "play_url" in info:
+        attr["type"] = 3
+    elif info.get("is_video") or "definition" in info or "definition2" in info or "video_img_url" in info:
+        attr["type"] = 4
+    elif type := SUFFIX_TO_TYPE.get(splitext(attr["name"])[1].lower()):
+        attr["type"] = type
+    else:
+        attr["type"] = 99
     if keep_raw:
         attr["raw"] = info
     return attr
@@ -8337,7 +8336,8 @@ class P115Client:
         """新建目录
 
         .. todo::
-            待破解 # 使用 name[] 会报错 "目录名称不能为空"
+            - name: str 💡 目录名
+            待破解
 
         POST https://proapi.115.com/android/1.0/folder/update
         """
@@ -16304,6 +16304,8 @@ class P115Client:
             )
         return run_gen_step(gen_step, async_=async_)
 
+    # TODO: 当文件 < 1 MB 时，文件不急着打开，需要时再打开
+    # TODO: 对于上传空文件，有特别的速度（sha1写死）
     @overload
     def upload_file(
         self, 
@@ -16461,20 +16463,6 @@ class P115Client:
                     def read_range_bytes_or_hash(sign_check: str, /) -> memoryview:
                         start, end = map(int, sign_check.split("-"))
                         return view[start:end+1]
-            elif isinstance(file, (str, PathLike)):
-                path = fsdecode(file)
-                if not filename:
-                    filename = ospath.basename(path)
-                if async_:
-                    async def request():
-                        from aiofile import async_open
-                        async with async_open(path, "rb") as file:
-                            setattr(file, "fileno", file.file.fileno)
-                            setattr(file, "seekable", lambda: True)
-                            return await do_upload(file)
-                    return request
-                else:
-                    return do_upload(open(path, "rb"))
             elif isinstance(file, SupportsRead):
                 seek = getattr(file, "seek", None)
                 seekable = False   
@@ -16544,13 +16532,27 @@ class P115Client:
                 if async_:
                     from httpfile import AsyncHttpxFileReader
                     async def request():
-                        file = await AsyncHttpxFileReader.new(url)
+                        file = await AsyncHttpxFileReader.new(url, headers={"User-Agent": ""})
                         async with file:
                             return await do_upload(file)
                     return request
                 else:
-                    with HTTPFileReader(url) as file:
+                    with HTTPFileReader(url, headers={"User-Agent": ""}) as file:
                         return do_upload(file)
+            elif isinstance(file, (str, PathLike)):
+                path = fsdecode(file)
+                if not filename:
+                    filename = ospath.basename(path)
+                if async_:
+                    async def request():
+                        from aiofile import async_open
+                        async with async_open(path, "rb") as file:
+                            setattr(file, "fileno", file.file.fileno)
+                            setattr(file, "seekable", lambda: True)
+                            return await do_upload(file)
+                    return request
+                else:
+                    return do_upload(open(path, "rb"))
             else:
                 if need_calc_filesha1:
                     if async_:
