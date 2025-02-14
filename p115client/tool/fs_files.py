@@ -47,6 +47,7 @@ def iter_fs_files(
     /, 
     first_page_size: int = 0, 
     page_size: int = 10_000, 
+    count: int = -1, 
     callback: None | Callable[[dict], Any] = None, 
     app: str = "web", 
     raise_for_changed_count: bool = False, 
@@ -62,6 +63,7 @@ def iter_fs_files(
     /, 
     first_page_size: int = 0, 
     page_size: int = 10_000, 
+    count: int = -1, 
     callback: None | Callable[[dict], Any] = None, 
     app: str = "web", 
     raise_for_changed_count: bool = False, 
@@ -76,6 +78,7 @@ def iter_fs_files(
     /, 
     first_page_size: int = 0, 
     page_size: int = 10_000, 
+    count: int = -1, 
     callback: None | Callable[[dict], Any] = None, 
     app: str = "web", 
     raise_for_changed_count: bool = False, 
@@ -89,6 +92,7 @@ def iter_fs_files(
     :param payload: 目录的 id 或者详细的查询参数
     :param first_page_size: 首次拉取的分页大小，如果 <= 0，则自动确定
     :param page_size: 分页大小，如果 <= 0，则自动确定
+    :param count: 文件总数
     :param callback: 回调函数，调用后，会获得一个值，会添加到返回值中，key 为 "callback"
     :param app: 使用此设备的接口
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
@@ -116,7 +120,6 @@ def iter_fs_files(
     else:
         request_kwargs.setdefault("base_url", get_proapi_origin)
         fs_files = partial(client.fs_files_app, app=app, async_=async_, **request_kwargs)
-    count = -1
     def get_files(payload: dict, /):
         nonlocal count
         while True:
@@ -167,6 +170,8 @@ def iter_fs_files_threaded(
     payload: int | str | dict = 0, 
     /, 
     page_size: int = 7_000, 
+    count: int = -1, 
+    wait_for_count: bool = False, 
     callback: None | Callable[[dict], Any] = None, 
     app: str = "web", 
     raise_for_changed_count: bool = False, 
@@ -179,6 +184,8 @@ def iter_fs_files_threaded(
     :param client: 115 网盘客户端对象
     :param payload: 目录的 id 或者详细的查询参数
     :param page_size: 分页大小，如果 <= 0，则自动确定
+    :param count: 文件总数
+    :param wait_for_count: 如果为 True，则在确定 count 前，不进行并发
     :param callback: 回调函数，调用后，会获得一个值，会添加到返回值中，key 为 "callback"
     :param app: 使用此设备的接口
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
@@ -206,7 +213,6 @@ def iter_fs_files_threaded(
     else:
         request_kwargs.setdefault("base_url", get_proapi_origin)
         fs_files = partial(client.fs_files_app, app=app, **request_kwargs)
-    count = -1
     def get_files(payload: dict, /):
         nonlocal count
         resp = fs_files(payload)
@@ -245,7 +251,10 @@ def iter_fs_files_threaded(
         offset = payload["offset"]
         while True:
             try:
-                resp = future.result(max(0, ts + cooldown - time()))
+                if wait_for_count and count < 0:
+                    resp = future.result()
+                else:
+                    resp = future.result(max(0, ts + cooldown - time()))
             except TimeoutError:
                 payload["offset"] += page_size
                 if count < 0 or payload["offset"] < count:
@@ -275,6 +284,8 @@ async def iter_fs_files_asynchronized(
     payload: int | str | dict = 0, 
     /, 
     page_size: int = 7_000, 
+    count: int = -1, 
+    wait_for_count: bool = False, 
     callback: None | Callable[[dict], Any] = None, 
     app: str = "web", 
     raise_for_changed_count: bool = False, 
@@ -286,6 +297,8 @@ async def iter_fs_files_asynchronized(
     :param client: 115 网盘客户端对象
     :param payload: 目录的 id 或者详细的查询参数
     :param page_size: 分页大小，如果 <= 0，则自动确定
+    :param count: 文件总数
+    :param wait_for_count: 如果为 True，则在确定 count 前，不进行并发
     :param callback: 回调函数，调用后，会获得一个值，会添加到返回值中，key 为 "callback"
     :param app: 使用此设备的接口
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
@@ -312,7 +325,6 @@ async def iter_fs_files_asynchronized(
     else:
         request_kwargs.setdefault("base_url", get_proapi_origin)
         fs_files = partial(client.fs_files_app, app=app, **request_kwargs)
-    count = -1
     async def get_files(payload: dict, /):
         nonlocal count
         resp = await fs_files(payload, async_=True) # type: ignore
@@ -355,7 +367,10 @@ async def iter_fs_files_asynchronized(
         offset = payload["offset"]
         while True:
             try:
-                resp = await wait_for(shield(task), max(0, ts + cooldown - time()))
+                if wait_for_count and count < 0:
+                    resp = await task
+                else:
+                    resp = await wait_for(shield(task), max(0, ts + cooldown - time()))
             except TimeoutError:
                 payload["offset"] += page_size
                 if count < 0 or payload["offset"] < count:

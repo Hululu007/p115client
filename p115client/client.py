@@ -72,7 +72,6 @@ from .type import RequestKeywords, MultipartResumeData, P115Cookies, P115URL
 from ._upload import buffer_length, make_dataiter, oss_upload, oss_multipart_upload
 
 
-CRE_SHARE_LINK_search: Final = re_compile(r"/s/(?P<share_code>\w+)(\?password=(?P<receive_code>\w+))?").search
 CRE_SET_COOKIE: Final = re_compile(r"[0-9a-f]{32}=[0-9a-f]{32}.*")
 CRE_CLIENT_API_search: Final = re_compile(r"^ +((?:GET|POST) .*)", MULTILINE).search
 CRE_COOKIES_UID_search: Final = re_compile(r"(?<=\bUID=)[^\s;]+").search
@@ -89,9 +88,9 @@ match SYS_PLATFORM:
     case _:
         NAME_TANSTAB_FULLWIDH = {ord("/"): "／"}
 
-get_anxia_origin = cycle(("http://anxia.com", "http://v.anxia.com")).__next__
 get_proapi_origin = cycle(("http://proapi.115.com", "https://proapi.115.com")).__next__
 get_webapi_origin = cycle(("http://webapi.115.com", "https://webapi.115.com")).__next__
+get_cdn_origin = cycle(("http://115cdn.com", "http://115vod.com")).__next__
 _default_k_ec = {"k_ec": ecdh_encode_token(0).decode()}
 _httpx_request = None
 
@@ -137,7 +136,7 @@ def complete_api(
         base_url = base_url()
     if base_url:
         if base_url is True:
-            base_url = get_anxia_origin()
+            base_url = get_cdn_origin()
             if not base:
                 base = "site"
             if base and not base.startswith("/"):
@@ -6923,13 +6922,13 @@ class P115Client:
 
               - 全部: 0
               - ？？: 1
-              - ？？: 2
+              - 离线下载: 2
               - 播放视频: 3
               - 上传: 4
               - ？？: 5
               - ？？: 6
               - 接收: 7
-              - 移入: 8
+              - 移动: 8
 
             - with_file: 0 | 1 = 0
         """
@@ -7078,13 +7077,13 @@ class P115Client:
 
               - 全部: 0
               - ？？: 1
-              - ？？: 2
+              - 离线下载: 2
               - 播放视频: 3
               - 上传: 4
               - ？？: 5
               - ？？: 6
               - 接收: 7
-              - 移入: 8
+              - 移动: 8
 
             - with_file: 0 | 1 = 0
         """
@@ -7142,9 +7141,9 @@ class P115Client:
               - 播放视频: 3
               - 上传: 4
               - ？？: 5
-              - ？？: 6（似乎和离线下载有关）
+              - ？？: 6
               - 接收: 7
-              - 移入: 8
+              - 移动: 8
         """
         api = complete_webapi("/history/list", base_url=base_url)
         if isinstance(payload, (int, str)):
@@ -7203,9 +7202,9 @@ class P115Client:
               - 播放视频: 3
               - 上传: 4
               - ？？: 5
-              - ？？: 6（似乎和离线下载有关）
+              - ？？: 6
               - 接收: 7
-              - 移入: 8
+              - 移动: 8
         """
         api = complete_proapi("/history/list", base_url, app)
         if isinstance(payload, (int, str)):

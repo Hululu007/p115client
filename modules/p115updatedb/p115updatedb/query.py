@@ -16,12 +16,13 @@ from errno import ENOENT, ENOTDIR
 from itertools import batched
 from os.path import expanduser
 from pathlib import Path
-from sqlite3 import register_adapter, register_converter, Connection, Cursor, OperationalError
+from sqlite3 import register_converter, Connection, Cursor, OperationalError
 from posixpath import join
 from typing import cast, overload, Any, Final, Literal
 from urllib.parse import quote
 
 from iterutils import bfs_gen
+from orjson import dumps, loads
 from posixpatht import escape, path_is_dir_form, splits
 from sqlitetools import find, query, transact
 
@@ -30,17 +31,24 @@ FIELDS: Final = (
     "id", "parent_id", "pickcode", "sha1", "name", "size", "is_dir", "type", 
     "ctime", "mtime", "is_collect", "is_alive", "updated_at", 
 )
-EXTENDED_FIELDS: Final = (*FIELDS, "path", "posixpath")
+EXTENDED_FIELDS: Final = (*FIELDS, "path", "posixpath", "ancestors")
 
 register_converter("DATETIME", lambda dt: datetime.fromisoformat(str(dt, "utf-8")))
+register_converter("JSON", loads)
 
 
 def get_dir_count(
     con: Connection | Cursor, 
     id: int, 
     /, 
+    is_alive: bool = True, 
 ) -> None | dict:
-    record = find(con, "SELECT dir_count, file_count, tree_dir_count, tree_file_count FROM dirlen WHERE id=?", id)
+    """获取某个目录里的文件数和目录数统计
+    """
+    sql = "SELECT dir_count, file_count, tree_dir_count, tree_file_count FROM dirlen WHERE id=?"
+    if is_alive:
+        sql += " AND is_alive"
+    record = find(con, sql, id)
     if record is None:
         return None
     return dict(zip(("dir_count", "file_count", "tree_dir_count", "tree_file_count"), record))
@@ -541,6 +549,7 @@ def iter_descendants_fast(
     fields: Literal[False], 
     max_depth: int = -1, 
     ensure_file: None | bool = None, 
+    use_relpath: bool = False, 
     where: str = "", 
     orderby: str = "", 
 ) -> Iterator[int]:
@@ -554,6 +563,7 @@ def iter_descendants_fast(
     fields: Literal[True] | tuple[str, ...] = True, 
     max_depth: int = -1, 
     ensure_file: None | bool = None, 
+    use_relpath: bool = False, 
     to_dict: Literal[True] = True, 
     where: str = "", 
     orderby: str = "", 
@@ -568,6 +578,7 @@ def iter_descendants_fast(
     fields: Literal[True] | tuple[str, ...] = True, 
     max_depth: int = -1, 
     ensure_file: None | bool = None, 
+    use_relpath: bool = False, 
     to_dict: Literal[False], 
     where: str = "", 
     orderby: str = "", 
@@ -581,6 +592,7 @@ def iter_descendants_fast(
     fields: bool | tuple[str, ...] = True, 
     max_depth: int = -1, 
     ensure_file: None | bool = None, 
+    use_relpath: bool = False, 
     to_dict: bool = True, 
     where: str = "", 
     orderby: str = "", 
@@ -594,13 +606,15 @@ def iter_descendants_fast(
         .. code:: python
 
             (
-                "id", "parent_id", "pickcode", "sha1", "name", "size", "is_dir", "type", 
-                "ctime", "mtime", "is_collect", "is_alive", "updated_at", "path", "posixpath", 
+                "id", "parent_id", "pickcode", "sha1", "name", "size", "is_dir", 
+                "type", "ctime", "mtime", "is_collect", "is_alive", "updated_at", 
+                "path", "posixpath", "ancestors", 
             )
 
         - 如果为 False，则只拉取 id
         - 如果为 True，则拉取上面提到的所有字段
-        - 如果为 tuple，则是指定了所要拉取的一组字段，无论是否提供，必会包含 "id"，且在最前面，且会把 "path" 和 "posixpath" 放在最后（如果有的话）
+        - 如果为 tuple，则是指定了所要拉取的一组字段，无论是否提供，必会包含 "id"，且在最前面，
+          且会把 "path", "posixpath", "ancestors" 放在最后（如果有的话）
 
     :param max_depth: 最大深度。如果小于 0，则无限深度
     :param ensure_file: 是否仅输出文件
@@ -609,115 +623,104 @@ def iter_descendants_fast(
         - 如果为 False，仅输出目录
         - 如果为 None，全部输出
 
+    :param use_relpath: 仅输出相对路径，否则输出完整路径（从 / 开始）
     :param to_dict: 是否产生字典，如果为 False，则直接迭代返回游标的数据
     :param where: 一些 WHERE 查询条件，直接拼接到查询语句最后
     :param orderby: 一些 ORDER BY 排序条件，直接拼接到查询语句最后
 
-    :return: 迭代器，产生一组 id
+    :return: 迭代器，产生一组数据
     """
+    row_factory: None | str = "dict" if to_dict else None
     if fields is False:
-        if 0 <= max_depth <= 1:
-            sql = "SELECT id FROM data WHERE parent_id=:parent_id AND is_alive"
-        else:
-            if max_depth < 0:
-                args = ("", "", "")
-            else:
-                args = (
-                    ", 1 AS depth", 
-                    ", t.depth + 1", 
-                    " AND depth < :max_depth", 
-                )
-            if ensure_file is not None:
-                args = (
-                    args[0] + ", is_dir", 
-                    args[1] + ", data.is_dir", 
-                    args[2], 
-                )
-            sql = """\
-WITH t AS (
-    SELECT id%s FROM data WHERE parent_id=:parent_id AND is_alive
-    UNION ALL
-    SELECT data.id%s FROM t JOIN data ON(t.id = data.parent_id) WHERE data.is_alive%s
-)
-SELECT id FROM t AS data WHERE TRUE""" % args
-        if ensure_file:
-            sql += " AND NOT is_dir"
-        elif ensure_file is not None:
-            sql += " AND is_dir"
-        if where:
-            sql += f" AND ({where})"
-        if orderby:
-            sql += f" ORDER BY {orderby}"
-        return (id for id, in query(con, sql, locals()))
+        row_factory = "one"
+        fields = "id",
+        select_fields_1 = "id"
+        select_fields_2 = "data.id"
     else:
         if fields is True:
             fields = EXTENDED_FIELDS
         fields = cast(tuple[str, ...], fields)
         with_path = "path" in fields
         with_posixpath = "posixpath" in fields
+        with_ancestors = "ancestors" in fields
         if with_path:
             try:
                 (con.connection if isinstance(con, Cursor) else con).create_function(
                     "escape_name", 1, escape, deterministic=True)
             except OperationalError:
                 pass
-        if with_path or with_posixpath:
-            if parent_id:
-                ancestors = get_ancestors(con, parent_id)
-                if with_path:
-                    path = "/".join(escape(a["name"]) for a in ancestors)
-                if with_posixpath:
-                    posixpath = "/".join(a["name"].replace("/", "|") for a in ancestors)
-            else:
+        if with_path or with_posixpath or with_ancestors:
+            if use_relpath:
                 path = posixpath = ""
+                ancestors = '[]'
+            elif parent_id:
+                ls_ancestors = get_ancestors(con, parent_id)
+                if with_path:
+                    path = "/".join(escape(a["name"]) for a in ls_ancestors)
+                if with_posixpath:
+                    posixpath = "/".join(a["name"].replace("/", "|") for a in ls_ancestors)
+                if with_ancestors:
+                    ancestors = dumps(ls_ancestors).decode("utf-8")
+            else:
+                path = posixpath = "/"
+                ancestors = '[{"id":0,"parent_id":0,"name":0}]'
         predicate: Callable[[str], bool] = frozenset(FIELDS[1:]).__contains__
         fields = ("id", *filter(predicate, fields))
         select_fields_1 = ", ".join(fields)
         select_fields_2 = "data." + ", data.".join(fields)
         if with_path:
-            select_fields_1 += ", :path || '/' || escape_name(name) AS path"
+            select_fields_1 += ", CASE WHEN :path = '' OR :path = '/' THEN :path ELSE :path || '/' END || escape_name(name) AS path"
             select_fields_2 += ", t.path || '/' || escape_name(data.name)"
             fields += "path",
         if with_posixpath:
-            select_fields_1 += ", :posixpath || '/' || REPLACE(name, '/', '|') AS posixpath"
+            select_fields_1 += ", CASE WHEN :posixpath = '' OR :posixpath = '/' THEN :posixpath ELSE :posixpath || '/' END || REPLACE(name, '/', '|') AS posixpath"
             select_fields_2 += ", t.posixpath || '/' || REPLACE(data.name, '/', '|')"
             fields += "posixpath",
-        if 0 <= max_depth <= 1:
-            sql = f"SELECT {select_fields_1} FROM data WHERE parent_id=:parent_id AND is_alive"
+        if with_ancestors:
+            select_fields_1 += ", JSON_INSERT(:ancestors, '$[#]', JSON_OBJECT('id', id, 'parent_id', :parent_id, 'name', name)) AS ancestors"
+            select_fields_2 += ", JSON_INSERT(t.ancestors, '$[#]', JSON_OBJECT('id', data.id, 'parent_id', t.id, 'name', data.name))"
+            fields += 'ancestors AS "ancestors [JSON]"',
+    if 0 <= max_depth <= 1:
+        sql = f"SELECT {select_fields_1} FROM data WHERE parent_id=:parent_id AND is_alive"
+    else:
+        if max_depth < 0:
+            args = ("",) * 4
         else:
-            if max_depth < 0:
-                args = ("", "", "")
-            else:
-                args = (
-                    ", 1 AS depth", 
-                    ", t.depth + 1", 
-                    " AND depth < :max_depth", 
-                )
-            if ensure_file is not None:
+            args = (
+                ", 1 AS depth", 
+                "", 
+                ", t.depth + 1", 
+                " AND depth < :max_depth", 
+            )
+        if ensure_file is True:
+            if "is_dir" not in fields:
                 args = (
                     args[0] + ", is_dir", 
-                    args[1] + ", data.is_dir", 
-                    args[2], 
+                    args[1], 
+                    args[2] + ", data.is_dir", 
+                    args[3], 
                 )
-            sql = f"""\
+        elif ensure_file is False:
+            args = (
+                args[0], 
+                args[1] + " AND is_dir", 
+                args[2], 
+                args[3] + " AND data.is_dir", 
+            )
+        sql = f"""\
 WITH t AS (
-    SELECT {select_fields_1}%s FROM data WHERE parent_id=:parent_id AND is_alive
+    SELECT {select_fields_1}%s FROM data WHERE parent_id=:parent_id AND is_alive%s
     UNION ALL
     SELECT {select_fields_2}%s FROM t JOIN data ON(t.id = data.parent_id) WHERE data.is_alive%s
 )
 SELECT {",".join(fields)} FROM t AS data WHERE TRUE""" % args
-        if ensure_file:
-            sql += " AND NOT is_dir"
-        elif ensure_file is not None:
-            sql += " AND is_dir"
-        if where:
-            sql += f" AND ({where})"
-        if orderby:
-            sql += f" ORDER BY {orderby}"
-        cur = query(con, sql, locals())
-        if to_dict:
-            return (dict(zip(fields, record)) for record in cur)
-        return cur
+    if ensure_file is True:
+        sql += " AND NOT is_dir"
+    if where:
+        sql += f" AND ({where})"
+    if orderby:
+        sql += f" ORDER BY {orderby}"
+    return query(con, sql, locals(), row_factory=row_factory)
 
 
 def iter_files_with_path_url(

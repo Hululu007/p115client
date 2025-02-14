@@ -1089,7 +1089,7 @@ def make_strm(
 @overload
 def iter_download_nodes(
     client: str | P115Client, 
-    pickcode: str, 
+    pickcode: int | str, 
     files: bool = True, 
     max_workers: None | int = 1, 
     *, 
@@ -1100,7 +1100,7 @@ def iter_download_nodes(
 @overload
 def iter_download_nodes(
     client: str | P115Client, 
-    pickcode: str, 
+    pickcode: int | str, 
     files: bool = True, 
     max_workers: None | int = 1, 
     *, 
@@ -1110,7 +1110,7 @@ def iter_download_nodes(
     ...
 def iter_download_nodes(
     client: str | P115Client, 
-    pickcode: str, 
+    pickcode: int | str, 
     files: bool = True, 
     max_workers: None | int = 1, 
     *, 
@@ -1120,7 +1120,7 @@ def iter_download_nodes(
     """获取一个目录内所有的文件或者目录的信息（简略）
 
     :param client: 115 客户端或 cookies
-    :param pickcode: 目录的提取码
+    :param pickcode: 目录的 提取码 或者 id
     :param files: 如果为 True，则只获取文件，否则只获取目录
     :param max_workers: 最大并发数，如果为 None 或 <= 0，则默认为 20
     :param async_: 是否异步
@@ -1134,9 +1134,14 @@ def iter_download_nodes(
         method = client.download_files
     else:
         method = client.download_folders
-    request_kwargs.setdefault("base_url", cycle(("http://proapi.115.com", "https://proapi.115.com")).__next__)
     if max_workers == 1:
         def gen_step():
+            nonlocal pickcode
+            if isinstance(pickcode, int):
+                resp = yield client.fs_file_skim(pickcode, async_=async_, **request_kwargs)
+                check_response(resp)
+                pickcode = resp["data"][0]["pick_code"]
+            request_kwargs.setdefault("base_url", cycle(("http://proapi.115.com", "https://proapi.115.com")).__next__)
             for i in count(1):
                 payload = {"pickcode": pickcode, "page": i}
                 resp = yield method(payload, async_=async_, **request_kwargs)
@@ -1174,7 +1179,7 @@ def iter_download_nodes(
                 if not data["has_next_page"]:
                     max_page = page
         def gen_step():
-            nonlocal max_workers
+            nonlocal max_workers, pickcode
             if async_:
                 if max_workers is None or max_workers <= 0:
                     max_workers = 20
@@ -1191,6 +1196,15 @@ def iter_download_nodes(
                 n = executor._max_workers
                 submit = executor.submit
                 shutdown = lambda: executor.shutdown(False, cancel_futures=True)
+            if isinstance(pickcode, int):
+                resp = yield client.fs_file_skim(
+                    pickcode, 
+                    async_=async_, # type: ignore
+                    **request_kwargs, 
+                )
+                check_response(resp)
+                pickcode = resp["data"][0]["pick_code"]
+            request_kwargs.setdefault("base_url", cycle(("http://proapi.115.com", "https://proapi.115.com")).__next__)
             try:
                 sentinel = object()
                 countdown: Callable

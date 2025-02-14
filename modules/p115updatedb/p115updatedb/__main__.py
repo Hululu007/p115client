@@ -20,10 +20,11 @@ parser.add_argument("top_dirs", metavar="dir", nargs="*", help="""\
 """)
 parser.add_argument("-cp", "--cookies-path", default="", help="cookies 文件保存路径，默认为当前工作目录下的 115-cookies.txt")
 parser.add_argument("-f", "--dbfile", default="", help="sqlite 数据库文件路径，默认为在当前工作目录下的 f'115-{user_id}.db'")
-parser.add_argument("-i", "--interval", type=float, default=0, help="两个任务之间的睡眠时间，如果 <= 0，则不睡眠")
-parser.add_argument("-st", "--auto-splitting-threshold", type=int, default=100_000, help="自动拆分的文件数阈值，大于此值时，自动进行拆分，如果 = 0，则总是拆分，如果 < 0，则总是不拆分，默认值 100,000（10 万）")
-parser.add_argument("-sst", "--auto-splitting-statistics-timeout", type=float, default=3, help="自动拆分前的执行文件数统计的超时时间（秒），大于此值时，视为文件数无穷大，如果 <= 0，视为永不超时，默认值 3")
+parser.add_argument("-i", "--interval", type=float, default=0.5, help="两个批处理任务至少需要间隔的时间（以启动前那一刻作为计算依据），默认值: 0.5")
+parser.add_argument("-st", "--auto-splitting-threshold", type=int, default=300_000, help="自动拆分的文件数阈值，大于此值时，自动进行拆分，如果 = 0，则总是拆分，如果 < 0，则总是不拆分，默认值 300,000（30 万）")
+parser.add_argument("-sst", "--auto-splitting-statistics-timeout", type=float, default=5.0, help="自动拆分前的执行文件数统计的超时时间（秒），大于此值时，视为文件数无穷大，如果 <= 0，视为永不超时，默认值 5.0")
 parser.add_argument("-nm", "--no-dir-moved", action="store_true", help="声明没有目录被移动或改名（但可以有目录被新增或删除），这可以加快批量拉取时的速度")
+parser.add_argument("-r", "--refresh", action="store_true", help="是否强制刷新")
 parser.add_argument("-nr", "--not-recursive", action="store_true", help="不遍历目录树：只拉取顶层目录，不递归子目录")
 parser.add_argument("-de", "--disable-event", action="store_true", help="关闭 event 表的数据收集")
 parser.add_argument("-cl", "--check-for-relogin", action="store_true", help="当风控时，自动重新扫码登录")
@@ -65,6 +66,7 @@ def main(argv: None | list[str] | Namespace = None, /):
         auto_splitting_threshold=args.auto_splitting_threshold, 
         auto_splitting_statistics_timeout=args.auto_splitting_statistics_timeout, 
         no_dir_moved=args.no_dir_moved, 
+        refresh=args.refresh, 
         recursive=not args.not_recursive, 
         interval=args.interval, 
         disable_event=args.disable_event, 

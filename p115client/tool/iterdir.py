@@ -65,12 +65,11 @@ CRE_SHARE_LINK_search2 = re_compile(r"(?P<share_code>[a-z0-9]+)(?:-(?P<receive_c
 CRE_115_CHARREF_sub = re_compile("\\[\x02([0-9]+)\\]").sub
 WEBAPI_BASE_URLS = (
     "http://webapi.115.com", 
-    "http://webapi.115.com", 
     "https://webapi.115.com", 
-    "http://anxia.com/webapi", 
-    "http://v.anxia.com/webapi", 
     "http://webapi.115.com", 
+    "http://115cdn.com/webapi", 
     "http://webapi.115.com", 
+    "http://115vod.com/webapi", 
 )
 PROAPI_BASE_URLS = (
     "http://proapi.115.com", 
@@ -79,9 +78,9 @@ PROAPI_BASE_URLS = (
     "https://proapi.115.com", 
 )
 APS_BASE_URLS = (
+    "http://115cdn.com/aps", 
     "http://aps.115.com", 
-    "http://anxia.com/aps", 
-    "http://v.anxia.com/aps", 
+    "http://115vod.com/aps", 
 )
 
 _n_get_ancestors = 0
@@ -3518,20 +3517,14 @@ def iter_selected_nodes_by_pickcode(
     methods: list[Callable] = []
     if ignore_deleted or ignore_deleted is None:
         methods += (
-            partial(client.fs_document, base_url="http://anxia.com/webapi"), 
             partial(client.fs_document, base_url="http://webapi.115.com"), 
             partial(client.fs_document_app, base_url="http://proapi.115.com"), 
-            partial(client.fs_document, base_url="http://v.anxia.com/webapi"), 
-            partial(client.fs_document, base_url="https://webapi.115.com"), 
             partial(client.fs_document_app, base_url="https://proapi.115.com"), 
         )
     if not ignore_deleted:
        methods += (
-            partial(client.fs_supervision, base_url="http://anxia.com/webapi"), 
             partial(client.fs_supervision, base_url="http://webapi.115.com"), 
             partial(client.fs_supervision_app, base_url="http://proapi.115.com"), 
-            partial(client.fs_supervision, base_url="http://v.anxia.com/webapi"), 
-            partial(client.fs_supervision, base_url="https://webapi.115.com"), 
             partial(client.fs_supervision_app, base_url="https://proapi.115.com"), 
         )
     def get_response(pickcode: str | dict, /, get_method=cycle(methods).__next__):
@@ -3566,9 +3559,9 @@ def iter_selected_nodes_by_pickcode(
     if ls_id:
         it: Any = iter_nodes_skim(client, ls_id, async_=async_, **request_kwargs)
         if async_:
-            it = chain(ls_pickcode, it)
-        else:
             it = async_chain(ls_pickcode, it)
+        else:
+            it = chain(ls_pickcode, it)
     else:
         it = ls_pickcode
     if async_:
@@ -4315,7 +4308,7 @@ def iter_files_with_path(
     escape = cast(None | Callable[[str], str], escape)
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
-    else:
+    elif id_to_dirnode is ...:
         id_to_dirnode = {}
         path_already = False
     _path_already: None | bool = None if path_already else False

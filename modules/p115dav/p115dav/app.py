@@ -641,15 +641,13 @@ LIMIT 1;""", (share_code, id))
         page_size: int = 10_000, 
         get_base_url=cycle((
             "http://webapi.115.com", 
-            "http://proapi.115.com", 
             "https://webapi.115.com", 
+            "http://proapi.115.com", 
             "https://proapi.115.com", 
             "http://webapi.115.com", 
+            "http://115cdn.com/webapi", 
             "http://proapi.115.com", 
-            "http://v.anxia.com/webapi", 
-            "http://webapi.115.com", 
-            "http://proapi.115.com", 
-            "http://anxia.com/webapi", 
+            "http://115vod.com/webapi", 
         )).__next__
     ) -> tuple[int, list[dict], AsyncIterator[AttrDict]]:
         ancestors = [{"id": "0", "parent_id": "0", "name": ""}]

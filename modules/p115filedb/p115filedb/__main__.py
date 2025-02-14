@@ -22,9 +22,7 @@ parser.add_argument("-cp", "--cookies-path", default="", help="cookies 文件保
 parser.add_argument("-f", "--dbfile", default="", help="sqlite 数据库文件路径，默认为在当前工作目录下的 f'115-file-{user_id}.db'")
 parser.add_argument("-i", "--interval", type=float, default=0, help="两个任务之间的睡眠时间，如果 <= 0，则不睡眠")
 parser.add_argument("-m", "--max-workers", type=int, help="拉取分页时的最大并发数，默认会自动确定")
-parser.add_argument("-p", "--page-size", type=int, default=8_000, help="每次批量拉取的分页大小，默认值：8,000")
-parser.add_argument("-nm", "--no-dir-moved", action="store_true", help="声明没有目录被移动或改名（但可以有目录被新增或删除），这可以加快批量拉取时的速度")
-parser.add_argument("-wp", "--with-parents", action="store_true", help="给 extra 字段的 JSON，更新一个键为 'parents'，值为最近的 4 层上级目录")
+parser.add_argument("-p", "--page-size", type=int, default=7_000, help="每次批量拉取的分页大小，默认值：7,000")
 parser.add_argument("-cl", "--check-for-relogin", action="store_true", help="当风控时，自动重新扫码登录")
 parser.add_argument("-v", "--version", action="store_true", help="输出版本号")
 parser.add_argument("-l", "--license", action="store_true", help="输出开源协议")
@@ -62,8 +60,6 @@ def main(argv: None | list[str] | Namespace = None, /):
         dbfile=args.dbfile, 
         top_dirs=args.top_dirs or 0, 
         page_size=args.page_size, 
-        no_dir_moved=args.no_dir_moved, 
-        with_parents=args.with_parents, 
         interval=args.interval, 
         max_workers=args.max_workers, 
     )

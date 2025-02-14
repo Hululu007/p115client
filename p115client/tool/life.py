@@ -11,7 +11,7 @@ __doc__ = "这个模块提供了一些和 115 生活操作事件有关的函数"
 from asyncio import sleep as async_sleep
 from collections.abc import AsyncIterator, Container, Coroutine, Iterator
 from functools import partial
-from itertools import count
+from itertools import count, cycle
 from time import time, sleep
 from typing import overload, Any, Final, Literal
 
@@ -243,6 +243,7 @@ def iter_life_behavior_once(
     if app in ("", "web", "desktop", "harmony"):
         life_behavior_detail = partial(client.life_behavior_detail, **request_kwargs)
     else:
+        request_kwargs.setdefault("base_url", cycle(("http://proapi.115.com", "https://proapi.115.com")).__next__)
         life_behavior_detail = partial(client.life_behavior_detail_app, app=app, **request_kwargs)
     if first_batch_size <= 0:
         first_batch_size = 64 if from_time or from_id else 1000
