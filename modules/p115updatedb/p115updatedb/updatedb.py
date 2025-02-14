@@ -644,7 +644,7 @@ def diff_dir(
     upsert_list: list[dict] = []
     remove_list: list[int] = []
     if refresh or not ((dirlen := get_dir_count(con, id)) and dirlen["tree_file_count"]):
-        future1 = run_as_thread(lambda: set(iter_descendants_fast(con, id, fields=False)))
+        future1 = run_as_thread(lambda: set(iter_descendants_fast(con, id, fields="id")))
         future2 = run_as_thread(lambda: [{"id": a["fid"], "parent_id": a["pid"], "name": a["fn"], "is_dir": 1, "is_alive": 1} 
                                         for a in iter_download_nodes(client, id, files=False, max_workers=None)])
         if tree:
@@ -1113,7 +1113,7 @@ def updatedb(
                 )
             seen_add(id)
             if recursive and need_to_split_tasks:
-                for cid in iter_descendants_fast(con, id, fields=False, ensure_file=False, max_depth=1):
+                for cid in iter_descendants_fast(con, id, fields="id", ensure_file=False, max_depth=1):
                     send(cid)
 
 
