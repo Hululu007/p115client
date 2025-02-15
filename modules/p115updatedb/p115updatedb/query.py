@@ -6,15 +6,17 @@ __all__ = [
     "get_dir_count", "has_id", "iter_existing_id", "get_parent_id", "iter_parent_id", 
     "iter_id_to_parent_id", "iter_id_to_path", "id_to_path", "get_id", "get_pickcode", 
     "get_sha1", "get_path", "get_ancestors", "get_attr", "iter_children", 
-    "iter_descendants", "iter_descendants_dfs", "iter_files_with_path_url", 
+    "iter_descendants", "iter_descendants_bfs", "iter_files_with_path_url", 
     "iter_dup_files", "iter_dangling_parent_ids", "iter_dangling_ids", "select_na_ids", 
-    "select_mtime_groups", "dump_to_alist", 
+    "select_mtime_groups", "dump_to_alist", "dump_efu", 
 ]
 
 from collections.abc import Callable, Iterable, Iterator, Sequence
+from csv import writer
 from datetime import datetime
 from errno import ENOENT, ENOTDIR
 from itertools import batched
+from ntpath import normpath
 from os.path import expanduser
 from pathlib import Path
 from sqlite3 import register_converter, Connection, Cursor, OperationalError
@@ -525,7 +527,7 @@ def iter_descendants(
 
 
 @overload
-def iter_descendants_dfs(
+def iter_descendants_bfs(
     con: Connection | Cursor, 
     parent_id: int = 0, 
     /, 
@@ -537,7 +539,7 @@ def iter_descendants_dfs(
 ) -> Iterator[Any]:
     ...
 @overload
-def iter_descendants_dfs(
+def iter_descendants_bfs(
     con: Connection | Cursor, 
     parent_id: int = 0, 
     /, 
@@ -550,7 +552,7 @@ def iter_descendants_dfs(
 ) -> Iterator[tuple[Any, ...]]:
     ...
 @overload
-def iter_descendants_dfs(
+def iter_descendants_bfs(
     con: Connection | Cursor, 
     parent_id: int = 0, 
     /, 
@@ -562,7 +564,7 @@ def iter_descendants_dfs(
     to_dict: Literal[True] = True, 
 ) -> Iterator[dict[str, Any]]:
     ...
-def iter_descendants_dfs(
+def iter_descendants_bfs(
     con: Connection | Cursor, 
     parent_id: int = 0, 
     /, 
@@ -573,7 +575,7 @@ def iter_descendants_dfs(
     fields: None | str | tuple[str, ...] = None, 
     to_dict: bool = True, 
 ) -> Iterator:
-    """获取某个目录之下的所有目录节点的 id 或者信息字典
+    """获取某个目录之下的所有目录节点的 id 或者信息字典（宽度优先遍历）
 
     :param con: 数据库连接或游标
     :param parent_id: 顶层目录的 id
@@ -620,13 +622,11 @@ def iter_descendants_dfs(
         else:
             fields = fields,
     else:
-        seen = set(fields)
-        with_id = "id" in seen
-        with_path = "path" in seen
-        with_posixpath = "posixpath" in seen
-        with_ancestors = "ancestors" in seen
-        fields = tuple(f for f in FIELDS if f in seen)
-        del seen
+        with_id = "id" in fields
+        with_path = "path" in fields
+        with_posixpath = "posixpath" in fields
+        with_ancestors = "ancestors" in fields
+        fields = tuple(filter(set(FIELDS).__contains__, fields))
     if with_id:
         fields0 = fields
     else:
@@ -715,7 +715,7 @@ def iter_descendants_dfs(
                         yield posixpath
                     else:
                         yield "posixpath", posixpath
-                if is_dir and ensure_file is True:
+                if is_dir and ensure_file:
                     raise ValueError
         def row_factory(_, record):
             try:
@@ -729,11 +729,13 @@ def iter_descendants_dfs(
                 else:
                     return tuple(iter_pairs(record))
             except ValueError:
-                pass
+                return none
     select_fields_1 = ", ".join(fields0)
+    use_filter = False
+    none = object()
     if 0 <= max_depth <= 1:
         sql = f"SELECT {select_fields_1} FROM data WHERE parent_id=:parent_id AND is_alive"
-        if ensure_file is True:
+        if ensure_file:
             sql += " AND NOT is_dir"
         elif ensure_file is False:
             sql += " AND is_dir"
@@ -748,7 +750,7 @@ def iter_descendants_dfs(
                 ", t.depth + 1", 
                 " AND depth < :max_depth", 
             )
-        if ensure_file is True:
+        if ensure_file:
             if "is_dir" not in fields0:
                 args = (
                     args[0] + ", is_dir", 
@@ -770,9 +772,13 @@ WITH t AS (
     SELECT {select_fields_2}%s FROM t JOIN data ON(t.id = data.parent_id) WHERE data.is_alive%s
 )
 SELECT {", ".join(fields0 if with_route else fields)} FROM t AS data""" % args
-        if not with_route and ensure_file is True:
+        if not with_route and ensure_file:
             sql += " WHERE NOT is_dir"
-    return filter(None, query(con, sql, locals(), row_factory=row_factory))
+            use_filter = True
+    cursor = query(con, sql, locals(), row_factory=row_factory)
+    if use_filter:
+        return filter(lambda v: v is not none, cursor)
+    return cursor
 
 
 def iter_files_with_path_url(
@@ -792,7 +798,7 @@ def iter_files_with_path_url(
     if isinstance(parent_id, str):
         parent_id = get_id(con, path=parent_id)
     code = compile('f"%s/{quote(name, '"''"')}?{id=}&{pickcode=!s}&{sha1=!s}&{size=}&file=true"' % base_url.translate({ord(c): c*2 for c in "{}"}), "-", "eval")
-    for attr in iter_descendants_dfs(
+    for attr in iter_descendants_bfs(
         con, 
         parent_id, 
         fields=("id", "sha1", "pickcode", "size", "name", "posixpath"), 
@@ -929,9 +935,9 @@ def select_mtime_groups(
     :return: 元组的列表（逆序排列），每个元组第 1 个元素是 mtime，第 2 个元素是相同 mtime 的 id 的集合
     """
     if tree:
-        it = iter_descendants_dfs(con, parent_id, fields=("mtime", "id"), ensure_file=True, to_dict=False)
+        it = iter_descendants_bfs(con, parent_id, fields=("mtime", "id"), ensure_file=True, to_dict=False)
     else:
-        it = iter_descendants_dfs(con, parent_id, fields=("mtime", "id"), max_depth=1, to_dict=False)
+        it = iter_descendants_bfs(con, parent_id, fields=("mtime", "id"), max_depth=1, to_dict=False)
     d: dict[int, set[int]] = group_collect(it, factory=set)
     return sorted(d.items(), reverse=True)
 
@@ -988,4 +994,48 @@ SELECT parent, name, is_dir, size FROM t"""
             count += len(items)
         return count
 
-# TODO: 增加函数，用来导出到 efu (everything)、mlocatedb 等软件的索引数据库
+
+def dump_efu(
+    con: Connection | Cursor, 
+    /, 
+    efu_file: str | Path = "export.efu", 
+    parent_id: int | str = 0, 
+    dirname: str = "", 
+    use_relpath: bool = False, 
+) -> int:
+    """把 p115updatedb 导出的数据，导出为 efu 文件，可供 everything 软件使用
+
+    :param con: 数据库连接或游标
+    :param efu_file: 要导出的文件路径
+    :param parent_id: 在 p115updatedb 所导出数据库中的顶层目录 id 或路径
+    :param dirname: 给每个导出路径添加的目录前缀
+
+    :return: 总共导出的数量
+    """
+    def unix_to_filetime(unix_time: float, /) -> int:
+        return int(unix_time * 10 ** 7) + 11644473600 * 10 ** 7
+    if dirname:
+        dirname = normpath(dirname)
+        if not dirname.endswith("\\"):
+            dirname += "\\"
+    if isinstance(parent_id, str):
+        parent_id = get_id(con, path=parent_id)
+    n = 0
+    with open(efu_file, "w", newline="", encoding="utf-8") as file:
+        csvfile = writer(file)
+        writerow = csvfile.writerow
+        writerow(("Filename", "Size", "Date Modified", "Date Created", "Attributes"))
+        for n, (size, ctime, mtime, is_dir, path) in enumerate(iter_descendants_bfs(
+            con, 
+            parent_id, 
+            use_relpath=use_relpath, 
+            fields=("size", "ctime", "mtime", "is_dir", "posixpath"), 
+            to_dict=False, 
+        ), 1):
+            if use_relpath:
+                path = normpath(path)
+            else:
+                path = normpath(path[1:])
+            writerow((dirname + path, size, unix_to_filetime(mtime), unix_to_filetime(ctime), 16 if is_dir else 0))
+    return n
+

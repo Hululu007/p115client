@@ -41,7 +41,7 @@ from p115client.tool.life import (
 from sqlitetools import execute, find, upsert_items, AutoCloseConnection
 
 from .query import (
-    get_dir_count, has_id, iter_descendants_dfs, iter_existing_id, 
+    get_dir_count, has_id, iter_descendants_bfs, iter_existing_id, 
     iter_id_to_parent_id, select_mtime_groups,  
 )
 
@@ -648,7 +648,7 @@ def diff_dir(
     upsert_list: list[dict] = []
     remove_list: list[int] = []
     if refresh or not ((dirlen := get_dir_count(con, id)) and dirlen["tree_file_count"]):
-        future1 = run_as_thread(lambda: set(iter_descendants_dfs(con, id, fields="id")))
+        future1 = run_as_thread(lambda: set(iter_descendants_bfs(con, id, fields="id")))
         future2 = run_as_thread(lambda: [{"id": a["fid"], "parent_id": a["pid"], "name": a["fn"], "is_dir": 1, "is_alive": 1} 
                                         for a in iter_download_nodes(client, id, files=False, max_workers=None)])
         if tree:
@@ -1118,7 +1118,7 @@ def updatedb(
                 )
             seen_add(id)
             if recursive and need_to_split_tasks:
-                for cid in iter_descendants_dfs(con, id, fields="id", ensure_file=False, max_depth=1):
+                for cid in iter_descendants_bfs(con, id, fields="id", ensure_file=False, max_depth=1):
                     send(cid)
 
 
