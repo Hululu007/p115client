@@ -18,11 +18,6 @@ from p115updatedb.query import (
     get_ancestors, iter_children, 
 )
 
-FIELDS: Final = (
-    "id", "parent_id", "pickcode", "sha1", "name", "size", "is_dir", "type", 
-    "ctime", "mtime", "is_collect", "is_alive", 
-)
-
 
 def normattr(m: Mapping | Iterable[tuple[str, Any]], /) -> AttrDict:
     attr: AttrDict = AttrDict(m)
@@ -114,7 +109,7 @@ def get_children_from_db(
     id: int = 0, 
     /, 
 ) -> list[AttrDict]:
-    ls = list(map(normattr, iter_children(con, id, fields=FIELDS)))
+    ls = list(map(normattr, iter_children(con, id)))
     ls.sort(key=lambda a: (1 - a["is_dir"], a["name"]))
     return ls
 

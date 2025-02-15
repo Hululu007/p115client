@@ -6,8 +6,9 @@ __all__ = [
     "get_dir_count", "has_id", "iter_existing_id", "get_parent_id", "iter_parent_id", 
     "iter_id_to_parent_id", "iter_id_to_path", "id_to_path", "get_id", "get_pickcode", 
     "get_sha1", "get_path", "get_ancestors", "get_attr", "iter_children", 
-    "iter_descendants", "iter_descendants_fast", "iter_files_with_path_url", 
-    "select_na_ids", "select_mtime_groups", "dump_to_alist", 
+    "iter_descendants", "iter_descendants_dfs", "iter_files_with_path_url", 
+    "iter_dup_files", "iter_dangling_parent_ids", "iter_dangling_ids", "select_na_ids", 
+    "select_mtime_groups", "dump_to_alist", 
 ]
 
 from collections.abc import Callable, Iterable, Iterator, Sequence
@@ -21,7 +22,7 @@ from posixpath import join
 from typing import cast, overload, Any, Final, Literal
 from urllib.parse import quote
 
-from iterutils import bfs_gen
+from iterutils import bfs_gen, group_collect
 from orjson import dumps, loads
 from posixpatht import escape, path_is_dir_form, splits
 from sqlitetools import find, query, transact
@@ -524,7 +525,7 @@ def iter_descendants(
 
 
 @overload
-def iter_descendants_fast(
+def iter_descendants_dfs(
     con: Connection | Cursor, 
     parent_id: int = 0, 
     /, 
@@ -536,7 +537,7 @@ def iter_descendants_fast(
 ) -> Iterator[Any]:
     ...
 @overload
-def iter_descendants_fast(
+def iter_descendants_dfs(
     con: Connection | Cursor, 
     parent_id: int = 0, 
     /, 
@@ -549,7 +550,7 @@ def iter_descendants_fast(
 ) -> Iterator[tuple[Any, ...]]:
     ...
 @overload
-def iter_descendants_fast(
+def iter_descendants_dfs(
     con: Connection | Cursor, 
     parent_id: int = 0, 
     /, 
@@ -561,7 +562,7 @@ def iter_descendants_fast(
     to_dict: Literal[True] = True, 
 ) -> Iterator[dict[str, Any]]:
     ...
-def iter_descendants_fast(
+def iter_descendants_dfs(
     con: Connection | Cursor, 
     parent_id: int = 0, 
     /, 
@@ -714,19 +715,28 @@ def iter_descendants_fast(
                         yield posixpath
                     else:
                         yield "posixpath", posixpath
+                if is_dir and ensure_file is True:
+                    raise ValueError
         def row_factory(_, record):
-            if one_value:
-                if with_route:
-                    return next(iter_pairs(record))
+            try:
+                if one_value:
+                    if with_route:
+                        return next(iter_pairs(record))
+                    else:
+                        return record[-1]
+                elif to_dict:
+                    return dict(iter_pairs(record))
                 else:
-                    return record[-1]
-            elif to_dict:
-                return dict(iter_pairs(record))
-            else:
-                return tuple(iter_pairs(record))
+                    return tuple(iter_pairs(record))
+            except ValueError:
+                pass
     select_fields_1 = ", ".join(fields0)
     if 0 <= max_depth <= 1:
         sql = f"SELECT {select_fields_1} FROM data WHERE parent_id=:parent_id AND is_alive"
+        if ensure_file is True:
+            sql += " AND NOT is_dir"
+        elif ensure_file is False:
+            sql += " AND is_dir"
     else:
         select_fields_2 = "data." + ", data.".join(fields0)
         if max_depth < 0:
@@ -759,10 +769,10 @@ WITH t AS (
     UNION ALL
     SELECT {select_fields_2}%s FROM t JOIN data ON(t.id = data.parent_id) WHERE data.is_alive%s
 )
-SELECT {", ".join(fields0 if with_route else fields)} FROM t AS data WHERE TRUE""" % args
-    if ensure_file is True:
-        sql += " AND NOT is_dir"
-    return query(con, sql, locals(), row_factory=row_factory)
+SELECT {", ".join(fields0 if with_route else fields)} FROM t AS data""" % args
+        if not with_route and ensure_file is True:
+            sql += " WHERE NOT is_dir"
+    return filter(None, query(con, sql, locals(), row_factory=row_factory))
 
 
 def iter_files_with_path_url(
@@ -782,13 +792,85 @@ def iter_files_with_path_url(
     if isinstance(parent_id, str):
         parent_id = get_id(con, path=parent_id)
     code = compile('f"%s/{quote(name, '"''"')}?{id=}&{pickcode=!s}&{sha1=!s}&{size=}&file=true"' % base_url.translate({ord(c): c*2 for c in "{}"}), "-", "eval")
-    for attr in iter_descendants_fast(
+    for attr in iter_descendants_dfs(
         con, 
         parent_id, 
         fields=("id", "sha1", "pickcode", "size", "name", "posixpath"), 
         ensure_file=True, 
     ):
         yield attr["posixpath"], eval(code, None, attr)
+
+
+def iter_dup_files(
+    con: Connection | Cursor, 
+    /, 
+) -> Iterator[dict]:
+    """罗列所有重复文件
+
+    :param con: 数据库连接或游标
+
+    :return: 迭代器，一组文件的信息
+    """
+    sql = f"""\
+WITH stats AS (
+    SELECT
+        COUNT(1) OVER w AS total, 
+        ROW_NUMBER() OVER w AS nth, 
+        {",".join(FIELDS)}
+    FROM data
+    WHERE NOT is_dir AND is_alive
+    WINDOW w AS (PARTITION BY sha1, size)
+)
+SELECT * FROM stats WHERE total > 1"""
+    return query(con, sql, row_factory="dict")
+
+
+def iter_dangling_parent_ids(
+    con: Connection | Cursor, 
+    /, 
+) -> Iterator[int]:
+    """罗列所有悬空的 parent_id
+
+    .. note::
+        悬空的 parent_id，即所有的 parent_id 中，，不为 0 且不在 `data` 表中的部分
+
+    :param con: 数据库连接或游标
+
+    :return: 迭代器，一组目录的 id
+    """
+    sql = """\
+WITH pids(id) AS (
+    SELECT DISTINCT parent_id FROM data WHERE parent_id
+)
+SELECT pids.id FROM pids LEFT JOIN data USING (id) WHERE data.id IS NULL"""
+    return query(con, sql, row_factory="one")
+
+
+def iter_dangling_ids(
+    con: Connection | Cursor, 
+    /, 
+) -> Iterator[int]:
+    """罗列所有悬空的文件或目录的 id
+
+    .. note::
+        悬空的 id，即祖先节点中，存在一个节点，它的 parent_id 是悬空的
+
+    :param con: 数据库连接或游标
+
+    :return: 迭代器，一组目录的 id
+    """
+    sql = """\
+WITH pids(id) AS (
+    SELECT DISTINCT parent_id FROM data WHERE parent_id
+), dangling_pids(parent_id) AS (
+    SELECT pids.id FROM pids LEFT JOIN data USING (id) WHERE data.id IS NULL
+), dangling_ids AS (
+    SELECT data.parent_id FROM data JOIN dangling_pids USING (parent_id)
+    UNION ALL
+    SELECT data.parent_id FROM dangling_ids JOIN data USING (parent_id)
+)
+SELECT parent_id AS id FROM dangling_ids"""
+    return query(con, sql, row_factory="one")
 
 
 def select_na_ids(
@@ -798,13 +880,13 @@ def select_na_ids(
     """找出所有的失效节点和悬空节点的 id
 
     .. note::
-        悬空节点，就是此节点有一个祖先节点的 id，不为 0 且不在 `data` 表中
+        悬空节点，就是此节点有一个祖先节点的 parant_id，不为 0 且不在 `data` 表中
 
     :param con: 数据库连接或游标
 
     :return: 一组悬空节点的 id 的集合
     """
-    ok_ids: set[int] = set(query(con, "SELECT id FROM data WHERE NOT is_alive"))
+    ok_ids: set[int] = set(query(con, "SELECT id FROM data WHERE NOT is_alive", row_factory="one"))
     na_ids: set[int] = set()
     d = dict(query(con, "SELECT id, parent_id FROM data WHERE is_alive"))
     temp: list[int] = []
@@ -847,15 +929,10 @@ def select_mtime_groups(
     :return: 元组的列表（逆序排列），每个元组第 1 个元素是 mtime，第 2 个元素是相同 mtime 的 id 的集合
     """
     if tree:
-        it = iter_descendants_fast(con, parent_id, fields=("id", "mtime"), ensure_file=True, to_dict=False)
+        it = iter_descendants_dfs(con, parent_id, fields=("mtime", "id"), ensure_file=True, to_dict=False)
     else:
-        it = iter_descendants_fast(con, parent_id, fields=("id", "mtime"), max_depth=1, to_dict=False)
-    d: dict[int, set[int]] = {}
-    for id, mtime in it:
-        try:
-            d[mtime].add(id)
-        except KeyError:
-            d[mtime] = {id}
+        it = iter_descendants_dfs(con, parent_id, fields=("mtime", "id"), max_depth=1, to_dict=False)
+    d: dict[int, set[int]] = group_collect(it, factory=set)
     return sorted(d.items(), reverse=True)
 
 

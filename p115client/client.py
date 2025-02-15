@@ -8382,6 +8382,13 @@ class P115Client:
 
         POST https://webapi.115.com/files/move
 
+        .. caution::
+            你可以把文件或目录移动到其它目录 id 下，即使是不存在的 id
+
+            因此，我定义了一个概念，悬空节点，此节点的 aid=1，但它有一个祖先节点，要么不存在，要么 aid != 1
+
+            你可以用 `P115Client.tool_space` 方法，使用【校验空间】功能，把所有悬空节点找出来，放到根目录下的【修复文件】目录，此接口一天只能用一次
+
         :payload:
             - fid: int | str 💡 文件或目录 id，只接受单个 id
             - fid[]: int | str
@@ -8407,8 +8414,9 @@ class P115Client:
     @overload
     def fs_move_app(
         self, 
-        payload: dict, 
+        payload: int | str | dict | Iterable[int | str], 
         /, 
+        pid: int = 0, 
         app: str = "android", 
         base_url: bool | str | Callable[[], str] = False, 
         *, 
@@ -8419,8 +8427,9 @@ class P115Client:
     @overload
     def fs_move_app(
         self, 
-        payload: dict, 
+        payload: int | str | dict | Iterable[int | str], 
         /, 
+        pid: int = 0, 
         app: str = "android", 
         base_url: bool | str | Callable[[], str] = False, 
         *, 
@@ -8430,8 +8439,9 @@ class P115Client:
         ...
     def fs_move_app(
         self, 
-        payload: dict, 
+        payload: int | str | dict | Iterable[int | str], 
         /, 
+        pid: int = 0, 
         app: str = "android", 
         base_url: bool | str | Callable[[], str] = False, 
         *, 
@@ -8448,7 +8458,16 @@ class P115Client:
             - user_id: int | str = <default> 💡 不用管
         """
         api = complete_proapi("/files/move", base_url, app)
-        payload = dict(payload, user_id=self.user_id)
+        if isinstance(payload, (int, str)):
+            payload = {"ids": payload, "user_id": self.user_id}
+        elif isinstance(payload, dict):
+            payload = dict(payload, user_id=self.user_id)
+        else:
+            payload = {f"fid[{i}]": fid for i, fid in enumerate(payload)}
+            if not payload:
+                return {"state": False, "message": "no op"}
+            payload["user_id"] = self.user_id
+        payload.setdefault("pid", pid)
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload

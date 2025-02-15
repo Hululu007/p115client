@@ -28,12 +28,13 @@ from fuse import FUSE, Operations # type: ignore
 from httpfile import Urllib3FileReader
 from orjson import dumps as json_dumps
 from p115client import P115Client
+from p115updatedb.query import FIELDS
 from path_predicate import MappingPath
 from posixpatht import escape
 from sqlitetools import execute, find
 from urllib3 import PoolManager
 
-from .db import FIELDS, get_attr_from_db, get_id_from_db, get_children_from_db
+from .db import get_attr_from_db, get_id_from_db, get_children_from_db
 from .log import logger
 
 

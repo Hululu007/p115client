@@ -9,8 +9,8 @@ __all__ = [
     "iter_nodes_skim", "iter_stared_dirs_raw", "iter_stared_dirs", "ensure_attr_path", 
     "ensure_attr_path_by_category_get", "iterdir_raw", "iterdir", "iterdir_limited", 
     "iter_files_raw", "iter_files", "traverse_files", "iter_dupfiles", "iter_image_files", 
-    "iter_dangling_files", "share_extract_payload", "share_iterdir", "share_iter_files", 
-    "iter_selected_nodes", "iter_selected_nodes_by_pickcode", "iter_selected_nodes_using_category_get", 
+    "share_extract_payload", "share_iterdir", "share_iter_files", "iter_selected_nodes", 
+    "iter_selected_nodes_by_pickcode", "iter_selected_nodes_using_category_get", 
     "iter_selected_nodes_using_edit", "iter_selected_nodes_using_star_event", 
     "iter_selected_dirs_using_star", "iter_files_with_dirname", "iter_files_with_path", 
     "iter_files_with_path_by_export_dir", "iter_parents_3_level", "iter_dir_nodes", 
@@ -3037,123 +3037,6 @@ def iter_image_files(
             if offset >= count:
                 break
             payload["offset"] = offset
-    return run_gen_step_iter(gen_step, async_=async_)
-
-
-@overload
-def iter_dangling_files(
-    client: str | P115Client, 
-    cid: int = 0, 
-    page_size: int = 0, 
-    suffix: str = "", 
-    type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
-    normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    app: str = "web", 
-    *, 
-    async_: Literal[False] = False, 
-    **request_kwargs, 
-) -> Iterator[dict]:
-    ...
-@overload
-def iter_dangling_files(
-    client: str | P115Client, 
-    cid: int = 0, 
-    page_size: int = 0, 
-    suffix: str = "", 
-    type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
-    normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    app: str = "web", 
-    *, 
-    async_: Literal[True], 
-    **request_kwargs, 
-) -> AsyncIterator[dict]:
-    ...
-def iter_dangling_files(
-    client: str | P115Client, 
-    cid: int = 0, 
-    page_size: int = 0, 
-    suffix: str = "", 
-    type: Literal[1, 2, 3, 4, 5, 6, 7, 99] = 99, 
-    normalize_attr: Callable[[dict], dict] = normalize_attr, 
-    app: str = "web", 
-    *, 
-    async_: Literal[False, True] = False, 
-    **request_kwargs, 
-) -> Iterator[dict] | AsyncIterator[dict]:
-    """找出所有悬空的文件，即所在的目录 id 不为 0 且不存在
-
-    .. todo::
-        实际上，广义的悬空，包括所有这样的文件或目录，它们的祖先节点中存在一个节点，这个节点的 id 目前不存在于网盘（可能被删除或移入回收站）
-
-    .. danger::
-        你可以用 `P115Client.fs_move` 方法，把文件或目录随意移动到任何目录 id 下，即使这个 id 不存在
-
-    .. note::
-        你可以用 `P115Client.tool_space` 方法，把所有悬空文件找出来，放到专门的目录中，但这个接口一天只能用一次
-
-    :param client: 115 客户端或 cookies
-    :param cid: 目录 id
-    :param page_size: 分页大小
-    :param suffix: 后缀名（优先级高于 type）
-    :param type: 文件类型
-
-        - 1: 文档
-        - 2: 图片
-        - 3: 音频
-        - 4: 视频
-        - 5: 压缩包
-        - 6: 应用
-        - 7: 书籍
-        - 99: 仅文件
-
-    :param normalize_attr: 把数据进行转换处理，使之便于阅读
-    :param app: 使用某个 app （设备）的接口
-    :param async_: 是否异步
-    :param request_kwargs: 其它请求参数
-
-    :return: 迭代器，返回此目录内的（仅文件）文件信息
-    """
-    if not isinstance(client, P115Client):
-        client = P115Client(client, check_for_relogin=True)
-    if page_size <= 0:
-        page_size = 10_000
-    elif page_size < 16:
-        page_size = 16
-    if app in ("", "web", "desktop", "harmony"):
-        fs_files: Callable = client.fs_files
-    else:
-        fs_files = partial(client.fs_files_app, app=app)
-    def gen_step():
-        na_cids: set[int] = set()
-        ok_cids: set[int] = set()
-        payload = {"cid": cid, "limit": page_size, "offset": 0, "suffix": suffix, "type": type}
-        while True:
-            resp = yield fs_files(payload, async_=async_, **request_kwargs)
-            if cid and int(resp["path"][-1]["cid"]) != cid:
-                break
-            if resp["offset"] != payload["offset"]:
-                break
-            t = tuple(map(_overview_attr, resp["data"]))
-            pids = {
-                pid for a in t
-                if (pid := a.parent_id) not in na_cids
-                    and pid not in ok_cids
-            }
-            if pids:
-                if async_:
-                    na_cids.update(iter_nodes_skim(client, pids, **request_kwargs))
-                else:
-                    yield async_foreach(
-                        na_cids.add, 
-                        iter_nodes_skim(client, pids, async_=True, **request_kwargs), 
-                    )
-                ok_cids |= pids - na_cids
-            for a, info in zip(t, resp["data"]):
-                if a.parent_id in na_cids:
-                    yield Yield(normalize_attr(info), identity=True)
-            payload["offset"] += len(resp["data"]) # type: ignore
-            if payload["offset"] >= resp["count"]:
-                break
     return run_gen_step_iter(gen_step, async_=async_)
 
 

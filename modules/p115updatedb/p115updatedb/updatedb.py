@@ -41,7 +41,7 @@ from p115client.tool.life import (
 from sqlitetools import execute, find, upsert_items, AutoCloseConnection
 
 from .query import (
-    get_dir_count, has_id, iter_descendants_fast, iter_existing_id, 
+    get_dir_count, has_id, iter_descendants_dfs, iter_existing_id, 
     iter_id_to_parent_id, select_mtime_groups,  
 )
 
@@ -368,12 +368,14 @@ def kill_items(
     con: Connection | Cursor, 
     ids: int | Iterable[int], 
     /, 
+    where: str = "", 
     commit: bool = False, 
 ) -> Cursor:
     """使用 id 去筛选和移除一组数据
 
     :param con: 数据库连接或游标
     :param ids: 一组 id，会被移除
+    :param where: 其它筛选条件
     :param commit: 是否提交
 
     :return: 游标
@@ -382,7 +384,9 @@ def kill_items(
         cond = f"id = {ids:d}"
     else:
         cond = "id IN (%s)" % (",".join(map(str, ids)) or "NULL")
-    sql = "UPDATE data SET is_alive=0 WHERE " + cond
+    sql = "UPDATE data SET _triggered=0, is_alive=0 WHERE " + cond
+    if where:
+        sql += " AND (%s)" % where
     return execute(con, sql, commit=commit)
 
 
@@ -644,7 +648,7 @@ def diff_dir(
     upsert_list: list[dict] = []
     remove_list: list[int] = []
     if refresh or not ((dirlen := get_dir_count(con, id)) and dirlen["tree_file_count"]):
-        future1 = run_as_thread(lambda: set(iter_descendants_fast(con, id, fields="id")))
+        future1 = run_as_thread(lambda: set(iter_descendants_dfs(con, id, fields="id")))
         future2 = run_as_thread(lambda: [{"id": a["fid"], "parent_id": a["pid"], "name": a["fn"], "is_dir": 1, "is_alive": 1} 
                                         for a in iter_download_nodes(client, id, files=False, max_workers=None)])
         if tree:
@@ -1092,6 +1096,7 @@ def updatedb(
             if logger is not None:
                 logger.warning("[\x1b[1;33mSKIP\x1b[0m] not found: %s", id)
         except NotADirectoryError:
+            kill_items(con, id, where="is_dir", commit=True)
             if logger is not None:
                 logger.warning("[\x1b[1;33mSKIP\x1b[0m] not a directory: %s", id)
         except BusyOSError:
@@ -1113,7 +1118,7 @@ def updatedb(
                 )
             seen_add(id)
             if recursive and need_to_split_tasks:
-                for cid in iter_descendants_fast(con, id, fields="id", ensure_file=False, max_depth=1):
+                for cid in iter_descendants_dfs(con, id, fields="id", ensure_file=False, max_depth=1):
                     send(cid)
 
 
