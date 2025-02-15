@@ -427,15 +427,18 @@ def iter_descendants(
     con: Connection | Cursor, 
     parent_id: int | dict = 0, 
     /, 
+    min_depth: int = 1, 
     max_depth: int = -1, 
     ensure_file: None | bool = None, 
-    use_relpath: bool = False, 
+    use_relpath: None | bool = False, 
+    with_root: bool = False, 
     topdown: None | bool = True, 
 ) -> Iterator[dict]:
     """遍历获取某个目录之下的所有文件或目录的信息
 
     :param con: 数据库连接或游标
     :param parent_id: 顶层目录的 id
+    :param min_depth: 最小深度
     :param max_depth: 最大深度。如果小于 0，则无限深度
     :param ensure_file: 是否仅输出文件
 
@@ -443,7 +446,8 @@ def iter_descendants(
         - 如果为 False，仅输出目录
         - 如果为 None，全部输出
 
-    :param use_relpath: 仅输出相对路径，否则输出完整路径（从 / 开始）
+    :param use_relpath: 是否仅输出相对路径。如果为 False，则输出完整路径（从 / 开始）；如果为 None，则不输出 "ancestors", "path", "posixpath"
+    :param with_root: 仅当 `use_relpath=True` 时生效。如果为 True，则相对路径包含 `parent_id` 对应的节点
     :param topdown: 是否自顶向下深度优先遍历
 
         - 如果为 True，则自顶向下深度优先遍历
@@ -460,60 +464,89 @@ def iter_descendants(
                 "depth", "ancestors", "path", "posixpath", 
             )
     """
+    with_path = use_relpath is not None
     if isinstance(parent_id, int):
+        if 0 <= max_depth < min_depth:
+            return
         depth = 1
-        if use_relpath:
-            ancestors = []
-            dir_ = posixdir = ""
-        else:
-            ancestors = get_ancestors(con, parent_id)
-            dir_ = "/".join(escape(a["name"]) for a in ancestors) + "/"
-            posixdir = "/".join(a["name"].replace("/", "|") for a in ancestors) + "/"
+        if with_path:
+            if not parent_id:
+                ancestors: list[dict] = [{"id": 0, "parent_id": 0, "name": ""}]
+                dir_ = posixdir = "/"
+            elif use_relpath:
+                if with_root:
+                    attr = parent_id = get_attr(con, parent_id)
+                    name = attr["name"]
+                    ancestors = [{"id": attr["id"], "parent_id": attr["parent_id"], "name": name}]
+                    dir_ = escape(name) + "/"
+                    posixdir = name.replace("/", "|") + "/"
+                else:
+                    ancestors = []
+                    dir_ = posixdir = ""
+            else:
+                ancestors = get_ancestors(con, parent_id)
+                dir_ = "/".join(escape(a["name"]) for a in ancestors) + "/"
+                posixdir = "/".join(a["name"].replace("/", "|") for a in ancestors) + "/"
     else:
         attr = parent_id
         depth = attr["depth"] + 1
-        ancestors = attr["ancestors"]
-        dir_ = attr["path"]
-        posixdir = attr["posixpath"]
-        if dir_ != "/":
-            dir_ += "/"
-            posixdir += "/"
+        if with_path:
+            ancestors = attr["ancestors"]
+            dir_ = attr["path"]
+            posixdir = attr["posixpath"]
+            if dir_ != "/":
+                dir_ += "/"
+                posixdir += "/"
     if topdown is None:
-        gen = bfs_gen((parent_id, 0, ancestors, dir_, posixdir))
-        send = gen.send
-        for parent_id, depth, ancestors, dir_, posixdir in gen:
+        if with_path:
+            gen = bfs_gen((parent_id, 0, ancestors, dir_, posixdir))
+        else:
+            gen = bfs_gen((parent_id, 0)) # type: ignore
+        send: Callable = gen.send
+        p: list
+        for parent_id, depth, *p in gen:
             depth += 1
             will_step_in = max_depth < 0 or depth < max_depth
+            will_yield = min_depth <= depth and (max_depth < 0 or depth <= max_depth)
+            if with_path:
+                ancestors, dir_, posixdir = p
             for attr in iter_children(con, parent_id, False if ensure_file is False else None):
                 attr["depth"] = depth
+                is_dir = attr["is_dir"]
+                if with_path:
+                    attr["ancestors"] = [
+                        *ancestors, 
+                        {k: attr[k] for k in ("id", "parent_id", "name")}, 
+                    ]
+                    attr["path"] = dir_ + escape(attr["name"])
+                    attr["posixpath"] = posixdir + attr["name"].replace("/", "|")
+                if is_dir and will_step_in:
+                    if with_path:
+                        send((attr, depth, attr["ancestors"], attr["path"] + "/", attr["posixpath"] + "/"))
+                    else:
+                        send((attr, depth))
+                if will_yield:
+                    if ensure_file is None:
+                        yield attr
+                    elif is_dir:
+                        if not ensure_file:
+                            yield attr
+                    elif ensure_file:
+                        yield attr
+    else:
+        will_step_in = max_depth < 0 or depth < max_depth
+        will_yield = min_depth <= depth and (max_depth < 0 or depth <= max_depth)
+        for attr in iter_children(con, parent_id, False if ensure_file is False else None):
+            is_dir = attr["is_dir"]
+            attr["depth"] = depth
+            if with_path:
                 attr["ancestors"] = [
                     *ancestors, 
                     {k: attr[k] for k in ("id", "parent_id", "name")}, 
                 ]
                 attr["path"] = dir_ + escape(attr["name"])
                 attr["posixpath"] = posixdir + attr["name"].replace("/", "|")
-                is_dir = attr["is_dir"]
-                if is_dir and will_step_in:
-                    send((attr, depth, attr["ancestors"], attr["path"] + "/", attr["posixpath"] + "/"))
-                if ensure_file is None:
-                    yield attr
-                elif is_dir:
-                    if not ensure_file:
-                        yield attr
-                elif ensure_file:
-                    yield attr
-    else:
-        will_step_in = max_depth < 0 or depth < max_depth
-        for attr in iter_children(con, parent_id, False if ensure_file is False else None):
-            is_dir = attr["is_dir"]
-            attr["depth"] = depth
-            attr["ancestors"] = [
-                *ancestors, 
-                {k: attr[k] for k in ("id", "parent_id", "name")}, 
-            ]
-            attr["path"] = dir_ + escape(attr["name"])
-            attr["posixpath"] = posixdir + attr["name"].replace("/", "|")
-            if topdown:
+            if will_yield and topdown:
                 if ensure_file is None:
                     yield attr
                 elif is_dir:
@@ -525,11 +558,14 @@ def iter_descendants(
                 yield from iter_descendants(
                     con, 
                     attr, 
-                    topdown=topdown, 
+                    min_depth=min_depth, 
                     max_depth=max_depth, 
                     ensure_file=ensure_file, 
+                    use_relpath=use_relpath, 
+                    with_root=with_root, 
+                    topdown=topdown, 
                 )
-            if not topdown:
+            if will_yield and not topdown:
                 if ensure_file is None:
                     yield attr
                 elif is_dir:
@@ -544,9 +580,11 @@ def iter_descendants_bfs(
     con: Connection | Cursor, 
     parent_id: int = 0, 
     /, 
+    min_depth: int = 1, 
     max_depth: int = -1, 
     ensure_file: None | bool = None, 
     use_relpath: bool = False, 
+    with_root: bool = False, 
     *, 
     fields: str, 
 ) -> Iterator[Any]:
@@ -556,11 +594,13 @@ def iter_descendants_bfs(
     con: Connection | Cursor, 
     parent_id: int = 0, 
     /, 
+    min_depth: int = 1, 
     max_depth: int = -1, 
     ensure_file: None | bool = None, 
     use_relpath: bool = False, 
+    with_root: bool = False, 
     *, 
-    fields: None | tuple[str, ...] = None, 
+    fields: tuple[str, ...] = EXTENDED_FIELDS, 
     to_dict: Literal[False], 
 ) -> Iterator[tuple[Any, ...]]:
     ...
@@ -569,11 +609,13 @@ def iter_descendants_bfs(
     con: Connection | Cursor, 
     parent_id: int = 0, 
     /, 
+    min_depth: int = 1, 
     max_depth: int = -1, 
     ensure_file: None | bool = None, 
     use_relpath: bool = False, 
+    with_root: bool = False, 
     *, 
-    fields: None | tuple[str, ...] = None, 
+    fields: tuple[str, ...] = EXTENDED_FIELDS, 
     to_dict: Literal[True] = True, 
 ) -> Iterator[dict[str, Any]]:
     ...
@@ -581,17 +623,20 @@ def iter_descendants_bfs(
     con: Connection | Cursor, 
     parent_id: int = 0, 
     /, 
+    min_depth: int = 1, 
     max_depth: int = -1, 
     ensure_file: None | bool = None, 
     use_relpath: bool = False, 
+    with_root: bool = False, 
     *, 
-    fields: None | str | tuple[str, ...] = None, 
+    fields: str | tuple[str, ...] = EXTENDED_FIELDS, 
     to_dict: bool = True, 
 ) -> Iterator:
     """获取某个目录之下的所有目录节点的 id 或者信息字典（宽度优先遍历）
 
     :param con: 数据库连接或游标
     :param parent_id: 顶层目录的 id
+    :param min_depth: 最小深度
     :param max_depth: 最大深度。如果小于 0，则无限深度
     :param ensure_file: 是否仅输出文件
 
@@ -600,6 +645,7 @@ def iter_descendants_bfs(
         - 如果为 None，全部输出
 
     :param use_relpath: 仅输出相对路径，否则输出完整路径（从 / 开始）
+    :param with_root: 仅当 `use_relpath=True` 时生效。如果为 True，则相对路径包含 `parent_id` 对应的节点
     :param fields: 需要获取的字段，接受如下这些：
 
         .. code:: python
@@ -610,7 +656,6 @@ def iter_descendants_bfs(
                 "depth", "ancestors", "path", "posixpath", 
             )
 
-        - 如果为 None，则获取如上所有
         - 如果为 str，则获取指定的字段的值
         - 如果为 tuple，则拉取这一组字段的值（但会过滤掉不可用的）
 
@@ -620,10 +665,7 @@ def iter_descendants_bfs(
     """
     one_value = False
     parse: None | Callable = None
-    if fields is None:
-        with_id = with_depth = with_ancestors = with_path = with_posixpath = True
-        fields = EXTENDED_FIELDS
-    elif isinstance(fields, str):
+    if isinstance(fields, str):
         one_value = True
         field = fields
         if field not in EXTENDED_FIELDS:
@@ -637,30 +679,37 @@ def iter_descendants_bfs(
     else:
         fields = tuple(filter(set(EXTENDED_FIELDS).__contains__, fields))
         with_id = "id" in fields
-        with_depth = max_depth > 1 or "depth" in fields
+        with_depth = max_depth > 1 or min_depth > 1 or "depth" in fields
         with_ancestors = "ancestors" in fields
         with_path = "path" in fields
         with_posixpath = "posixpath" in fields
     select_fields1 = ["id"]
-    select_fields1.extend(filter(set(FIELDS[1:]).__contains__, fields))
+    select_fields1.extend(set(fields) & set(FIELDS[1:]))
     select_fields2 = ["data." + f for f in select_fields1]
     where1, where2 = "", ""
     if with_depth:
         select_fields1.append("1 AS depth")
         select_fields2.append("t.depth + 1")
     if with_path or with_posixpath or with_ancestors:
-        if use_relpath:
-            path = posixpath = ""
-            ancestors = []
-        elif parent_id:
+        if not parent_id:
+            ancestors: list[dict] = [{"id": 0, "parent_id": 0, "name": ""}]
+            path = posixpath = "/"
+        elif use_relpath:
+            if with_root:
+                attr = get_attr(con, parent_id)
+                name = attr["name"]
+                ancestors = [{"id": attr["id"], "parent_id": attr["parent_id"], "name": name}]
+                path = escape(name) + "/"
+                posixpath = name.replace("/", "|") + "/"
+            else:
+                ancestors = []
+                path = posixpath = ""
+        else:
             ancestors = get_ancestors(con, parent_id)
             if with_path:
                 path = "/".join(escape(a["name"]) for a in ancestors) + "/"
             if with_posixpath:
                 posixpath = "/".join(a["name"].replace("/", "|") for a in ancestors) + "/"
-        else:
-            path = posixpath = "/"
-            ancestors = [{"id": 0, "parent_id": 0, "name": ""}]
         if with_ancestors:
             if ancestors:
                 parse_ancestors = lambda val: [*ancestors, *loads("[%s]" % val)]
@@ -686,8 +735,10 @@ def iter_descendants_bfs(
             parse = parse_posixpath
             select_fields1.append("replace(name, '/', '|') AS posixpath")
             select_fields2.append("concat(t.posixpath, '/', replace(data.name, '/', '|'))")
-    if max_depth in (0, 1):
-        if ensure_file:
+    if min_depth <= 1 and max_depth in (0, 1) or 0 <= max_depth < min_depth:
+        if 0 <= max_depth < min_depth:
+            where1 = " AND FALSE"
+        elif ensure_file:
             where1 = " AND NOT is_dir"
         elif ensure_file is False:
             where1 = " AND is_dir"
@@ -710,9 +761,11 @@ WITH t AS (
     SELECT {",".join(select_fields1)} FROM data WHERE parent_id={parent_id:d} AND is_alive{where1}
     UNION ALL
     SELECT {",".join(select_fields2)} FROM t JOIN data ON(t.id = data.parent_id) WHERE data.is_alive{where2}
-) SELECT {",".join(fields)} FROM t"""
+) SELECT {",".join(fields)} FROM t WHERE True"""
         if ensure_file:
-            sql += " WHERE NOT is_dir"
+            sql += " AND NOT is_dir"
+        if min_depth > 1:
+            sql += f" AND depth >= {min_depth:d}"
     if one_value:
         if parse is None:
             row_factory = lambda _, r: r[0]
