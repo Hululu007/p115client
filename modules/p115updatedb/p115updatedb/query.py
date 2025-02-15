@@ -34,7 +34,7 @@ FIELDS: Final = (
     "id", "parent_id", "pickcode", "sha1", "name", "size", "is_dir", "type", 
     "ctime", "mtime", "is_collect", "is_alive", "updated_at", 
 )
-EXTENDED_FIELDS: Final = (*FIELDS, "path", "posixpath", "ancestors")
+EXTENDED_FIELDS: Final = (*FIELDS, "depth", "path", "posixpath", "ancestors")
 
 register_converter("DATETIME", lambda dt: datetime.fromisoformat(str(dt, "utf-8")))
 register_converter("JSON", loads)
@@ -450,9 +450,18 @@ def iter_descendants(
         - 如果为 False，则自底向上深度优先遍历
         - 如果为 None，则自顶向下宽度优先遍历
 
-    :return: 迭代器，产生一组信息的字典
+    :return: 迭代器，产生一组信息的字典，包含如下字段：
+
+        .. code:: python
+
+            (
+                "id", "parent_id", "pickcode", "sha1", "name", "size", "is_dir", 
+                "type", "ctime", "mtime", "is_collect", "is_alive", "updated_at", 
+                "depth", "ancestors", "path", "posixpath", 
+            )
     """
     if isinstance(parent_id, int):
+        depth = 1
         if use_relpath:
             ancestors = []
             dir_ = posixdir = ""
@@ -462,6 +471,7 @@ def iter_descendants(
             posixdir = "/".join(a["name"].replace("/", "|") for a in ancestors) + "/"
     else:
         attr = parent_id
+        depth = attr["depth"] + 1
         ancestors = attr["ancestors"]
         dir_ = attr["path"]
         posixdir = attr["posixpath"]
@@ -469,20 +479,22 @@ def iter_descendants(
             dir_ += "/"
             posixdir += "/"
     if topdown is None:
-        gen = bfs_gen((parent_id, max_depth, ancestors, dir_, posixdir))
+        gen = bfs_gen((parent_id, 0, ancestors, dir_, posixdir))
         send = gen.send
         for parent_id, depth, ancestors, dir_, posixdir in gen:
-            depth -= depth > 0
+            depth += 1
+            will_step_in = max_depth < 0 or depth < max_depth
             for attr in iter_children(con, parent_id, False if ensure_file is False else None):
-                ancestors = attr["ancestors"] = [
+                attr["depth"] = depth
+                attr["ancestors"] = [
                     *ancestors, 
                     {k: attr[k] for k in ("id", "parent_id", "name")}, 
                 ]
-                dir_ = attr["path"] = dir_ + escape(attr["name"])
-                posixdir = attr["posixpath"] = posixdir + attr["name"].replace("/", "|")
+                attr["path"] = dir_ + escape(attr["name"])
+                attr["posixpath"] = posixdir + attr["name"].replace("/", "|")
                 is_dir = attr["is_dir"]
-                if is_dir and depth:
-                    send((attr, depth, ancestors, dir_ + "/", posixdir + "/")) # type: ignore
+                if is_dir and will_step_in:
+                    send((attr, depth, attr["ancestors"], attr["path"] + "/", attr["posixpath"] + "/"))
                 if ensure_file is None:
                     yield attr
                 elif is_dir:
@@ -491,9 +503,10 @@ def iter_descendants(
                 elif ensure_file:
                     yield attr
     else:
-        max_depth -= max_depth > 0
+        will_step_in = max_depth < 0 or depth < max_depth
         for attr in iter_children(con, parent_id, False if ensure_file is False else None):
             is_dir = attr["is_dir"]
+            attr["depth"] = depth
             attr["ancestors"] = [
                 *ancestors, 
                 {k: attr[k] for k in ("id", "parent_id", "name")}, 
@@ -508,7 +521,7 @@ def iter_descendants(
                         yield attr
                 elif ensure_file:
                     yield attr
-            if is_dir and max_depth:
+            if is_dir and will_step_in:
                 yield from iter_descendants(
                     con, 
                     attr, 
@@ -594,7 +607,7 @@ def iter_descendants_bfs(
             (
                 "id", "parent_id", "pickcode", "sha1", "name", "size", "is_dir", 
                 "type", "ctime", "mtime", "is_collect", "is_alive", "updated_at", 
-                "ancestors", "path", "posixpath", 
+                "depth", "ancestors", "path", "posixpath", 
             )
 
         - 如果为 None，则获取如上所有
@@ -606,49 +619,36 @@ def iter_descendants_bfs(
     :return: 迭代器，产生一组数据
     """
     one_value = False
+    parse: None | Callable = None
     if fields is None:
-        with_id = with_path = with_posixpath = with_ancestors = True
-        fields = FIELDS
+        with_id = with_depth = with_ancestors = with_path = with_posixpath = True
+        fields = EXTENDED_FIELDS
     elif isinstance(fields, str):
         one_value = True
-        if fields not in EXTENDED_FIELDS:
-            raise ValueError(f"invalid field {fields!r}, must be in {EXTENDED_FIELDS!r}")
-        with_id = "id" == fields
-        with_path = "path" == fields
-        with_posixpath = "posixpath" == fields
-        with_ancestors = "ancestors" == fields
-        if with_path or with_posixpath or with_ancestors:
-            fields = ()
-        else:
-            fields = fields,
+        field = fields
+        if field not in EXTENDED_FIELDS:
+            raise ValueError(f"invalid field {field!r}, must be in {EXTENDED_FIELDS!r}")
+        with_id = "id" == field
+        with_depth = max_depth > 1 or "depth" == field
+        with_ancestors = "ancestors" == field
+        with_path = "path" == field
+        with_posixpath = "posixpath" == field
+        fields = field,
     else:
+        fields = tuple(filter(set(EXTENDED_FIELDS).__contains__, fields))
         with_id = "id" in fields
+        with_depth = max_depth > 1 or "depth" in fields
+        with_ancestors = "ancestors" in fields
         with_path = "path" in fields
         with_posixpath = "posixpath" in fields
-        with_ancestors = "ancestors" in fields
-        fields = tuple(filter(set(FIELDS).__contains__, fields))
-    if with_id:
-        fields0 = fields
-    else:
-        fields0 = ("id", *fields)
-    with_route = with_path or with_posixpath or with_ancestors
-    if with_route:
-        IDX_ID = 0
-        try:
-            IDX_PID = fields0.index("parent_id", 1)
-        except ValueError:
-            IDX_PID = len(fields0)
-            fields0 += "parent_id",
-        try:
-            IDX_NAME = fields0.index("name", 1)
-        except ValueError:
-            IDX_NAME = len(fields0)
-            fields0 += "name",
-        try:
-            IDX_ISDIR = fields0.index("is_dir", 1)
-        except ValueError:
-            IDX_ISDIR = len(fields0)
-            fields0 += "is_dir",
+    select_fields1 = ["id"]
+    select_fields1.extend(filter(set(FIELDS[1:]).__contains__, fields))
+    select_fields2 = ["data." + f for f in select_fields1]
+    where1, where2 = "", ""
+    if with_depth:
+        select_fields1.append("1 AS depth")
+        select_fields2.append("t.depth + 1")
+    if with_path or with_posixpath or with_ancestors:
         if use_relpath:
             path = posixpath = ""
             ancestors = []
@@ -662,123 +662,89 @@ def iter_descendants_bfs(
             path = posixpath = "/"
             ancestors = [{"id": 0, "parent_id": 0, "name": ""}]
         if with_ancestors:
-            pid_to_ancestors = {parent_id: ancestors}
-        if with_path:
-            pid_to_dirname = {parent_id: path}
-        if with_posixpath:
-            pid_to_posix_dirname = {parent_id: posixpath}
-    if one_value and not with_route:
-        row_factory = lambda _, record, /: record[0]
-    else:
-        def iter_pairs(record, /):
-            if one_value:
-                pass
-            elif to_dict:
-                if with_id:
-                    yield from zip(fields, record)
-                else:
-                    yield from zip(fields, record[1:])
+            if ancestors:
+                parse_ancestors = lambda val: [*ancestors, *loads("[%s]" % val)]
             else:
-                if with_id:
-                    yield from record[:len(fields)]
-                else:
-                    yield from record[1:len(fields)+1]
-            if with_route:
-                id = record[0]
-                pid = record[IDX_PID]
-                is_dir = record[IDX_ISDIR]
-                name = record[IDX_NAME]
-                if with_ancestors:
-                    ancestors = [
-                        *pid_to_ancestors[pid], 
-                        {"id": id, "parent_id": pid, "name": name}, 
-                    ]
-                    if is_dir:
-                        pid_to_ancestors[id] = ancestors
-                    if one_value or not to_dict:
-                        yield ancestors
-                    else:
-                        yield "ancestors", ancestors   
-                if with_path:
-                    path = pid_to_dirname[pid] + escape(name)
-                    if is_dir:
-                        pid_to_dirname[id] = path + "/"
-                    if one_value or not to_dict:
-                        yield path
-                    else:
-                        yield "path", path
-                if with_posixpath:
-                    posixpath = pid_to_posix_dirname[pid] + name.replace("/", "|")
-                    if is_dir:
-                        pid_to_posix_dirname[id] = posixpath + "/"
-                    if one_value or not to_dict:
-                        yield posixpath
-                    else:
-                        yield "posixpath", posixpath
-                if is_dir and ensure_file:
-                    raise ValueError
-        def row_factory(_, record):
-            try:
-                if one_value:
-                    if with_route:
-                        return next(iter_pairs(record))
-                    else:
-                        return record[-1]
-                elif to_dict:
-                    return dict(iter_pairs(record))
-                else:
-                    return tuple(iter_pairs(record))
-            except ValueError:
-                return none
-    select_fields_1 = ", ".join(fields0)
-    use_filter = False
-    none = object()
-    if 0 <= max_depth <= 1:
-        sql = f"SELECT {select_fields_1} FROM data WHERE parent_id=:parent_id AND is_alive"
+                parse_ancestors = lambda val: loads("[%s]" % val)
+            parse = parse_ancestors
+            select_fields1.append("json_object('id', id, 'parent_id', parent_id, 'name', name) AS ancestors")
+            select_fields2.append("concat(t.ancestors, ',', json_object('id', data.id, 'parent_id', data.parent_id, 'name', data.name))")
+        if with_path:
+            def parse_path(val: str, /) -> str:
+                return path + val
+            parse = parse_path
+            if isinstance(con, Cursor):
+                conn = con.connection
+            else:
+                conn = con
+            conn.create_function("escape_name", 1, escape, deterministic=True)
+            select_fields1.append("escape_name(name) AS path")
+            select_fields2.append("concat(t.path, '/', escape_name(data.name))")
+        if with_posixpath:
+            def parse_posixpath(val: str, /) -> str:
+                return posixpath + val
+            parse = parse_posixpath
+            select_fields1.append("replace(name, '/', '|') AS posixpath")
+            select_fields2.append("concat(t.posixpath, '/', replace(data.name, '/', '|'))")
+    if max_depth in (0, 1):
         if ensure_file:
-            sql += " AND NOT is_dir"
+            where1 = " AND NOT is_dir"
         elif ensure_file is False:
-            sql += " AND is_dir"
-    else:
-        select_fields_2 = "data." + ", data.".join(fields0)
-        if max_depth < 0:
-            args = ("",) * 4
-        else:
-            args = (
-                ", 1 AS depth", 
-                "", 
-                ", t.depth + 1", 
-                " AND depth < :max_depth", 
-            )
-        if ensure_file:
-            if "is_dir" not in fields0:
-                args = (
-                    args[0] + ", is_dir", 
-                    args[1], 
-                    args[2] + ", data.is_dir", 
-                    args[3], 
-                )
-        elif ensure_file is False:
-            args = (
-                args[0], 
-                args[1] + " AND is_dir", 
-                args[2], 
-                args[3] + " AND data.is_dir", 
-            )
+            where1 = " AND is_dir"
         sql = f"""\
 WITH t AS (
-    SELECT {select_fields_1}%s FROM data WHERE parent_id=:parent_id AND is_alive%s
+    SELECT {",".join(select_fields1)} FROM data WHERE parent_id={parent_id:d} AND is_alive{where1}
+) SELECT {",".join(fields)} FROM t"""
+    else:
+        if max_depth > 1:
+            where2 = f" AND depth < {max_depth:d}"
+        if ensure_file:
+            if "is_dir" not in fields:
+                select_fields1.append("is_dir")
+                select_fields2.append("data.is_dir")
+        elif ensure_file is False:
+            where1 += " AND is_dir"
+            where2 += " AND data.is_dir"
+        sql = f"""\
+WITH t AS (
+    SELECT {",".join(select_fields1)} FROM data WHERE parent_id={parent_id:d} AND is_alive{where1}
     UNION ALL
-    SELECT {select_fields_2}%s FROM t JOIN data ON(t.id = data.parent_id) WHERE data.is_alive%s
-)
-SELECT {", ".join(fields0 if with_route else fields)} FROM t AS data""" % args
-        if not with_route and ensure_file:
+    SELECT {",".join(select_fields2)} FROM t JOIN data ON(t.id = data.parent_id) WHERE data.is_alive{where2}
+) SELECT {",".join(fields)} FROM t"""
+        if ensure_file:
             sql += " WHERE NOT is_dir"
-            use_filter = True
-    cursor = query(con, sql, locals(), row_factory=row_factory)
-    if use_filter:
-        return filter(lambda v: v is not none, cursor)
-    return cursor
+    if one_value:
+        if parse is None:
+            row_factory = lambda _, r: r[0]
+        else:
+            row_factory = lambda _, r: parse(r[0])
+    elif to_dict:
+        def row_factory(_, r):
+            d = dict(zip(fields, r))
+            if with_ancestors:
+                d["ancestors"] = parse_ancestors(d["ancestors"])
+            if with_path:
+                d["path"] = parse_path(d["path"])
+            if with_posixpath:
+                d["posixpath"] = parse_posixpath(d["posixpath"])
+            return d
+    else:
+        with_route = with_ancestors or with_path or with_posixpath
+        def parse(f, v):
+            match f:
+                case "ancestors":
+                    return parse_ancestors(v)
+                case "path":
+                    return parse_path(v)
+                case "posixpath":
+                    return parse_posixpath(v)
+                case _:
+                    return v
+        def row_factory(_, r):
+            if with_route:
+                return tuple(parse(f, v) for f, v in zip(fields, r))
+            return r
+    return query(con, sql, row_factory=row_factory)
 
 
 def iter_files_with_path_url(
