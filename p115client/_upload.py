@@ -917,7 +917,7 @@ def oss_multipart_upload(
                 async_=async_, # type: ignore
                 **request_kwargs, 
             ))
-        except Exception as e:
+        except BaseException as e:
             raise MultipartUploadAbort(resume_data) from e
         finally:
             if close_reporthook is not None:

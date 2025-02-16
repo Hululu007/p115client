@@ -19,7 +19,7 @@ from typing import cast, overload, Any, Final, Literal
 from warnings import warn
 
 from iterutils import run_gen_step, run_gen_step_iter, Yield
-from p115client import check_response, P115Client
+from p115client import check_response, P115Client, P115OpenClient
 from p115client.client import get_status_code
 from p115client.exception import BusyOSError, DataError, P115Warning
 
@@ -42,7 +42,7 @@ def is_timeouterror(exc: BaseException, /) -> bool:
 
 @overload
 def iter_fs_files(
-    client: str | P115Client, 
+    client: str | P115Client | P115OpenClient, 
     payload: int | str | dict = 0, 
     /, 
     first_page_size: int = 0, 
@@ -58,7 +58,7 @@ def iter_fs_files(
     ...
 @overload
 def iter_fs_files(
-    client: str | P115Client, 
+    client: str | P115Client | P115OpenClient, 
     payload: int | str | dict = 0, 
     /, 
     first_page_size: int = 0, 
@@ -73,7 +73,7 @@ def iter_fs_files(
 ) -> AsyncIterator[dict]:
     ...
 def iter_fs_files(
-    client: str | P115Client, 
+    client: str | P115Client | P115OpenClient, 
     payload: int | str | dict = 0, 
     /, 
     first_page_size: int = 0, 
@@ -101,7 +101,7 @@ def iter_fs_files(
 
     :return: 迭代器，每次返回一次接口调用的结果
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if page_size <= 0:
         page_size = 10_000
@@ -114,17 +114,20 @@ def iter_fs_files(
         "limit": first_page_size, "show_dir": 1, **payload, 
     }
     cid = int(payload["cid"])
-    if app in ("", "web", "desktop", "harmony"):
+    if isinstance(client, P115OpenClient):
+        request_kwargs.setdefault("base_url", get_proapi_origin)
+        fs_files = partial(client.fs_files, **request_kwargs)
+    elif app in ("", "web", "desktop", "harmony"):
         request_kwargs.setdefault("base_url", get_webapi_origin)
-        fs_files = partial(client.fs_files, async_=async_, **request_kwargs)
+        fs_files = partial(client.fs_files, **request_kwargs)
     else:
         request_kwargs.setdefault("base_url", get_proapi_origin)
-        fs_files = partial(client.fs_files_app, app=app, async_=async_, **request_kwargs)
+        fs_files = partial(client.fs_files_app, app=app, **request_kwargs)
     def get_files(payload: dict, /):
         nonlocal count
         while True:
             try:
-                resp = yield fs_files(payload)
+                resp = yield fs_files(payload, async_=async_)
                 check_response(resp)
             except DataError:
                 if payload["limit"] <= 1150:
@@ -166,7 +169,7 @@ def iter_fs_files(
 
 
 def iter_fs_files_threaded(
-    client: str | P115Client, 
+    client: str | P115Client | P115OpenClient, 
     payload: int | str | dict = 0, 
     /, 
     page_size: int = 7_000, 
@@ -195,7 +198,7 @@ def iter_fs_files_threaded(
 
     :return: 迭代器
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if page_size <= 0:
         page_size = 7_000
@@ -206,7 +209,10 @@ def iter_fs_files_threaded(
         "limit": page_size, "show_dir": 1, **payload, 
     }
     cid = int(payload["cid"])
-    if app in ("", "web", "desktop", "harmony"):
+    if isinstance(client, P115OpenClient):
+        request_kwargs.setdefault("base_url", get_proapi_origin)
+        fs_files = partial(client.fs_files, **request_kwargs)
+    elif app in ("", "web", "desktop", "harmony"):
         page_size = min(page_size, 1150)
         request_kwargs.setdefault("base_url", get_webapi_origin)
         fs_files = partial(client.fs_files, **request_kwargs)
@@ -280,7 +286,7 @@ def iter_fs_files_threaded(
 
 
 async def iter_fs_files_asynchronized(
-    client: str | P115Client, 
+    client: str | P115Client | P115OpenClient, 
     payload: int | str | dict = 0, 
     /, 
     page_size: int = 7_000, 
@@ -307,7 +313,7 @@ async def iter_fs_files_asynchronized(
 
     :return: 迭代器
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if page_size <= 0:
         page_size = 7_000
@@ -318,7 +324,10 @@ async def iter_fs_files_asynchronized(
         "limit": page_size, "show_dir": 1, **payload, 
     }
     cid = int(payload["cid"])
-    if app in ("", "web", "desktop", "harmony"):
+    if isinstance(client, P115OpenClient):
+        request_kwargs.setdefault("base_url", get_proapi_origin)
+        fs_files = partial(client.fs_files, **request_kwargs)
+    elif app in ("", "web", "desktop", "harmony"):
         page_size = min(page_size, 1150)
         request_kwargs.setdefault("base_url", get_webapi_origin)
         fs_files = partial(client.fs_files, **request_kwargs)

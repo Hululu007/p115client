@@ -6,12 +6,13 @@ from __future__ import annotations
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __all__ = [
     "check_response", "normalize_attr", "normalize_attr_simple", "normalize_attr_web", 
-    "normalize_attr_app", "normalize_attr_app2", "P115Client", 
+    "normalize_attr_app", "normalize_attr_app2", "P115Client", "P115OpenClient", 
 ]
 
 import errno
 
 from asyncio import create_task, get_running_loop, run_coroutine_threadsafe, to_thread, Lock as AsyncLock
+from base64 import b64encode
 from collections.abc import (
     AsyncGenerator, AsyncIterable, Awaitable, Buffer, Callable, Coroutine, Generator, 
     ItemsView, Iterable, Iterator, Mapping, MutableMapping, Sequence, 
@@ -30,6 +31,7 @@ from pathlib import Path, PurePath
 from platform import system
 from posixpath import splitext
 from re import compile as re_compile, MULTILINE
+from string import digits
 from sys import exc_info
 from _thread import start_new_thread
 from tempfile import TemporaryFile
@@ -92,6 +94,9 @@ get_proapi_origin = cycle(("http://proapi.115.com", "https://proapi.115.com"))._
 get_webapi_origin = cycle(("http://webapi.115.com", "https://webapi.115.com")).__next__
 get_cdn_origin = cycle(("http://115cdn.com", "http://115vod.com")).__next__
 _default_k_ec = {"k_ec": ecdh_encode_token(0).decode()}
+_default_code_verifier = "0" * 64
+_default_code_challenge = b64encode(md5(b"0" * 64).digest()).decode()
+_default_code_challenge_method = "md5"
 _httpx_request = None
 
 
@@ -431,6 +436,9 @@ def check_response(resp: dict | Awaitable[dict], /) -> dict | Coroutine[Any, Any
                 # {"state": false, "errno": 300104, "error": "文件超过200MB，暂不支持播放"}
                 case 300104:
                     raise P115OSError(errno.EFBIG, resp)
+                # {"state": false, "errno": 590075, "error": "操作太频繁，请稍候再试"}
+                case 590075:
+                    raise BusyOSError(errno.EBUSY, resp)
                 # {"state": false, "errno": 800001, "error": "目录不存在。"}
                 case 800001:
                     raise FileNotFoundError(errno.ENOENT, resp)
@@ -953,7 +961,1422 @@ class IgnoreCaseDict[V](dict[str, V]):
             update(((k.lower(), v) for k, v in kwargs.items()))
 
 
-class P115Client:
+class ClientRequestMixin:
+
+    def __del__(self, /):
+        self.close()
+
+    @locked_cacheproperty
+    def session(self, /):
+        """同步请求的 session 对象
+        """
+        import httpx_request
+        from httpx import Client, HTTPTransport, Limits
+        session = Client(
+            limits=Limits(max_connections=256, max_keepalive_connections=64, keepalive_expiry=10), 
+            transport=HTTPTransport(retries=5), 
+            verify=False, 
+        )
+        setattr(session, "_headers", self.headers)
+        setattr(session, "_cookies", self.cookies)
+        return session
+
+    @locked_cacheproperty
+    def async_session(self, /):
+        """异步请求的 session 对象
+        """
+        import httpx_request
+        from httpx import AsyncClient, AsyncHTTPTransport, Limits
+        session = AsyncClient(
+            limits=Limits(max_connections=256, max_keepalive_connections=64, keepalive_expiry=10), 
+            transport=AsyncHTTPTransport(retries=5), 
+            verify=False, 
+        )
+        setattr(session, "_headers", self.headers)
+        setattr(session, "_cookies", self.cookies)
+        return session
+
+    @property
+    def cookies(self, /):
+        """请求所用的 Cookies 对象（同步和异步共用）
+        """
+        try:
+            return self.__dict__["cookies"]
+        except KeyError:
+            from httpx import Cookies
+            cookies = self.__dict__["cookies"] = Cookies()
+            return cookies
+
+    @cookies.setter
+    def cookies(
+        self, 
+        cookies: None | str | Mapping[str, None | str] | Iterable[Mapping | Cookie | Morsel] = None, 
+        /, 
+    ):
+        """更新 cookies
+        """
+        cookiejar = self.cookiejar
+        if cookies is None:
+            cookiejar.clear()
+            return
+        if isinstance(cookies, str):
+            cookies = cookies.strip().rstrip(";")
+            if not cookies:
+                return
+            cookies = cookies_str_to_dict(cookies)
+            if not cookies:
+                return
+        set_cookie = cookiejar.set_cookie
+        clear_cookie = cookiejar.clear
+        cookie: Mapping | Cookie | Morsel
+        if isinstance(cookies, Mapping):
+            if not cookies:
+                return
+            for key, val in items(cookies):
+                if val:
+                    set_cookie(create_cookie(key, val, domain=".115.com"))
+                else:
+                    for cookie in cookiejar:
+                        if cookie.name == key:
+                            clear_cookie(domain=cookie.domain, path=cookie.path, name=cookie.name)
+                            break
+        else:
+            from httpx import Cookies
+            if isinstance(cookies, Cookies):
+                cookies = cookies.jar
+            for cookie in cookies:
+                set_cookie(create_cookie("", cookie))
+
+    @property
+    def cookiejar(self, /) -> CookieJar:
+        """请求所用的 CookieJar 对象（同步和异步共用）
+        """
+        return self.cookies.jar
+
+    @property
+    def cookies_str(self, /) -> P115Cookies:
+        """所有 .115.com 域下的 cookie 值
+        """
+        return P115Cookies.from_cookiejar(self.cookiejar)
+
+    @locked_cacheproperty
+    def headers(self, /) -> MutableMapping:
+        """请求头，无论同步还是异步请求都共用这个请求头
+        """
+        from multidict import CIMultiDict
+        return CIMultiDict({
+            "accept": "application/json, text/plain, */*", 
+            "accept-encoding": "gzip, deflate", 
+            "connection": "keep-alive", 
+            "user-agent": "Mozilla/5.0 AppleWebKit/600 Safari/600 Chrome/124.0.0.0", 
+        })
+
+    def close(self, /) -> None:
+        """删除 session 和 async_session 属性，如果它们未被引用，则应该会被自动清理
+        """
+        self.__dict__.pop("session", None)
+        self.__dict__.pop("async_session", None)
+
+    def request(
+        self, 
+        /, 
+        url: str, 
+        method: str = "GET", 
+        params = None, 
+        data = None, 
+        *, 
+        ecdh_encrypt: bool = False, 
+        async_: Literal[False, True] = False, 
+        request: None | Callable[[Unpack[RequestKeywords]], Any] = None, 
+        **request_kwargs, 
+    ):
+        """帮助函数：可执行同步和异步的网络请求
+
+        :param url: HTTP 的请求链接
+        :param method: HTTP 的请求方法
+        :param params: 查询参数
+        :param ecdh_encrypt: 使用 ecdh 算法进行加密（返回值也要解密）
+        :param async_: 说明 `request` 是同步调用还是异步调用
+        :param request: HTTP 请求调用，如果为 None，则默认用 httpx 执行请求
+            如果传入调用，则必须至少能接受以下几个关键词参数：
+
+            - url:     HTTP 的请求链接
+            - method:  HTTP 的请求方法
+            - headers: HTTP 的请求头
+            - data:    HTTP 的请求体
+            - parse:   解析 HTTP 响应的方法，默认会构建一个 Callable，会把响应的字节数据视为 JSON 进行反序列化解析
+
+                - 如果为 None，则直接把响应对象返回
+                - 如果为 ...(Ellipsis)，则把响应对象关闭后将其返回
+                - 如果为 True，则根据响应头来确定把响应得到的字节数据解析成何种格式（反序列化），请求也会被自动关闭
+                - 如果为 False，则直接返回响应得到的字节数据，请求也会被自动关闭
+                - 如果为 Callable，则使用此调用来解析数据，接受 1-2 个位置参数，并把解析结果返回给 `request` 的调用者，请求也会被自动关闭
+                    - 如果只接受 1 个位置参数，则把响应对象传给它
+                    - 如果能接受 2 个位置参数，则把响应对象和响应得到的字节数据（响应体）传给它
+
+        :param request_kwargs: 其余的请求参数，会被传给 `request`
+
+        :return: 直接返回 `request` 执行请求后的返回值
+
+        .. note:: 
+            `request` 可以由不同的请求库来提供，下面是封装了一些模块
+
+            1. `httpx_request <https://pypi.org/project/httpx_request/>`_，由 `httpx <https://pypi.org/project/httpx/>`_ 封装，支持同步和异步调用，本模块默认用的就是这个封装
+
+                .. code:: python
+
+                    from httpx_request import request
+
+            2. `python-urlopen <https://pypi.org/project/python-urlopen/>`_，由 `urllib.request.urlopen <https://docs.python.org/3/library/urllib.request.html#urllib.request.urlopen>`_ 封装，支持同步调用，性能相对最差
+
+                .. code:: python
+
+                    from urlopen import request
+
+            3. `urllib3_request <https://pypi.org/project/urllib3_request/>`_，由 `urllib3 <https://pypi.org/project/urllib3/>`_ 封装，支持同步调用，性能相对较好，推荐使用
+
+                .. code:: python
+
+                    from urllib3_request import request
+
+            4. `requests_request <https://pypi.org/project/requests_request/>`_，由 `requests <https://pypi.org/project/requests/>`_ 封装，支持同步调用
+
+                .. code:: python
+
+                    from requests_request import request
+
+            5. `aiohttp_client_request <https://pypi.org/project/aiohttp_client_request/>`_，由 `aiohttp <https://pypi.org/project/aiohttp/>`_ 封装，支持异步调用，异步并发能力最强，推荐使用
+
+                .. code:: python
+
+                    from aiohttp_client_request import request
+
+            6. `blacksheep_client_request <https://pypi.org/project/blacksheep_client_request/>`_，由 `blacksheep <https://pypi.org/project/blacksheep/>`_ 封装，支持异步调用
+
+                .. code:: python
+
+                    from blacksheep_client_request import request
+        """
+        if url.startswith("//"):
+            url = "http:" + url
+        elif not url.startswith(("http://", "https://")):
+            if url.startswith("?"):
+                url = "http://115.com" + url
+            else:
+                if not url.startswith("/"):
+                    url = "/" + url
+                if url.startswith(("/app/", "/android/", "/115android/", "/ios/", "/115ios/", "/115ipad/", "/wechatmini/", "/alipaymini/")):
+                    url = "http://proapi.115.com" + url
+                else:
+                    url = "http://webapi.115.com" + url
+        if params:
+            url = make_url(url, params)
+        if request is None:
+            request_kwargs["session"] = self.async_session if async_ else self.session
+            request_kwargs["async_"] = async_
+            headers: IgnoreCaseDict[str] = IgnoreCaseDict()
+            request = get_default_request()
+        else:
+            headers = IgnoreCaseDict(self.headers)
+        headers.update(request_kwargs.get("headers") or {})
+        if m := CRE_API_match(url):
+            headers["host"] = m.expand(r"\1.api.115.com")
+        request_kwargs["headers"] = headers
+        if ecdh_encrypt:
+            url = make_url(url, _default_k_ec)
+            if data:
+                request_kwargs["data"] = ecdh_aes_encode(urlencode(data).encode("latin-1") + b"&")
+            headers["content-type"] = "application/x-www-form-urlencoded"
+        elif isinstance(data, (list, dict)):
+            request_kwargs["data"] = urlencode(data).encode("latin-1")
+            headers["content-type"] = "application/x-www-form-urlencoded"
+        elif data is not None:
+            request_kwargs["data"] = data
+        request_kwargs.setdefault("parse", default_parse)
+        return request(url=url, method=method, **request_kwargs)
+
+    ########## Qrcode API ##########
+
+    @overload
+    @staticmethod
+    def login_qrcode(
+        payload: str | dict, 
+        /, 
+        request: None | Callable = None, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> bytes:
+        ...
+    @overload
+    @staticmethod
+    def login_qrcode(
+        payload: str | dict, 
+        /, 
+        request: None | Callable = None, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, bytes]:
+        ...
+    @staticmethod
+    def login_qrcode(
+        payload: str | dict, 
+        /, 
+        request: None | Callable = None, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> bytes | Coroutine[Any, Any, bytes]:
+        """下载登录二维码图片
+
+        GET https://qrcodeapi.115.com/api/1.0/web/1.0/qrcode
+
+        :params uid: 二维码的 uid
+
+        :return: 图片的二进制数据（PNG 图片）
+        """
+        api = "https://qrcodeapi.115.com/api/1.0/web/1.0/qrcode"
+        if isinstance(payload, str):
+            payload = {"uid": payload}
+        request_kwargs.setdefault("parse", False)
+        if request is None:
+            return get_default_request()(url=api, params=payload, async_=async_, **request_kwargs)
+        else:
+            return request(url=api, params=payload, **request_kwargs)
+
+    @overload
+    @staticmethod
+    def login_qrcode_access_token_open(
+        payload: str | dict, 
+        /, 
+        request: None | Callable = None, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    @staticmethod
+    def login_qrcode_access_token_open(
+        payload: str | dict, 
+        /, 
+        request: None | Callable = None, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    @staticmethod
+    def login_qrcode_access_token_open(
+        payload: str | dict, 
+        /, 
+        request: None | Callable = None, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取 access_token
+
+        POST https://qrcodeapi.115.com/open/deviceCodeToToken
+
+        .. note::
+            https://www.yuque.com/115yun/open/shtpzfhewv5nag11#QCCVQ
+
+        :payload:
+            - uid: str
+            - code_verifier: str = <default> 💡 默认字符串是 64 个 "0"
+        """
+        api = "https://qrcodeapi.115.com/open/deviceCodeToToken"
+        if isinstance(payload, str):
+            payload = {"uid": payload, "code_verifier": _default_code_verifier}
+        request_kwargs.setdefault("parse", default_parse)
+        if request is None:
+            return get_default_request()(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+        else:
+            return request(url=api, method="POST", data=payload, **request_kwargs)
+
+    @overload
+    @staticmethod
+    def login_qrcode_refresh_token_open(
+        payload: str | dict, 
+        /, 
+        request: None | Callable = None, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    @staticmethod
+    def login_qrcode_refresh_token_open(
+        payload: str | dict, 
+        /, 
+        request: None | Callable = None, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    @staticmethod
+    def login_qrcode_refresh_token_open(
+        payload: str | dict, 
+        /, 
+        request: None | Callable = None, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取 access_token
+
+        POST https://qrcodeapi.115.com/open/refreshToken
+
+        .. note::
+            https://www.yuque.com/115yun/open/shtpzfhewv5nag11#ve54x
+
+        :payload:
+            - refresh_token: str
+        """
+        api = "https://qrcodeapi.115.com/open/refreshToken"
+        if isinstance(payload, str):
+            payload = {"refresh_token": payload}
+        request_kwargs.setdefault("parse", default_parse)
+        if request is None:
+            return get_default_request()(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+        else:
+            return request(url=api, method="POST", data=payload, **request_kwargs)
+
+    @overload
+    @staticmethod
+    def login_qrcode_scan_cancel(
+        payload: str | dict, 
+        /, 
+        request: None | Callable = None, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    @staticmethod
+    def login_qrcode_scan_cancel(
+        payload: str | dict, 
+        /, 
+        request: None | Callable = None, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    @staticmethod
+    def login_qrcode_scan_cancel(
+        payload: str | dict, 
+        /, 
+        request: None | Callable = None, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """取消扫描二维码，payload 数据取自 `login_qrcode_scan` 接口响应
+
+        GET https://hnqrcodeapi.115.com/api/2.0/cancel.php
+
+        :payload:
+            - key: str
+            - uid: str
+            - client: int = 0
+        """
+        api = "https://hnqrcodeapi.115.com/api/2.0/cancel.php"
+        if isinstance(payload, str):
+            payload = {"key": payload, "uid": payload, "client": 0}
+        request_kwargs.setdefault("parse", default_parse)
+        if request is None:
+            return get_default_request()(url=api, params=payload, async_=async_, **request_kwargs)
+        else:
+            return request(url=api, params=payload, **request_kwargs)
+
+    @overload
+    @staticmethod
+    def login_qrcode_scan_result(
+        uid: str, 
+        app: str = "alipaymini", 
+        request: None | Callable = None, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    @staticmethod
+    def login_qrcode_scan_result(
+        uid: str, 
+        app: str = "alipaymini", 
+        request: None | Callable = None, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    @staticmethod
+    def login_qrcode_scan_result(
+        uid: str, 
+        app: str = "alipaymini", 
+        request: None | Callable = None, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取扫码登录的结果，包含 cookie
+
+        POST https://passportapi.115.com/app/1.0/{app}/1.0/login/qrcode/
+
+        :param uid: 扫码的 uid
+        :param app: 绑定的 app
+        :param request: 自定义请求函数
+        :param async_: 是否异步
+        :param request_kwargs: 其它请求参数
+
+        :return: 接口返回值
+        """
+        if app == "desktop":
+            app = "web"
+        api = f"http://passportapi.115.com/app/1.0/{app}/1.0/login/qrcode/"
+        payload = {"account": uid}
+        request_kwargs.setdefault("parse", default_parse)
+        if request is None:
+            return get_default_request()(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+        else:
+            return request(url=api, method="POST", data=payload, **request_kwargs)
+
+    @overload
+    @staticmethod
+    def login_qrcode_scan_status(
+        payload: dict, 
+        /, 
+        request: None | Callable = None, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    @staticmethod
+    def login_qrcode_scan_status(
+        payload: dict, 
+        /, 
+        request: None | Callable = None, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    @staticmethod
+    def login_qrcode_scan_status(
+        payload: dict, 
+        /, 
+        request: None | Callable = None, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取二维码的状态（未扫描、已扫描、已登录、已取消、已过期等），payload 数据取自 `login_qrcode_token` 接口响应
+
+        GET https://qrcodeapi.115.com/get/status/
+
+        .. note::
+            https://www.yuque.com/115yun/open/shtpzfhewv5nag11#lAsp2
+
+        :payload:
+            - uid: str
+            - time: int
+            - sign: str
+        """
+        api = "https://qrcodeapi.115.com/get/status/"
+        request_kwargs.setdefault("parse", default_parse)
+        if request is None:
+            return get_default_request()(url=api, params=payload, async_=async_, **request_kwargs)
+        else:
+            return request(url=api, params=payload, **request_kwargs)
+
+    @overload
+    @staticmethod
+    def login_qrcode_token(
+        request: None | Callable = None, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    @staticmethod
+    def login_qrcode_token(
+        request: None | Callable = None, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    @staticmethod
+    def login_qrcode_token(
+        request: None | Callable = None, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取登录二维码，扫码可用
+
+        GET https://qrcodeapi.115.com/api/1.0/web/1.0/token/
+        """
+        api = "https://qrcodeapi.115.com/api/1.0/web/1.0/token/"
+        request_kwargs.setdefault("parse", default_parse)
+        if request is None:
+            return get_default_request()(url=api, async_=async_, **request_kwargs)
+        else:
+            return request(url=api, **request_kwargs)
+
+    @overload
+    @staticmethod
+    def login_qrcode_token_open(
+        payload: int | str | dict, 
+        /, 
+        request: None | Callable = None, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    @staticmethod
+    def login_qrcode_token_open(
+        payload: int | str | dict, 
+        /, 
+        request: None | Callable = None, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    @staticmethod
+    def login_qrcode_token_open(
+        payload: int | str | dict, 
+        /, 
+        request: None | Callable = None, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取登录二维码，扫码可用
+
+        POST https://qrcodeapi.115.com/open/authDeviceCode
+
+        .. note::
+            https://www.yuque.com/115yun/open/shtpzfhewv5nag11#WzRhM
+
+            code_challenge 默认用的字符串为 64 个 0，hash 算法为 md5
+
+        :payload:
+            - client_id: int | str 💡 AppID
+            - code_challenge: str = <default> 💡 PKCE 相关参数，计算方式如下
+
+                .. code:: python
+
+                    from base64 import b64encode
+                    from hashlib import sha256
+                    from secrets import token_bytes
+
+                    # code_verifier 可以是 43~128 位随机字符串
+                    code_verifier = token_bytes(64).hex()
+                    code_challenge = b64encode(sha256(code_verifier.encode()).digest()).decode()
+
+            - code_challenge_method: str = <default> 💡 计算 `code_challenge` 的 hash 算法，支持 "md5", "sha1", "sha256"
+        """
+        api = "https://qrcodeapi.115.com/open/authDeviceCode"
+        if isinstance(payload, (int, str)):
+            payload = {
+                "client_id": payload, 
+                "code_challenge": _default_code_challenge, 
+                "code_challenge_method": _default_code_challenge_method, 
+            }
+        request_kwargs.setdefault("parse", default_parse)
+        if request is None:
+            return get_default_request()(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+        else:
+            return request(url=api, method="POST", data=payload, **request_kwargs)
+
+    @overload
+    @classmethod
+    def login_with_qrcode(
+        cls, 
+        /, 
+        app: None | str = "", 
+        console_qrcode: bool = True, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    @classmethod
+    def login_with_qrcode(
+        cls, 
+        /, 
+        app: None | str = "", 
+        console_qrcode: bool = True, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    @classmethod
+    def login_with_qrcode(
+        cls, 
+        /, 
+        app: None | str = "", 
+        console_qrcode: bool = True, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """二维码扫码登录
+
+        .. hint::
+            仅获取响应，如果需要更新此 `client` 的 `cookies`，请直接用 `login` 方法
+
+        :param app: 扫二维码后绑定的 `app` （或者叫 `device`）
+        :param console_qrcode: 在命令行输出二维码，否则在浏览器中打开
+        :param async_: 是否异步
+        :param request_kwargs: 其它请求参数
+
+        :return: 响应信息，如果 `app` 为 None 或 ""，则返回二维码信息，否则返回绑定扫码后的信息（包含 cookies）
+
+        -----
+
+        app 至少有 24 个可用值，目前找出 14 个：
+
+        - web
+        - ios
+        - 115ios
+        - android
+        - 115android
+        - 115ipad
+        - tv
+        - qandroid
+        - windows
+        - mac
+        - linux
+        - wechatmini
+        - alipaymini
+        - harmony
+
+        还有几个备选（暂不可用）：
+
+        - bios
+        - bandroid
+        - ipad（登录机制有些不同，暂时未破解）
+        - qios（登录机制有些不同，暂时未破解）
+        - desktop（就是 web，但是用 115 浏览器登录）
+
+        :设备列表如下:
+
+        +-------+----------+------------+-------------------------+
+        | No.   | ssoent   | app        | description             |
+        +=======+==========+============+=========================+
+        | 01    | A1       | web        | 网页版                  |
+        +-------+----------+------------+-------------------------+
+        | 02    | A2       | ?          | 未知: android           |
+        +-------+----------+------------+-------------------------+
+        | 03    | A3       | ?          | 未知: iphone            |
+        +-------+----------+------------+-------------------------+
+        | 04    | A4       | ?          | 未知: ipad              |
+        +-------+----------+------------+-------------------------+
+        | 05    | B1       | ?          | 未知: android           |
+        +-------+----------+------------+-------------------------+
+        | 06    | D1       | ios        | 115生活(iOS端)          |
+        +-------+----------+------------+-------------------------+
+        | 07    | D2       | ?          | 未知: ios               |
+        +-------+----------+------------+-------------------------+
+        | 08    | D3       | 115ios     | 115(iOS端)              |
+        +-------+----------+------------+-------------------------+
+        | 09    | F1       | android    | 115生活(Android端)      |
+        +-------+----------+------------+-------------------------+
+        | 10    | F2       | ?          | 未知: android           |
+        +-------+----------+------------+-------------------------+
+        | 11    | F3       | 115android | 115(Android端)          |
+        +-------+----------+------------+-------------------------+
+        | 12    | H1       | ipad       | 未知: ipad              |
+        +-------+----------+------------+-------------------------+
+        | 13    | H2       | ?          | 未知: ipad              |
+        +-------+----------+------------+-------------------------+
+        | 14    | H3       | 115ipad    | 115(iPad端)             |
+        +-------+----------+------------+-------------------------+
+        | 15    | I1       | tv         | 115网盘(Android电视端)  |
+        +-------+----------+------------+-------------------------+
+        | 16    | M1       | qandriod   | 115管理(Android端)      |
+        +-------+----------+------------+-------------------------+
+        | 17    | N1       | qios       | 115管理(iOS端)          |
+        +-------+----------+------------+-------------------------+
+        | 18    | O1       | ?          | 未知: ipad              |
+        +-------+----------+------------+-------------------------+
+        | 19    | P1       | windows    | 115生活(Windows端)      |
+        +-------+----------+------------+-------------------------+
+        | 20    | P2       | mac        | 115生活(macOS端)        |
+        +-------+----------+------------+-------------------------+
+        | 21    | P3       | linux      | 115生活(Linux端)        |
+        +-------+----------+------------+-------------------------+
+        | 22    | R1       | wechatmini | 115生活(微信小程序)     |
+        +-------+----------+------------+-------------------------+
+        | 23    | R2       | alipaymini | 115生活(支付宝小程序)   |
+        +-------+----------+------------+-------------------------+
+        | 24    | S1       | harmony    | 115(Harmony端)          |
+        +-------+----------+------------+-------------------------+
+        """
+        def gen_step():
+            resp = yield cls.login_qrcode_token(
+                async_=async_, 
+                **request_kwargs, 
+            )
+            qrcode_token = resp["data"]
+            login_uid = qrcode_token["uid"]
+            qrcode = qrcode_token.pop("qrcode", "")
+            if not qrcode:
+                qrcode = "http://115.com/scan/dg-" + login_uid
+            if console_qrcode:
+                from qrcode import QRCode # type: ignore
+                qr = QRCode(border=1)
+                qr.add_data(qrcode)
+                qr.print_ascii(tty=isatty(1))
+            else:
+                url = "https://qrcodeapi.115.com/api/1.0/web/1.0/qrcode?uid=" + login_uid
+                if async_:
+                    yield partial(startfile_async, url)
+                else:
+                    startfile(url)
+            while True:
+                try:
+                    resp = yield cls.login_qrcode_scan_status(
+                        qrcode_token, 
+                        async_=async_, 
+                        **request_kwargs, 
+                    )
+                except Exception:
+                    continue
+                match resp["data"].get("status"):
+                    case 0:
+                        print("[status=0] qrcode: waiting")
+                    case 1:
+                        print("[status=1] qrcode: scanned")
+                    case 2:
+                        print("[status=2] qrcode: signed in")
+                        break
+                    case -1:
+                        raise LoginError(errno.EIO, "[status=-1] qrcode: expired")
+                    case -2:
+                        raise LoginError(errno.EIO, "[status=-2] qrcode: canceled")
+                    case _:
+                        raise LoginError(errno.EIO, f"qrcode: aborted with {resp!r}")
+            if app:
+                return cls.login_qrcode_scan_result(
+                    login_uid, 
+                    app, 
+                    async_=async_, 
+                    **request_kwargs, 
+                )
+            else:
+                return qrcode_token
+        return run_gen_step(gen_step, async_=async_)
+
+    @overload
+    @classmethod
+    def login_with_open(
+        cls, 
+        /, 
+        app_id: int | str, 
+        console_qrcode: bool = True, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    @classmethod
+    def login_with_open(
+        cls, 
+        /, 
+        app_id: int | str, 
+        console_qrcode: bool = True, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    @classmethod
+    def login_with_open(
+        cls, 
+        /, 
+        app_id: int | str, 
+        console_qrcode: bool = True, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """二维码扫码登录开放平台
+
+        :param console_qrcode: 在命令行输出二维码，否则在浏览器中打开
+        :param async_: 是否异步
+        :param request_kwargs: 其它请求参数
+
+        :return: 响应信息
+        """
+        def gen_step():
+            resp = yield cls.login_qrcode_token_open(
+                app_id, 
+                async_=async_, 
+                **request_kwargs, 
+            )
+            qrcode_token = resp["data"]
+            login_uid = qrcode_token["uid"]
+            qrcode = qrcode_token.pop("qrcode", "")
+            if not qrcode:
+                qrcode = "http://115.com/scan/dg-" + login_uid
+            if console_qrcode:
+                from qrcode import QRCode # type: ignore
+                qr = QRCode(border=1)
+                qr.add_data(qrcode)
+                qr.print_ascii(tty=isatty(1))
+            else:
+                url = "https://qrcodeapi.115.com/api/1.0/web/1.0/qrcode?uid=" + login_uid
+                if async_:
+                    yield partial(startfile_async, url)
+                else:
+                    startfile(url)
+            while True:
+                try:
+                    resp = yield cls.login_qrcode_scan_status(
+                        qrcode_token, 
+                        async_=async_, 
+                        **request_kwargs, 
+                    )
+                except Exception:
+                    continue
+                match resp["data"].get("status"):
+                    case 0:
+                        print("[status=0] qrcode: waiting")
+                    case 1:
+                        print("[status=1] qrcode: scanned")
+                    case 2:
+                        print("[status=2] qrcode: signed in")
+                        break
+                    case -1:
+                        raise LoginError(errno.EIO, "[status=-1] qrcode: expired")
+                    case -2:
+                        raise LoginError(errno.EIO, "[status=-2] qrcode: canceled")
+                    case _:
+                        raise LoginError(errno.EIO, f"qrcode: aborted with {resp!r}")
+            return cls.login_qrcode_access_token_open(
+                login_uid, 
+                async_=async_, 
+                **request_kwargs, 
+            )
+        return run_gen_step(gen_step, async_=async_)
+
+    upload_endpoint = "http://oss-cn-shenzhen.aliyuncs.com"
+
+    def upload_endpoint_url(
+        self, 
+        /, 
+        bucket: str, 
+        object: str, 
+        endpoint: None | str = None, 
+    ) -> str:
+        """构造上传时的 url
+
+        :param bucket: 存储桶
+        :param object: 存储对象 id
+        :param endpoint: 终点 url
+
+        :return: 上传时所用的 url
+        """
+        if endpoint is None:
+            endpoint = self.upload_endpoint
+        urlp = urlsplit(endpoint)
+        return f"{urlp.scheme}://{bucket}.{urlp.netloc}/{object}"
+
+    ########## Other Encapsulations ##########
+
+    @overload
+    def open(
+        self, 
+        /, 
+        url: str | Callable[[], str], 
+        start: int = 0, 
+        seek_threshold: int = 1 << 20, 
+        headers: None | Mapping = None, 
+        http_file_reader_cls: None | type[HTTPFileReader] = None, 
+        *, 
+        async_: Literal[False] = False, 
+    ) -> HTTPFileReader:
+        ...
+    @overload
+    def open(
+        self, 
+        /, 
+        url: str | Callable[[], str] | Callable[[], Awaitable[str]], 
+        start: int = 0, 
+        seek_threshold: int = 1 << 20, 
+        headers: None | Mapping = None, 
+        http_file_reader_cls: None | type[AsyncHTTPFileReader] = None, 
+        *, 
+        async_: Literal[True], 
+    ) -> AsyncHTTPFileReader:
+        ...
+    def open(
+        self, 
+        /, 
+        url: str | Callable[[], str] | Callable[[], Awaitable[str]], 
+        start: int = 0, 
+        seek_threshold: int = 1 << 20, 
+        headers: None | Mapping = None, 
+        http_file_reader_cls: None | type[HTTPFileReader] | type[AsyncHTTPFileReader] = None, 
+        *, 
+        async_: Literal[False, True] = False, 
+    ) -> HTTPFileReader | AsyncHTTPFileReader:
+        """打开下载链接，返回文件对象
+
+        :param url: 115 文件的下载链接（可以从网盘、网盘上的压缩包内、分享链接中获取）
+
+            - P115Client.download_url
+            - P115Client.share_download_url
+            - P115Client.extract_download_url
+
+        :param start: 开始索引
+        :param seek_threshold: 当向前 seek 的偏移量不大于此值时，调用 read 来移动文件位置（可避免重新建立连接）
+        :param http_file_reader_cls: 返回的文件对象的类，需要是 `httpfile.HTTPFileReader` 的子类
+        :param headers: 请求头
+        :param async_: 是否异步
+
+        :return: 返回打开的文件对象，可以读取字节数据
+        """
+        if headers is None:
+            headers = self.headers
+        else:
+            headers = {**self.headers, **headers}
+        if async_:
+            if http_file_reader_cls is None:
+                from httpfile import AsyncHttpxFileReader
+                http_file_reader_cls = AsyncHttpxFileReader
+            return http_file_reader_cls(
+                url, # type: ignore
+                headers=headers, 
+                start=start, 
+                seek_threshold=seek_threshold, 
+            )
+        else:
+            if http_file_reader_cls is None:
+                http_file_reader_cls = HTTPFileReader
+            return http_file_reader_cls(
+                url, # type: ignore
+                headers=headers, 
+                start=start, 
+                seek_threshold=seek_threshold, 
+            )
+
+    @overload
+    def ed2k(
+        self, 
+        /, 
+        url: str | Callable[[], str], 
+        headers: None | Mapping = None, 
+        name: str = "", 
+        *, 
+        async_: Literal[False] = False, 
+    ) -> str:
+        ...
+    @overload
+    def ed2k(
+        self, 
+        /, 
+        url: str | Callable[[], str], 
+        headers: None | Mapping = None, 
+        name: str = "", 
+        *, 
+        async_: Literal[True], 
+    ) -> Coroutine[Any, Any, str]:
+        ...
+    def ed2k(
+        self, 
+        /, 
+        url: str | Callable[[], str], 
+        headers: None | Mapping = None, 
+        name: str = "", 
+        *, 
+        async_: Literal[False, True] = False, 
+    ) -> str | Coroutine[Any, Any, str]:
+        """下载文件流并生成它的 ed2k 链接
+
+        :param url: 115 文件的下载链接（可以从网盘、网盘上的压缩包内、分享链接中获取）
+        :param headers: 请求头
+        :param name: 文件名
+        :param async_: 是否异步
+
+        :return: 文件的 ed2k 链接
+        """
+        trantab = dict(zip(b"/|", ("%2F", "%7C")))
+        if async_:
+            async def request():
+                async with self.open(url, headers=headers, async_=True) as file:
+                    return make_ed2k_url(name or file.name, *(await ed2k_hash_async(file)))
+            return request()
+        else:
+            with self.open(url, headers=headers) as file:
+                return make_ed2k_url(name or file.name, *ed2k_hash(file))
+
+    @overload
+    def hash[T](
+        self, 
+        /, 
+        url: str | Callable[[], str], 
+        digest: str | HashObj | Callable[[], HashObj] | Callable[[], Callable[[bytes, T], T]] = "md5", 
+        start: int = 0, 
+        stop: None | int = None, 
+        headers: None | Mapping = None, 
+        *, 
+        async_: Literal[False] = False, 
+    ) -> tuple[int, HashObj | T]:
+        ...
+    @overload
+    def hash[T](
+        self, 
+        /, 
+        url: str | Callable[[], str], 
+        digest: str | HashObj | Callable[[], HashObj] | Callable[[], Callable[[bytes, T], T]] | Callable[[], Callable[[bytes, T], Awaitable[T]]] = "md5", 
+        start: int = 0, 
+        stop: None | int = None, 
+        headers: None | Mapping = None, 
+        *, 
+        async_: Literal[True], 
+    ) -> Coroutine[Any, Any, tuple[int, HashObj | T]]:
+        ...
+    def hash[T](
+        self, 
+        /, 
+        url: str | Callable[[], str], 
+        digest: str | HashObj | Callable[[], HashObj] | Callable[[], Callable[[bytes, T], T]] | Callable[[], Callable[[bytes, T], Awaitable[T]]] = "md5", 
+        start: int = 0, 
+        stop: None | int = None, 
+        headers: None | Mapping = None, 
+        *, 
+        async_: Literal[False, True] = False, 
+    ) -> tuple[int, HashObj | T] | Coroutine[Any, Any, tuple[int, HashObj | T]]:
+        """下载文件流并用一种 hash 算法求值
+
+        :param url: 115 文件的下载链接（可以从网盘、网盘上的压缩包内、分享链接中获取）
+        :param digest: hash 算法
+
+            - 如果是 str，则可以是 `hashlib.algorithms_available` 中任一，也可以是 "ed2k" 或 "crc32"
+            - 如果是 HashObj (来自 python-hashtools)，就相当于是 `_hashlib.HASH` 类型，需要有 update 和 digest 等方法
+            - 如果是 Callable，则返回值必须是 HashObj，或者是一个可用于累计的函数，第 1 个参数是本次所传入的字节数据，第 2 个参数是上一次的计算结果，返回值是这一次的计算结果，第 2 个参数可省略
+
+        :param start: 开始索引，可以为负数（从文件尾部开始）
+        :param stop: 结束索引（不含），可以为负数（从文件尾部开始）
+        :param headers: 请求头
+        :param async_: 是否异步
+
+        :return: 元组，包含文件的 大小 和 hash 计算结果
+        """
+        digest = convert_digest(digest)
+        if async_:
+            async def request():
+                nonlocal stop
+                async with self.open(url, start=start, headers=headers, async_=True) as file: # type: ignore
+                    if stop is None:
+                        return await file_digest_async(file, digest)
+                    else:
+                        if stop < 0:
+                            stop += file.length
+                        return await file_digest_async(file, digest, stop=max(0, stop-start)) # type: ignore
+            return request()
+        else:
+            with self.open(url, start=start, headers=headers) as file:
+                if stop is None:
+                    return file_digest(file, digest) # type: ignore
+                else:
+                    if stop < 0:
+                        stop = stop + file.length
+                    return file_digest(file, digest, stop=max(0, stop-start)) # type: ignore
+
+    @overload
+    def hashes[T](
+        self, 
+        /, 
+        url: str | Callable[[], str], 
+        digest: str | HashObj | Callable[[], HashObj] | Callable[[], Callable[[bytes, T], T]] = "md5", 
+        *digests: str | HashObj | Callable[[], HashObj] | Callable[[], Callable[[bytes, T], T]], 
+        start: int = 0, 
+        stop: None | int = None, 
+        headers: None | Mapping = None, 
+        async_: Literal[False] = False, 
+    ) -> tuple[int, list[HashObj | T]]:
+        ...
+    @overload
+    def hashes[T](
+        self, 
+        /, 
+        url: str | Callable[[], str], 
+        digest: str | HashObj | Callable[[], HashObj] | Callable[[], Callable[[bytes, T], T]] | Callable[[], Callable[[bytes, T], Awaitable[T]]] = "md5", 
+        *digests: str | HashObj | Callable[[], HashObj] | Callable[[], Callable[[bytes, T], T]] | Callable[[], Callable[[bytes, T], Awaitable[T]]], 
+        start: int = 0, 
+        stop: None | int = None, 
+        headers: None | Mapping = None, 
+        async_: Literal[True], 
+    ) -> Coroutine[Any, Any, tuple[int, list[HashObj | T]]]:
+        ...
+    def hashes[T](
+        self, 
+        /, 
+        url: str | Callable[[], str], 
+        digest: str | HashObj | Callable[[], HashObj] | Callable[[], Callable[[bytes, T], T]] | Callable[[], Callable[[bytes, T], Awaitable[T]]] = "md5", 
+        *digests: str | HashObj | Callable[[], HashObj] | Callable[[], Callable[[bytes, T], T]] | Callable[[], Callable[[bytes, T], Awaitable[T]]], 
+        start: int = 0, 
+        stop: None | int = None, 
+        headers: None | Mapping = None, 
+        async_: Literal[False, True] = False, 
+    ) -> tuple[int, list[HashObj | T]] | Coroutine[Any, Any, tuple[int, list[HashObj | T]]]:
+        """下载文件流并用一组 hash 算法求值
+
+        :param url: 115 文件的下载链接（可以从网盘、网盘上的压缩包内、分享链接中获取）
+        :param digest: hash 算法
+
+            - 如果是 str，则可以是 `hashlib.algorithms_available` 中任一，也可以是 "ed2k" 或 "crc32"
+            - 如果是 HashObj (来自 python-hashtools)，就相当于是 `_hashlib.HASH` 类型，需要有 update 和 digest 等方法
+            - 如果是 Callable，则返回值必须是 HashObj，或者是一个可用于累计的函数，第 1 个参数是本次所传入的字节数据，第 2 个参数是上一次的计算结果，返回值是这一次的计算结果，第 2 个参数可省略
+
+        :param digests: 同 `digest`，但可以接受多个
+        :param start: 开始索引，可以为负数（从文件尾部开始）
+        :param stop: 结束索引（不含），可以为负数（从文件尾部开始）
+        :param headers: 请求头
+        :param async_: 是否异步
+
+        :return: 元组，包含文件的 大小 和一组 hash 计算结果
+        """
+        digests = (convert_digest(digest), *map(convert_digest, digests))
+        if async_:
+            async def request():
+                nonlocal stop
+                async with self.open(url, start=start, headers=headers, async_=True) as file: # type: ignore
+                    if stop is None:
+                        return await file_mdigest_async(file, *digests)
+                    else:
+                        if stop < 0:
+                            stop += file.length
+                        return await file_mdigest_async(file *digests, stop=max(0, stop-start)) # type: ignore
+            return request()
+        else:
+            with self.open(url, start=start, headers=headers) as file:
+                if stop is None:
+                    return file_mdigest(file, *digests) # type: ignore
+                else:
+                    if stop < 0:
+                        stop = stop + file.length
+                    return file_mdigest(file, *digests, stop=max(0, stop-start)) # type: ignore
+
+    @overload
+    def read_bytes(
+        self, 
+        /, 
+        url: str, 
+        start: int = 0, 
+        stop: None | int = None, 
+        headers: None | Mapping = None, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> bytes:
+        ...
+    @overload
+    def read_bytes(
+        self, 
+        /, 
+        url: str, 
+        start: int = 0, 
+        stop: None | int = None, 
+        headers: None | Mapping = None, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, bytes]:
+        ...
+    def read_bytes(
+        self, 
+        /, 
+        url: str, 
+        start: int = 0, 
+        stop: None | int = None, 
+        headers: None | Mapping = None, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> bytes | Coroutine[Any, Any, bytes]:
+        """读取文件一定索引范围的数据
+
+        :param url: 115 文件的下载链接（可以从网盘、网盘上的压缩包内、分享链接中获取）
+        :param start: 开始索引，可以为负数（从文件尾部开始）
+        :param stop: 结束索引（不含），可以为负数（从文件尾部开始）
+        :param headers: 请求头
+        :param async_: 是否异步
+        :param request_kwargs: 其它请求参数
+        """
+        def gen_step():
+            def get_bytes_range(start, stop):
+                if start < 0 or (stop and stop < 0):
+                    length: int = yield self.read_bytes_range(
+                        url, 
+                        bytes_range="-1", 
+                        headers=headers, 
+                        async_=async_, 
+                        **{**request_kwargs, "parse": lambda resp: get_total_length(resp)}, 
+                    )
+                    if start < 0:
+                        start += length
+                    if start < 0:
+                        start = 0
+                    if stop is None:
+                        return f"{start}-"
+                    elif stop < 0:
+                        stop += length
+                if stop is None:
+                    return f"{start}-"
+                elif start >= stop:
+                    return None
+                return f"{start}-{stop-1}"
+            bytes_range = yield from get_bytes_range(start, stop)
+            if not bytes_range:
+                return b""
+            return self.read_bytes_range(
+                url, 
+                bytes_range=bytes_range, 
+                headers=headers, 
+                async_=async_, 
+                **request_kwargs, 
+            )
+        return run_gen_step(gen_step, async_=async_)
+
+    @overload
+    def read_bytes_range(
+        self, 
+        /, 
+        url: str, 
+        bytes_range: str = "0-", 
+        headers: None | Mapping = None, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> bytes:
+        ...
+    @overload
+    def read_bytes_range(
+        self, 
+        /, 
+        url: str, 
+        bytes_range: str = "0-", 
+        headers: None | Mapping = None, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, bytes]:
+        ...
+    def read_bytes_range(
+        self, 
+        /, 
+        url: str, 
+        bytes_range: str = "0-", 
+        headers: None | Mapping = None, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> bytes | Coroutine[Any, Any, bytes]:
+        """读取文件一定索引范围的数据
+
+        :param url: 115 文件的下载链接（可以从网盘、网盘上的压缩包内、分享链接中获取）
+        :param bytes_range: 索引范围，语法符合 `HTTP Range Requests <https://developer.mozilla.org/en-US/docs/Web/HTTP/Range_requests>`_
+        :param headers: 请求头
+        :param async_: 是否异步
+        :param request_kwargs: 其它请求参数
+        """
+        headers = dict(headers) if headers else {}
+        if isinstance(url, P115URL) and (headers_extra := url.get("headers")):
+            headers.update(headers_extra)
+        headers["Accept-Encoding"] = "identity"
+        headers["Range"] = f"bytes={bytes_range}"
+        request_kwargs["headers"] = headers
+        request_kwargs.setdefault("method", "GET")
+        request_kwargs.setdefault("parse", False)
+        return self.request(url, async_=async_, **request_kwargs)
+
+    @overload
+    def read_block(
+        self, 
+        /, 
+        url: str, 
+        size: int = -1, 
+        offset: int = 0, 
+        headers: None | Mapping = None, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> bytes:
+        ...
+    @overload
+    def read_block(
+        self, 
+        /, 
+        url: str, 
+        size: int = -1, 
+        offset: int = 0, 
+        headers: None | Mapping = None, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, bytes]:
+        ...
+    def read_block(
+        self, 
+        /, 
+        url: str, 
+        size: int = -1, 
+        offset: int = 0, 
+        headers: None | Mapping = None, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> bytes | Coroutine[Any, Any, bytes]:
+        """读取文件一定索引范围的数据
+
+        :param url: 115 文件的下载链接（可以从网盘、网盘上的压缩包内、分享链接中获取）
+        :param size: 读取字节数（最多读取这么多字节，如果遇到 EOF (end-of-file)，则会小于这个值），如果小于 0，则读取到文件末尾
+        :param offset: 偏移索引，从 0 开始，可以为负数（从文件尾部开始）
+        :param headers: 请求头
+        :param async_: 是否异步
+        :param request_kwargs: 其它请求参数
+        """
+        def gen_step():
+            if size == 0:
+                return b""
+            elif size > 0:
+                stop: int | None = offset + size
+            else:
+                stop = None
+            return self.read_bytes(
+                url, 
+                start=offset, 
+                stop=stop, 
+                headers=headers, 
+                async_=async_, 
+                **request_kwargs, 
+            )
+        return run_gen_step(gen_step, async_=async_)
+
+
+class P115Client(ClientRequestMixin):
     """115 的客户端对象
 
     :param cookies: 115 的 cookies，要包含 `UID`、`CID`、`KID` 和 `SEID` 等
@@ -1050,9 +2473,6 @@ class P115Client:
             instance=self, 
         )
 
-    def __del__(self, /):
-        self.close()
-
     def __eq__(self, other, /) -> bool:
         try:
             return type(self) is type(other) and self.user_id == other.user_id
@@ -1061,36 +2481,6 @@ class P115Client:
 
     def __hash__(self, /) -> int:
         return id(self)
-
-    @locked_cacheproperty
-    def session(self, /):
-        """同步请求的 session 对象
-        """
-        import httpx_request
-        from httpx import Client, HTTPTransport, Limits
-        session = Client(
-            limits=Limits(max_connections=256, max_keepalive_connections=64, keepalive_expiry=10), 
-            transport=HTTPTransport(retries=5), 
-            verify=False, 
-        )
-        setattr(session, "_headers", self.headers)
-        setattr(session, "_cookies", self.cookies)
-        return session
-
-    @locked_cacheproperty
-    def async_session(self, /):
-        """异步请求的 session 对象
-        """
-        import httpx_request
-        from httpx import AsyncClient, AsyncHTTPTransport, Limits
-        session = AsyncClient(
-            limits=Limits(max_connections=256, max_keepalive_connections=64, keepalive_expiry=10), 
-            transport=AsyncHTTPTransport(retries=5), 
-            verify=False, 
-        )
-        setattr(session, "_headers", self.headers)
-        setattr(session, "_cookies", self.cookies)
-        return session
 
     @property
     def cookies(self, /):
@@ -1153,30 +2543,6 @@ class P115Client:
         if not cookies_equal(cookies_old, cookies_new):
             self._write_cookies(cookies_new)
 
-    @property
-    def cookiejar(self, /) -> CookieJar:
-        """请求所用的 CookieJar 对象（同步和异步共用）
-        """
-        return self.cookies.jar
-
-    @property
-    def cookies_str(self, /) -> P115Cookies:
-        """所有 .115.com 域下的 cookie 值
-        """
-        return P115Cookies.from_cookiejar(self.cookiejar)
-
-    @locked_cacheproperty
-    def headers(self, /) -> MutableMapping:
-        """请求头，无论同步还是异步请求都共用这个请求头
-        """
-        from multidict import CIMultiDict
-        return CIMultiDict({
-            "accept": "application/json, text/plain, */*", 
-            "accept-encoding": "gzip, deflate", 
-            "connection": "keep-alive", 
-            "user-agent": "Mozilla/5.0 AppleWebKit/600 Safari/600 Chrome/124.0.0.0", 
-        })
-
     @locked_cacheproperty
     def user_id(self, /) -> int:
         cookie_uid = self.cookies.get("UID")
@@ -1230,12 +2596,6 @@ class P115Client:
             self.cookies_mtime = cookies_path.stat().st_mtime
         except OSError:
             self.cookies_mtime = 0
-
-    def close(self, /) -> None:
-        """删除 session 和 async_session 属性，如果它们未被引用，则应该会被自动清理
-        """
-        self.__dict__.pop("session", None)
-        self.__dict__.pop("async_session", None)
 
     @overload
     @classmethod
@@ -1491,6 +2851,82 @@ class P115Client:
         return run_gen_step(gen_step, async_=async_)
 
     @overload
+    def login_qrcode_scan(
+        self, 
+        payload: str | dict, 
+        /, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def login_qrcode_scan(
+        self, 
+        payload: str | dict, 
+        /, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def login_qrcode_scan(
+        self, 
+        payload: str | dict, 
+        /, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """扫描二维码，payload 数据取自 `login_qrcode_token` 接口响应
+
+        GET https://qrcodeapi.115.com/api/2.0/prompt.php
+
+        :payload:
+            - uid: str
+        """
+        api = "https://qrcodeapi.115.com/api/2.0/prompt.php"
+        if isinstance(payload, str):
+            payload = {"uid": payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def login_qrcode_scan_confirm(
+        self, 
+        payload: str | dict, 
+        /, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def login_qrcode_scan_confirm(
+        self, 
+        payload: str | dict, 
+        /, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def login_qrcode_scan_confirm(
+        self, 
+        payload: str | dict, 
+        /, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """确认扫描二维码，payload 数据取自 `login_qrcode_scan` 接口响应
+
+        GET https://hnqrcodeapi.115.com/api/2.0/slogin.php
+
+        :payload:
+            - key: str
+            - uid: str
+            - client: int = 0
+        """
+        api = "https://hnqrcodeapi.115.com/api/2.0/slogin.php"
+        if isinstance(payload, str):
+            payload = {"key": payload, "uid": payload, "client": 0}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
     def login_with_app(
         self, 
         /, 
@@ -1623,185 +3059,6 @@ class P115Client:
         return run_gen_step(gen_step, async_=async_)
 
     @overload
-    @classmethod
-    def login_with_qrcode(
-        cls, 
-        /, 
-        app: None | str = "", 
-        console_qrcode: bool = True, 
-        *, 
-        async_: Literal[False] = False, 
-        **request_kwargs, 
-    ) -> dict:
-        ...
-    @overload
-    @classmethod
-    def login_with_qrcode(
-        cls, 
-        /, 
-        app: None | str = "", 
-        console_qrcode: bool = True, 
-        *, 
-        async_: Literal[True], 
-        **request_kwargs, 
-    ) -> Coroutine[Any, Any, dict]:
-        ...
-    @classmethod
-    def login_with_qrcode(
-        cls, 
-        /, 
-        app: None | str = "", 
-        console_qrcode: bool = True, 
-        *, 
-        async_: Literal[False, True] = False, 
-        **request_kwargs, 
-    ) -> dict | Coroutine[Any, Any, dict]:
-        """二维码扫码登录
-
-        .. hint::
-            仅获取响应，如果需要更新此 `client` 的 `cookies`，请直接用 `login` 方法
-
-        :param app: 扫二维码后绑定的 `app` （或者叫 `device`）
-        :param console_qrcode: 在命令行输出二维码，否则在浏览器中打开
-        :param async_: 是否异步
-        :param request_kwargs: 其它请求参数
-
-        :return: 响应信息，如果 `app` 为 None 或 ""，则返回二维码信息，否则返回绑定扫码后的信息（包含 cookies）
-
-        -----
-
-        app 至少有 24 个可用值，目前找出 14 个：
-
-        - web
-        - ios
-        - 115ios
-        - android
-        - 115android
-        - 115ipad
-        - tv
-        - qandroid
-        - windows
-        - mac
-        - linux
-        - wechatmini
-        - alipaymini
-        - harmony
-
-        还有几个备选（暂不可用）：
-
-        - bios
-        - bandroid
-        - ipad（登录机制有些不同，暂时未破解）
-        - qios（登录机制有些不同，暂时未破解）
-        - desktop（就是 web，但是用 115 浏览器登录）
-
-        :设备列表如下:
-
-        +-------+----------+------------+-------------------------+
-        | No.   | ssoent   | app        | description             |
-        +=======+==========+============+=========================+
-        | 01    | A1       | web        | 网页版                  |
-        +-------+----------+------------+-------------------------+
-        | 02    | A2       | ?          | 未知: android           |
-        +-------+----------+------------+-------------------------+
-        | 03    | A3       | ?          | 未知: iphone            |
-        +-------+----------+------------+-------------------------+
-        | 04    | A4       | ?          | 未知: ipad              |
-        +-------+----------+------------+-------------------------+
-        | 05    | B1       | ?          | 未知: android           |
-        +-------+----------+------------+-------------------------+
-        | 06    | D1       | ios        | 115生活(iOS端)          |
-        +-------+----------+------------+-------------------------+
-        | 07    | D2       | ?          | 未知: ios               |
-        +-------+----------+------------+-------------------------+
-        | 08    | D3       | 115ios     | 115(iOS端)              |
-        +-------+----------+------------+-------------------------+
-        | 09    | F1       | android    | 115生活(Android端)      |
-        +-------+----------+------------+-------------------------+
-        | 10    | F2       | ?          | 未知: android           |
-        +-------+----------+------------+-------------------------+
-        | 11    | F3       | 115android | 115(Android端)          |
-        +-------+----------+------------+-------------------------+
-        | 12    | H1       | ipad       | 未知: ipad              |
-        +-------+----------+------------+-------------------------+
-        | 13    | H2       | ?          | 未知: ipad              |
-        +-------+----------+------------+-------------------------+
-        | 14    | H3       | 115ipad    | 115(iPad端)             |
-        +-------+----------+------------+-------------------------+
-        | 15    | I1       | tv         | 115网盘(Android电视端)  |
-        +-------+----------+------------+-------------------------+
-        | 16    | M1       | qandriod   | 115管理(Android端)      |
-        +-------+----------+------------+-------------------------+
-        | 17    | N1       | qios       | 115管理(iOS端)          |
-        +-------+----------+------------+-------------------------+
-        | 18    | O1       | ?          | 未知: ipad              |
-        +-------+----------+------------+-------------------------+
-        | 19    | P1       | windows    | 115生活(Windows端)      |
-        +-------+----------+------------+-------------------------+
-        | 20    | P2       | mac        | 115生活(macOS端)        |
-        +-------+----------+------------+-------------------------+
-        | 21    | P3       | linux      | 115生活(Linux端)        |
-        +-------+----------+------------+-------------------------+
-        | 22    | R1       | wechatmini | 115生活(微信小程序)     |
-        +-------+----------+------------+-------------------------+
-        | 23    | R2       | alipaymini | 115生活(支付宝小程序)   |
-        +-------+----------+------------+-------------------------+
-        | 24    | S1       | harmony    | 115(Harmony端)          |
-        +-------+----------+------------+-------------------------+
-        """
-        def gen_step():
-            resp = yield cls.login_qrcode_token(
-                async_=async_, 
-                **request_kwargs, 
-            )
-            qrcode_token = resp["data"]
-            qrcode = qrcode_token.pop("qrcode")
-            if console_qrcode:
-                from qrcode import QRCode # type: ignore
-                qr = QRCode(border=1)
-                qr.add_data(qrcode)
-                qr.print_ascii(tty=isatty(1))
-            else:
-                url = "https://qrcodeapi.115.com/api/1.0/web/1.0/qrcode?uid=" + qrcode_token["uid"]
-                if async_:
-                    yield partial(startfile_async, url)
-                else:
-                    startfile(url)
-            while True:
-                try:
-                    resp = yield cls.login_qrcode_scan_status(
-                        qrcode_token, 
-                        async_=async_, 
-                        **request_kwargs, 
-                    )
-                except Exception:
-                    continue
-                match resp["data"].get("status"):
-                    case 0:
-                        print("[status=0] qrcode: waiting")
-                    case 1:
-                        print("[status=1] qrcode: scanned")
-                    case 2:
-                        print("[status=2] qrcode: signed in")
-                        break
-                    case -1:
-                        raise LoginError(errno.EIO, "[status=-1] qrcode: expired")
-                    case -2:
-                        raise LoginError(errno.EIO, "[status=-2] qrcode: canceled")
-                    case _:
-                        raise LoginError(errno.EIO, f"qrcode: aborted with {resp!r}")
-            if app:
-                return cls.login_qrcode_scan_result(
-                    qrcode_token["uid"], 
-                    app, 
-                    async_=async_, 
-                    **request_kwargs, 
-                )
-            else:
-                return qrcode_token
-        return run_gen_step(gen_step, async_=async_)
-
-    @overload
     def login_without_app(
         self, 
         /, 
@@ -1877,7 +3134,7 @@ class P115Client:
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> Self | Coroutine[Any, Any, Self]:
-        """自动登录某个设备（同一个设备可以有多个同时在线，但可以通过某些操作，把除了最近登录的那个都下线，也可以专门把最近登录那个也下线）
+        """登录某个设备（同一个设备可以有多个同时在线，但可以通过某些操作，把除了最近登录的那个都下线，也可以专门把最近登录那个也下线）
 
         .. hint::
             一个设备被新登录者下线，意味着这个 cookies 失效了，不能执行任何需要权限的操作
@@ -1973,6 +3230,53 @@ class P115Client:
                 inst = type(self)(cookies, check_for_relogin=check_for_relogin)
             if self is not inst and ssoent == inst.login_ssoent:
                 warn(f"login with the same ssoent {ssoent!r}, {self!r} will expire within 60 seconds", category=P115Warning)
+            return inst
+        return run_gen_step(gen_step, async_=async_)
+
+    @overload
+    def login_another_open(
+        self, 
+        /, 
+        app_id: int | str, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> P115OpenClient:
+        ...
+    @overload
+    def login_another_open(
+        self, 
+        /, 
+        app_id: int | str, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, P115OpenClient]:
+        ...
+    def login_another_open(
+        self, 
+        /, 
+        app_id: int | str, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> P115OpenClient | Coroutine[Any, Any, P115OpenClient]:
+        """登录某个开放接口应用
+
+        :param app_id: AppID
+        :param async_: 是否异步
+        :param request_kwargs: 其它请求参数
+        """
+        def gen_step():
+            resp = yield self.login_qrcode_token_open(app_id, async_=async_, **request_kwargs)
+            login_uid = check_response(resp)["data"]["uid"]
+            yield self.login_qrcode_scan(login_uid, async_=async_, **request_kwargs)
+            yield self.login_qrcode_scan_confirm(login_uid, async_=async_, **request_kwargs)
+            resp = yield self.login_qrcode_access_token_open(login_uid, async_=async_, **request_kwargs)
+            check_response(resp)
+            data = resp["data"]
+            inst = P115OpenClient.from_token(data["access_token"], data["refresh_token"])
+            inst.app_id = app_id
             return inst
         return run_gen_step(gen_step, async_=async_)
 
@@ -3312,7 +4616,7 @@ class P115Client:
                 async_=async_, 
                 **request_kwargs, 
             )
-            def get_url(resp: dict) -> P115URL:
+            def get_url(resp: dict, /) -> P115URL:
                 resp["pickcode"] = pickcode
                 try:
                     check_response(resp)
@@ -3335,7 +4639,7 @@ class P115Client:
                 async_=async_, 
                 **request_kwargs, 
             )
-            def get_url(resp: dict) -> P115URL:
+            def get_url(resp: dict, /) -> P115URL:
                 resp["pickcode"] = pickcode
                 check_response(resp)
                 if "url" in resp["data"]:
@@ -3627,7 +4931,7 @@ class P115Client:
                 async_=async_, 
                 **request_kwargs, 
             )
-        def get_url(resp: dict) -> P115URL:
+        def get_url(resp: dict, /) -> P115URL:
             from posixpath import basename
             data = check_response(resp)["data"]
             url = quote(data["url"], safe=":/?&=%#")
@@ -4711,13 +6015,15 @@ class P115Client:
         """
         api = complete_proapi("/files/copy", base_url, app)
         if isinstance(payload, (int, str)):
-            payload = {"pid": pid, "fid": payload}
+            payload = {"fid": payload}
         elif isinstance(payload, dict):
-            payload = {"pid": pid, **payload}
+            payload = dict(payload)
         else:
-            payload = {"pid": pid, "fid": ",".join(map(str, payload))}
+            payload = {"fid": ",".join(map(str, payload))}
         if not payload.get("fid"):
             return {"state": False, "message": "no op"}
+        payload = cast(dict, payload)
+        payload.setdefault("pid", pid)
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -9196,7 +10502,7 @@ class P115Client:
         POST https://webapi.115.com/files/music
 
         :payload:
-            - file_id: int      💡 文件 id，多个用 "," 隔开（op 为 "add" 和 "delete" 时需要）
+            - file_id: int      💡 文件 id，多个用逗号 "," 隔开（op 为 "add" 和 "delete" 时需要）
             - music_id: int = 1 💡 音乐 id（op 为 "fond" 时需要）
             - topic_id: int = 1 💡 听单 id
             - op: str = "add"   💡 操作类型："add": 添加到听单, "delete": 从听单删除, "fond": 设置星标
@@ -11830,315 +13136,6 @@ class P115Client:
         return self.request(url=api, async_=async_, **request_kwargs)
 
     @overload
-    @staticmethod
-    def login_qrcode(
-        payload: str | dict, 
-        /, 
-        request: None | Callable = None, 
-        *, 
-        async_: Literal[False] = False, 
-        **request_kwargs, 
-    ) -> bytes:
-        ...
-    @overload
-    @staticmethod
-    def login_qrcode(
-        payload: str | dict, 
-        /, 
-        request: None | Callable = None, 
-        *, 
-        async_: Literal[True], 
-        **request_kwargs, 
-    ) -> Coroutine[Any, Any, bytes]:
-        ...
-    @staticmethod
-    def login_qrcode(
-        payload: str | dict, 
-        /, 
-        request: None | Callable = None, 
-        *, 
-        async_: Literal[False, True] = False, 
-        **request_kwargs, 
-    ) -> bytes | Coroutine[Any, Any, bytes]:
-        """下载登录二维码图片
-
-        GET https://qrcodeapi.115.com/api/1.0/web/1.0/qrcode
-
-        :params uid: 二维码的 uid
-
-        :return: 图片的二进制数据（PNG 图片）
-        """
-        api = "https://qrcodeapi.115.com/api/1.0/web/1.0/qrcode"
-        if isinstance(payload, str):
-            payload = {"uid": payload}
-        request_kwargs.setdefault("parse", False)
-        if request is None:
-            return get_default_request()(url=api, params=payload, async_=async_, **request_kwargs)
-        else:
-            return request(url=api, params=payload, **request_kwargs)
-
-    @overload
-    def login_qrcode_scan(
-        self, 
-        payload: str | dict, 
-        /, 
-        async_: Literal[False] = False, 
-        **request_kwargs, 
-    ) -> dict:
-        ...
-    @overload
-    def login_qrcode_scan(
-        self, 
-        payload: str | dict, 
-        /, 
-        async_: Literal[True], 
-        **request_kwargs, 
-    ) -> Coroutine[Any, Any, dict]:
-        ...
-    def login_qrcode_scan(
-        self, 
-        payload: str | dict, 
-        /, 
-        async_: Literal[False, True] = False, 
-        **request_kwargs, 
-    ) -> dict | Coroutine[Any, Any, dict]:
-        """扫描二维码，payload 数据取自 `login_qrcode_token` 接口响应
-
-        GET https://qrcodeapi.115.com/api/2.0/prompt.php
-
-        :payload:
-            - uid: str
-        """
-        api = "https://qrcodeapi.115.com/api/2.0/prompt.php"
-        if isinstance(payload, str):
-            payload = {"uid": payload}
-        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
-
-    @overload
-    def login_qrcode_scan_confirm(
-        self, 
-        payload: str | dict, 
-        /, 
-        async_: Literal[False] = False, 
-        **request_kwargs, 
-    ) -> dict:
-        ...
-    @overload
-    def login_qrcode_scan_confirm(
-        self, 
-        payload: str | dict, 
-        /, 
-        async_: Literal[True], 
-        **request_kwargs, 
-    ) -> Coroutine[Any, Any, dict]:
-        ...
-    def login_qrcode_scan_confirm(
-        self, 
-        payload: str | dict, 
-        /, 
-        async_: Literal[False, True] = False, 
-        **request_kwargs, 
-    ) -> dict | Coroutine[Any, Any, dict]:
-        """确认扫描二维码，payload 数据取自 `login_qrcode_scan` 接口响应
-
-        GET https://hnqrcodeapi.115.com/api/2.0/slogin.php
-
-        :payload:
-            - key: str
-            - uid: str
-            - client: int = 0
-        """
-        api = "https://hnqrcodeapi.115.com/api/2.0/slogin.php"
-        if isinstance(payload, str):
-            payload = {"key": payload, "uid": payload, "client": 0}
-        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
-
-    @overload
-    @staticmethod
-    def login_qrcode_scan_cancel(
-        payload: str | dict, 
-        /, 
-        request: None | Callable = None, 
-        *, 
-        async_: Literal[False] = False, 
-        **request_kwargs, 
-    ) -> dict:
-        ...
-    @overload
-    @staticmethod
-    def login_qrcode_scan_cancel(
-        payload: str | dict, 
-        /, 
-        request: None | Callable = None, 
-        *, 
-        async_: Literal[True], 
-        **request_kwargs, 
-    ) -> Coroutine[Any, Any, dict]:
-        ...
-    @staticmethod
-    def login_qrcode_scan_cancel(
-        payload: str | dict, 
-        /, 
-        request: None | Callable = None, 
-        *, 
-        async_: Literal[False, True] = False, 
-        **request_kwargs, 
-    ) -> dict | Coroutine[Any, Any, dict]:
-        """取消扫描二维码，payload 数据取自 `login_qrcode_scan` 接口响应
-
-        GET https://hnqrcodeapi.115.com/api/2.0/cancel.php
-
-        :payload:
-            - key: str
-            - uid: str
-            - client: int = 0
-        """
-        api = "https://hnqrcodeapi.115.com/api/2.0/cancel.php"
-        if isinstance(payload, str):
-            payload = {"key": payload, "uid": payload, "client": 0}
-        request_kwargs.setdefault("parse", default_parse)
-        if request is None:
-            return get_default_request()(url=api, params=payload, async_=async_, **request_kwargs)
-        else:
-            return request(url=api, params=payload, **request_kwargs)
-
-    @overload
-    @staticmethod
-    def login_qrcode_scan_result(
-        uid: str, 
-        app: str = "alipaymini", 
-        request: None | Callable = None, 
-        *, 
-        async_: Literal[False] = False, 
-        **request_kwargs, 
-    ) -> dict:
-        ...
-    @overload
-    @staticmethod
-    def login_qrcode_scan_result(
-        uid: str, 
-        app: str = "alipaymini", 
-        request: None | Callable = None, 
-        *, 
-        async_: Literal[True], 
-        **request_kwargs, 
-    ) -> Coroutine[Any, Any, dict]:
-        ...
-    @staticmethod
-    def login_qrcode_scan_result(
-        uid: str, 
-        app: str = "alipaymini", 
-        request: None | Callable = None, 
-        *, 
-        async_: Literal[False, True] = False, 
-        **request_kwargs, 
-    ) -> dict | Coroutine[Any, Any, dict]:
-        """获取扫码登录的结果，包含 cookie
-
-        POST https://passportapi.115.com/app/1.0/{app}/1.0/login/qrcode/
-
-        :param uid: 扫码的 uid
-        :param app: 绑定的 app
-        :param request: 自定义请求函数
-        :param async_: 是否异步
-        :param request_kwargs: 其它请求参数
-
-        :return: 接口返回值
-        """
-        if app == "desktop":
-            app = "web"
-        api = f"http://passportapi.115.com/app/1.0/{app}/1.0/login/qrcode/"
-        payload = {"account": uid}
-        request_kwargs.setdefault("parse", default_parse)
-        if request is None:
-            return get_default_request()(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
-        else:
-            return request(url=api, method="POST", data=payload, **request_kwargs)
-
-    @overload
-    @staticmethod
-    def login_qrcode_scan_status(
-        payload: dict, 
-        /, 
-        request: None | Callable = None, 
-        *, 
-        async_: Literal[False] = False, 
-        **request_kwargs, 
-    ) -> dict:
-        ...
-    @overload
-    @staticmethod
-    def login_qrcode_scan_status(
-        payload: dict, 
-        /, 
-        request: None | Callable = None, 
-        *, 
-        async_: Literal[True], 
-        **request_kwargs, 
-    ) -> Coroutine[Any, Any, dict]:
-        ...
-    @staticmethod
-    def login_qrcode_scan_status(
-        payload: dict, 
-        /, 
-        request: None | Callable = None, 
-        *, 
-        async_: Literal[False, True] = False, 
-        **request_kwargs, 
-    ) -> dict | Coroutine[Any, Any, dict]:
-        """获取二维码的状态（未扫描、已扫描、已登录、已取消、已过期等），payload 数据取自 `login_qrcode_token` 接口响应
-
-        GET https://qrcodeapi.115.com/get/status/
-
-        :payload:
-            - uid: str
-            - time: int
-            - sign: str
-        """
-        api = "https://qrcodeapi.115.com/get/status/"
-        request_kwargs.setdefault("parse", default_parse)
-        if request is None:
-            return get_default_request()(url=api, params=payload, async_=async_, **request_kwargs)
-        else:
-            return request(url=api, params=payload, **request_kwargs)
-
-    @overload
-    @staticmethod
-    def login_qrcode_token(
-        request: None | Callable = None, 
-        *, 
-        async_: Literal[False] = False, 
-        **request_kwargs, 
-    ) -> dict:
-        ...
-    @overload
-    @staticmethod
-    def login_qrcode_token(
-        request: None | Callable = None, 
-        *, 
-        async_: Literal[True], 
-        **request_kwargs, 
-    ) -> Coroutine[Any, Any, dict]:
-        ...
-    @staticmethod
-    def login_qrcode_token(
-        request: None | Callable = None, 
-        *, 
-        async_: Literal[False, True] = False, 
-        **request_kwargs, 
-    ) -> dict | Coroutine[Any, Any, dict]:
-        """获取登录二维码，扫码可用
-
-        GET https://qrcodeapi.115.com/api/1.0/web/1.0/token/
-        """
-        api = "https://qrcodeapi.115.com/api/1.0/web/1.0/token/"
-        request_kwargs.setdefault("parse", default_parse)
-        if request is None:
-            return get_default_request()(url=api, async_=async_, **request_kwargs)
-        else:
-            return request(url=api, **request_kwargs)
-
-    @overload
     def login_status(
         self, 
         /, 
@@ -12737,7 +13734,7 @@ class P115Client:
         POST https://note.115.com/?ct=note&ac=delete
 
         :payload:
-            - nid: int | str 💡 记录 id，多个用 "," 隔开
+            - nid: int | str 💡 记录 id，多个用逗号 "," 隔开
         """
         api = "https://note.115.com/?ct=note&ac=delete"
         if isinstance(payload, (int, str)):
@@ -13190,7 +14187,7 @@ class P115Client:
 
         :payload:
             - cid: int 💡 分类 id
-            - nid: int | str 💡 记录 id，多个用 "," 隔开
+            - nid: int | str 💡 记录 id，多个用逗号 "," 隔开
         """
         api = "https://note.115.com/?ct=note&ac=update_note_cate"
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
@@ -14061,7 +15058,7 @@ class P115Client:
         POST https://proapi.115.com/android/rb/secret_del
 
         :payload:
-            - tid: int | str 💡 多个用 "," 隔开
+            - tid: int | str 💡 多个用逗号 "," 隔开
             - password: int | str = <default> 💡 密码，是 6 位数字
             - user_id: int = <default> 💡 不用管
         """
@@ -14122,7 +15119,7 @@ class P115Client:
     @overload
     def recyclebin_list(
         self, 
-        payload: int | str | dict = 0, 
+        payload: int | dict = 0, 
         /, 
         base_url: bool | str | Callable[[], str] = False, 
         *, 
@@ -14133,7 +15130,7 @@ class P115Client:
     @overload
     def recyclebin_list(
         self, 
-        payload: int | str | dict = 0, 
+        payload: int | dict = 0, 
         /, 
         base_url: bool | str | Callable[[], str] = False, 
         *, 
@@ -14143,14 +15140,14 @@ class P115Client:
         ...
     def recyclebin_list(
         self, 
-        payload: int | str | dict = 0, 
+        payload: int | dict = 0, 
         /, 
         base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
-        """回收站：罗列
+        """回收站：列表
 
         GET https://webapi.115.com/rb
 
@@ -14163,7 +15160,7 @@ class P115Client:
             - source: str = <default>
         """ 
         api = complete_webapi("/rb", base_url=base_url)
-        if isinstance(payload, (int, str)):
+        if isinstance(payload, int):
             payload = {"aid": 7, "cid": 0, "limit": 32, "format": "json", "offset": payload}
         else:
             payload = {"aid": 7, "cid": 0, "limit": 32, "format": "json", "offset": 0, **payload}
@@ -14172,7 +15169,7 @@ class P115Client:
     @overload
     def recyclebin_list_app(
         self, 
-        payload: int | str | dict = 0, 
+        payload: int | dict = 0, 
         /, 
         app: str = "android", 
         base_url: bool | str | Callable[[], str] = False, 
@@ -14184,7 +15181,7 @@ class P115Client:
     @overload
     def recyclebin_list_app(
         self, 
-        payload: int | str | dict = 0, 
+        payload: int | dict = 0, 
         /, 
         app: str = "android", 
         base_url: bool | str | Callable[[], str] = False, 
@@ -14195,7 +15192,7 @@ class P115Client:
         ...
     def recyclebin_list_app(
         self, 
-        payload: int | str | dict = 0, 
+        payload: int | dict = 0, 
         /, 
         app: str = "android", 
         base_url: bool | str | Callable[[], str] = False, 
@@ -14203,7 +15200,7 @@ class P115Client:
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
-        """回收站：罗列
+        """回收站：列表
 
         GET https://proapi.115.com/android/rb
 
@@ -14216,7 +15213,7 @@ class P115Client:
             - source: str = <default>
         """ 
         api = complete_proapi("/rb", base_url, app)
-        if isinstance(payload, (int, str)):
+        if isinstance(payload, int):
             payload = {"aid": 7, "cid": 0, "limit": 32, "format": "json", "offset": payload}
         else:
             payload = {"aid": 7, "cid": 0, "limit": 32, "format": "json", "offset": 0, **payload}
@@ -14308,7 +15305,7 @@ class P115Client:
         POST https://proapi.115.com/android/rb/revert
 
         :payload:
-            - tid: int | str 💡 多个用 "," 隔开
+            - tid: int | str 💡 多个用逗号 "," 隔开
             - user_id: int = <default> 💡 不用管
         """
         api = complete_proapi("/rb/revert", base_url, app)
@@ -15728,28 +16725,6 @@ class P115Client:
 
     ########## Upload API ##########
 
-    upload_endpoint = "http://oss-cn-shenzhen.aliyuncs.com"
-
-    def upload_endpoint_url(
-        self, 
-        /, 
-        bucket: str, 
-        object: str, 
-        endpoint: None | str = None, 
-    ) -> str:
-        """构造上传时的 url
-
-        :param bucket: 存储桶
-        :param object: 存储对象 id
-        :param endpoint: 终点 url
-
-        :return: 上传时所用的 url
-        """
-        if endpoint is None:
-            endpoint = self.upload_endpoint
-        urlp = urlsplit(endpoint)
-        return f"{urlp.scheme}://{bucket}.{urlp.netloc}/{object}"
-
     @overload
     def upload_info(
         self, 
@@ -15864,6 +16839,52 @@ class P115Client:
         return run_gen_step(gen_step, async_=async_)
 
     @overload
+    def upload_resume(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def upload_resume(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def upload_resume(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取恢复断点续传所需信息
+
+        POST https://uplb.115.com/3.0/resumeupload.php
+
+        :payload:
+            - fileid: str   💡 文件的 sha1 值
+            - filesize: int 💡 文件大小，单位是字节
+            - target: str   💡 上传目标，默认为 "U_1_0"，格式为 f"U_{aid}_{pid}"
+            - pickcode: str 💡 提取码
+            - userid: int = <default> 💡 不用管
+        """
+        api = complete_api("/3.0/resumeupload.php", "uplb", base_url=base_url)
+        payload = dict(payload, userid=self.user_id)
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
     def upload_sample_init(
         self, 
         /, 
@@ -15933,7 +16954,7 @@ class P115Client:
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
-        """获取阿里云 OSS 的 token，用于上传
+        """获取阿里云 OSS 的 token（上传凭证）
 
         GET https://uplb.115.com/3.0/gettoken.php
         """
@@ -16065,7 +17086,7 @@ class P115Client:
             "sign_key": sign_key, 
             "sign_val": sign_val, 
             "target": target, 
-            "topupload": "true",  
+            "topupload": 1, 
             "userid": self.user_id, 
             "userkey": self.user_key, 
         }
@@ -16119,7 +17140,7 @@ class P115Client:
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
         """秒传接口，此接口是对 `upload_init` 的封装。
-        
+
         .. note::
 
             - 文件大小 和 sha1 是必需的，只有 sha1 是没用的。
@@ -17654,480 +18675,6 @@ class P115Client:
             payload = {"ignore_warn": 0, "share_opt": 1, "safe_pwd": "", **payload}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
-    ########## Other Encapsulations ##########
-
-    @overload
-    def open(
-        self, 
-        /, 
-        url: str | Callable[[], str], 
-        start: int = 0, 
-        seek_threshold: int = 1 << 20, 
-        headers: None | Mapping = None, 
-        http_file_reader_cls: None | type[HTTPFileReader] = None, 
-        *, 
-        async_: Literal[False] = False, 
-    ) -> HTTPFileReader:
-        ...
-    @overload
-    def open(
-        self, 
-        /, 
-        url: str | Callable[[], str] | Callable[[], Awaitable[str]], 
-        start: int = 0, 
-        seek_threshold: int = 1 << 20, 
-        headers: None | Mapping = None, 
-        http_file_reader_cls: None | type[AsyncHTTPFileReader] = None, 
-        *, 
-        async_: Literal[True], 
-    ) -> AsyncHTTPFileReader:
-        ...
-    def open(
-        self, 
-        /, 
-        url: str | Callable[[], str] | Callable[[], Awaitable[str]], 
-        start: int = 0, 
-        seek_threshold: int = 1 << 20, 
-        headers: None | Mapping = None, 
-        http_file_reader_cls: None | type[HTTPFileReader] | type[AsyncHTTPFileReader] = None, 
-        *, 
-        async_: Literal[False, True] = False, 
-    ) -> HTTPFileReader | AsyncHTTPFileReader:
-        """打开下载链接，返回文件对象
-
-        :param url: 115 文件的下载链接（可以从网盘、网盘上的压缩包内、分享链接中获取）
-
-            - P115Client.download_url
-            - P115Client.share_download_url
-            - P115Client.extract_download_url
-
-        :param start: 开始索引
-        :param seek_threshold: 当向前 seek 的偏移量不大于此值时，调用 read 来移动文件位置（可避免重新建立连接）
-        :param http_file_reader_cls: 返回的文件对象的类，需要是 `httpfile.HTTPFileReader` 的子类
-        :param headers: 请求头
-        :param async_: 是否异步
-
-        :return: 返回打开的文件对象，可以读取字节数据
-        """
-        if headers is None:
-            headers = self.headers
-        else:
-            headers = {**self.headers, **headers}
-        if async_:
-            if http_file_reader_cls is None:
-                from httpfile import AsyncHttpxFileReader
-                http_file_reader_cls = AsyncHttpxFileReader
-            return http_file_reader_cls(
-                url, # type: ignore
-                headers=headers, 
-                start=start, 
-                seek_threshold=seek_threshold, 
-            )
-        else:
-            if http_file_reader_cls is None:
-                http_file_reader_cls = HTTPFileReader
-            return http_file_reader_cls(
-                url, # type: ignore
-                headers=headers, 
-                start=start, 
-                seek_threshold=seek_threshold, 
-            )
-
-    @overload
-    def ed2k(
-        self, 
-        /, 
-        url: str | Callable[[], str], 
-        headers: None | Mapping = None, 
-        name: str = "", 
-        *, 
-        async_: Literal[False] = False, 
-    ) -> str:
-        ...
-    @overload
-    def ed2k(
-        self, 
-        /, 
-        url: str | Callable[[], str], 
-        headers: None | Mapping = None, 
-        name: str = "", 
-        *, 
-        async_: Literal[True], 
-    ) -> Coroutine[Any, Any, str]:
-        ...
-    def ed2k(
-        self, 
-        /, 
-        url: str | Callable[[], str], 
-        headers: None | Mapping = None, 
-        name: str = "", 
-        *, 
-        async_: Literal[False, True] = False, 
-    ) -> str | Coroutine[Any, Any, str]:
-        """下载文件流并生成它的 ed2k 链接
-
-        :param url: 115 文件的下载链接（可以从网盘、网盘上的压缩包内、分享链接中获取）
-        :param headers: 请求头
-        :param name: 文件名
-        :param async_: 是否异步
-
-        :return: 文件的 ed2k 链接
-        """
-        trantab = dict(zip(b"/|", ("%2F", "%7C")))
-        if async_:
-            async def request():
-                async with self.open(url, headers=headers, async_=True) as file:
-                    return make_ed2k_url(name or file.name, *(await ed2k_hash_async(file)))
-            return request()
-        else:
-            with self.open(url, headers=headers) as file:
-                return make_ed2k_url(name or file.name, *ed2k_hash(file))
-
-    @overload
-    def hash[T](
-        self, 
-        /, 
-        url: str | Callable[[], str], 
-        digest: str | HashObj | Callable[[], HashObj] | Callable[[], Callable[[bytes, T], T]] = "md5", 
-        start: int = 0, 
-        stop: None | int = None, 
-        headers: None | Mapping = None, 
-        *, 
-        async_: Literal[False] = False, 
-    ) -> tuple[int, HashObj | T]:
-        ...
-    @overload
-    def hash[T](
-        self, 
-        /, 
-        url: str | Callable[[], str], 
-        digest: str | HashObj | Callable[[], HashObj] | Callable[[], Callable[[bytes, T], T]] | Callable[[], Callable[[bytes, T], Awaitable[T]]] = "md5", 
-        start: int = 0, 
-        stop: None | int = None, 
-        headers: None | Mapping = None, 
-        *, 
-        async_: Literal[True], 
-    ) -> Coroutine[Any, Any, tuple[int, HashObj | T]]:
-        ...
-    def hash[T](
-        self, 
-        /, 
-        url: str | Callable[[], str], 
-        digest: str | HashObj | Callable[[], HashObj] | Callable[[], Callable[[bytes, T], T]] | Callable[[], Callable[[bytes, T], Awaitable[T]]] = "md5", 
-        start: int = 0, 
-        stop: None | int = None, 
-        headers: None | Mapping = None, 
-        *, 
-        async_: Literal[False, True] = False, 
-    ) -> tuple[int, HashObj | T] | Coroutine[Any, Any, tuple[int, HashObj | T]]:
-        """下载文件流并用一种 hash 算法求值
-
-        :param url: 115 文件的下载链接（可以从网盘、网盘上的压缩包内、分享链接中获取）
-        :param digest: hash 算法
-
-            - 如果是 str，则可以是 `hashlib.algorithms_available` 中任一，也可以是 "ed2k" 或 "crc32"
-            - 如果是 HashObj (来自 python-hashtools)，就相当于是 `_hashlib.HASH` 类型，需要有 update 和 digest 等方法
-            - 如果是 Callable，则返回值必须是 HashObj，或者是一个可用于累计的函数，第 1 个参数是本次所传入的字节数据，第 2 个参数是上一次的计算结果，返回值是这一次的计算结果，第 2 个参数可省略
-
-        :param start: 开始索引，可以为负数（从文件尾部开始）
-        :param stop: 结束索引（不含），可以为负数（从文件尾部开始）
-        :param headers: 请求头
-        :param async_: 是否异步
-
-        :return: 元组，包含文件的 大小 和 hash 计算结果
-        """
-        digest = convert_digest(digest)
-        if async_:
-            async def request():
-                nonlocal stop
-                async with self.open(url, start=start, headers=headers, async_=True) as file: # type: ignore
-                    if stop is None:
-                        return await file_digest_async(file, digest)
-                    else:
-                        if stop < 0:
-                            stop += file.length
-                        return await file_digest_async(file, digest, stop=max(0, stop-start)) # type: ignore
-            return request()
-        else:
-            with self.open(url, start=start, headers=headers) as file:
-                if stop is None:
-                    return file_digest(file, digest) # type: ignore
-                else:
-                    if stop < 0:
-                        stop = stop + file.length
-                    return file_digest(file, digest, stop=max(0, stop-start)) # type: ignore
-
-    @overload
-    def hashes[T](
-        self, 
-        /, 
-        url: str | Callable[[], str], 
-        digest: str | HashObj | Callable[[], HashObj] | Callable[[], Callable[[bytes, T], T]] = "md5", 
-        *digests: str | HashObj | Callable[[], HashObj] | Callable[[], Callable[[bytes, T], T]], 
-        start: int = 0, 
-        stop: None | int = None, 
-        headers: None | Mapping = None, 
-        async_: Literal[False] = False, 
-    ) -> tuple[int, list[HashObj | T]]:
-        ...
-    @overload
-    def hashes[T](
-        self, 
-        /, 
-        url: str | Callable[[], str], 
-        digest: str | HashObj | Callable[[], HashObj] | Callable[[], Callable[[bytes, T], T]] | Callable[[], Callable[[bytes, T], Awaitable[T]]] = "md5", 
-        *digests: str | HashObj | Callable[[], HashObj] | Callable[[], Callable[[bytes, T], T]] | Callable[[], Callable[[bytes, T], Awaitable[T]]], 
-        start: int = 0, 
-        stop: None | int = None, 
-        headers: None | Mapping = None, 
-        async_: Literal[True], 
-    ) -> Coroutine[Any, Any, tuple[int, list[HashObj | T]]]:
-        ...
-    def hashes[T](
-        self, 
-        /, 
-        url: str | Callable[[], str], 
-        digest: str | HashObj | Callable[[], HashObj] | Callable[[], Callable[[bytes, T], T]] | Callable[[], Callable[[bytes, T], Awaitable[T]]] = "md5", 
-        *digests: str | HashObj | Callable[[], HashObj] | Callable[[], Callable[[bytes, T], T]] | Callable[[], Callable[[bytes, T], Awaitable[T]]], 
-        start: int = 0, 
-        stop: None | int = None, 
-        headers: None | Mapping = None, 
-        async_: Literal[False, True] = False, 
-    ) -> tuple[int, list[HashObj | T]] | Coroutine[Any, Any, tuple[int, list[HashObj | T]]]:
-        """下载文件流并用一组 hash 算法求值
-
-        :param url: 115 文件的下载链接（可以从网盘、网盘上的压缩包内、分享链接中获取）
-        :param digest: hash 算法
-
-            - 如果是 str，则可以是 `hashlib.algorithms_available` 中任一，也可以是 "ed2k" 或 "crc32"
-            - 如果是 HashObj (来自 python-hashtools)，就相当于是 `_hashlib.HASH` 类型，需要有 update 和 digest 等方法
-            - 如果是 Callable，则返回值必须是 HashObj，或者是一个可用于累计的函数，第 1 个参数是本次所传入的字节数据，第 2 个参数是上一次的计算结果，返回值是这一次的计算结果，第 2 个参数可省略
-
-        :param digests: 同 `digest`，但可以接受多个
-        :param start: 开始索引，可以为负数（从文件尾部开始）
-        :param stop: 结束索引（不含），可以为负数（从文件尾部开始）
-        :param headers: 请求头
-        :param async_: 是否异步
-
-        :return: 元组，包含文件的 大小 和一组 hash 计算结果
-        """
-        digests = (convert_digest(digest), *map(convert_digest, digests))
-        if async_:
-            async def request():
-                nonlocal stop
-                async with self.open(url, start=start, headers=headers, async_=True) as file: # type: ignore
-                    if stop is None:
-                        return await file_mdigest_async(file, *digests)
-                    else:
-                        if stop < 0:
-                            stop += file.length
-                        return await file_mdigest_async(file *digests, stop=max(0, stop-start)) # type: ignore
-            return request()
-        else:
-            with self.open(url, start=start, headers=headers) as file:
-                if stop is None:
-                    return file_mdigest(file, *digests) # type: ignore
-                else:
-                    if stop < 0:
-                        stop = stop + file.length
-                    return file_mdigest(file, *digests, stop=max(0, stop-start)) # type: ignore
-
-    @overload
-    def read_bytes(
-        self, 
-        /, 
-        url: str, 
-        start: int = 0, 
-        stop: None | int = None, 
-        headers: None | Mapping = None, 
-        *, 
-        async_: Literal[False] = False, 
-        **request_kwargs, 
-    ) -> bytes:
-        ...
-    @overload
-    def read_bytes(
-        self, 
-        /, 
-        url: str, 
-        start: int = 0, 
-        stop: None | int = None, 
-        headers: None | Mapping = None, 
-        *, 
-        async_: Literal[True], 
-        **request_kwargs, 
-    ) -> Coroutine[Any, Any, bytes]:
-        ...
-    def read_bytes(
-        self, 
-        /, 
-        url: str, 
-        start: int = 0, 
-        stop: None | int = None, 
-        headers: None | Mapping = None, 
-        *, 
-        async_: Literal[False, True] = False, 
-        **request_kwargs, 
-    ) -> bytes | Coroutine[Any, Any, bytes]:
-        """读取文件一定索引范围的数据
-
-        :param url: 115 文件的下载链接（可以从网盘、网盘上的压缩包内、分享链接中获取）
-        :param start: 开始索引，可以为负数（从文件尾部开始）
-        :param stop: 结束索引（不含），可以为负数（从文件尾部开始）
-        :param headers: 请求头
-        :param async_: 是否异步
-        :param request_kwargs: 其它请求参数
-        """
-        def gen_step():
-            def get_bytes_range(start, stop):
-                if start < 0 or (stop and stop < 0):
-                    length: int = yield self.read_bytes_range(
-                        url, 
-                        bytes_range="-1", 
-                        headers=headers, 
-                        async_=async_, 
-                        **{**request_kwargs, "parse": lambda resp: get_total_length(resp)}, 
-                    )
-                    if start < 0:
-                        start += length
-                    if start < 0:
-                        start = 0
-                    if stop is None:
-                        return f"{start}-"
-                    elif stop < 0:
-                        stop += length
-                if stop is None:
-                    return f"{start}-"
-                elif start >= stop:
-                    return None
-                return f"{start}-{stop-1}"
-            bytes_range = yield from get_bytes_range(start, stop)
-            if not bytes_range:
-                return b""
-            return self.read_bytes_range(
-                url, 
-                bytes_range=bytes_range, 
-                headers=headers, 
-                async_=async_, 
-                **request_kwargs, 
-            )
-        return run_gen_step(gen_step, async_=async_)
-
-    @overload
-    def read_bytes_range(
-        self, 
-        /, 
-        url: str, 
-        bytes_range: str = "0-", 
-        headers: None | Mapping = None, 
-        *, 
-        async_: Literal[False] = False, 
-        **request_kwargs, 
-    ) -> bytes:
-        ...
-    @overload
-    def read_bytes_range(
-        self, 
-        /, 
-        url: str, 
-        bytes_range: str = "0-", 
-        headers: None | Mapping = None, 
-        *, 
-        async_: Literal[True], 
-        **request_kwargs, 
-    ) -> Coroutine[Any, Any, bytes]:
-        ...
-    def read_bytes_range(
-        self, 
-        /, 
-        url: str, 
-        bytes_range: str = "0-", 
-        headers: None | Mapping = None, 
-        *, 
-        async_: Literal[False, True] = False, 
-        **request_kwargs, 
-    ) -> bytes | Coroutine[Any, Any, bytes]:
-        """读取文件一定索引范围的数据
-
-        :param url: 115 文件的下载链接（可以从网盘、网盘上的压缩包内、分享链接中获取）
-        :param bytes_range: 索引范围，语法符合 `HTTP Range Requests <https://developer.mozilla.org/en-US/docs/Web/HTTP/Range_requests>`_
-        :param headers: 请求头
-        :param async_: 是否异步
-        :param request_kwargs: 其它请求参数
-        """
-        headers = dict(headers) if headers else {}
-        if isinstance(url, P115URL) and (headers_extra := url.get("headers")):
-            headers.update(headers_extra)
-        headers["Accept-Encoding"] = "identity"
-        headers["Range"] = f"bytes={bytes_range}"
-        request_kwargs["headers"] = headers
-        request_kwargs.setdefault("method", "GET")
-        request_kwargs.setdefault("parse", False)
-        return self.request(url, async_=async_, **request_kwargs)
-
-    @overload
-    def read_block(
-        self, 
-        /, 
-        url: str, 
-        size: int = -1, 
-        offset: int = 0, 
-        headers: None | Mapping = None, 
-        *, 
-        async_: Literal[False] = False, 
-        **request_kwargs, 
-    ) -> bytes:
-        ...
-    @overload
-    def read_block(
-        self, 
-        /, 
-        url: str, 
-        size: int = -1, 
-        offset: int = 0, 
-        headers: None | Mapping = None, 
-        *, 
-        async_: Literal[True], 
-        **request_kwargs, 
-    ) -> Coroutine[Any, Any, bytes]:
-        ...
-    def read_block(
-        self, 
-        /, 
-        url: str, 
-        size: int = -1, 
-        offset: int = 0, 
-        headers: None | Mapping = None, 
-        *, 
-        async_: Literal[False, True] = False, 
-        **request_kwargs, 
-    ) -> bytes | Coroutine[Any, Any, bytes]:
-        """读取文件一定索引范围的数据
-
-        :param url: 115 文件的下载链接（可以从网盘、网盘上的压缩包内、分享链接中获取）
-        :param size: 读取字节数（最多读取这么多字节，如果遇到 EOF (end-of-file)，则会小于这个值），如果小于 0，则读取到文件末尾
-        :param offset: 偏移索引，从 0 开始，可以为负数（从文件尾部开始）
-        :param headers: 请求头
-        :param async_: 是否异步
-        :param request_kwargs: 其它请求参数
-        """
-        def gen_step():
-            if size == 0:
-                return b""
-            elif size > 0:
-                stop: int | None = offset + size
-            else:
-                stop = None
-            return self.read_bytes(
-                url, 
-                start=offset, 
-                stop=stop, 
-                headers=headers, 
-                async_=async_, 
-                **request_kwargs, 
-            )
-        return run_gen_step(gen_step, async_=async_)
-
 
 for name, method in P115Client.__dict__.items():
     if not (callable(method) and method.__doc__):
@@ -18136,5 +18683,1645 @@ for name, method in P115Client.__dict__.items():
     if match is not None:
         CLIENT_API_MAP[match[1]] = "P115Client." + name
 
+
+class P115OpenClient(ClientRequestMixin):
+    """115 的客户端对象
+
+    .. note::
+        https://www.yuque.com/115yun/open
+
+    :param app_id_or_refresh_token: 申请到的 AppID 或 refresh_token
+
+        - 如果是 int，视为 AppID
+        - 如果是 str，如果可以解析为数字，则视为 AppID，否则视为 refresh_token
+
+    :param console_qrcode: 当输入为 AppID 时，进行扫码。如果为 True，则在命令行输出二维码，否则在浏览器中打开
+    """
+    app_id: int | str
+    refresh_token: str
+
+    def __init__(
+        self, 
+        /, 
+        app_id_or_refresh_token: int | str, 
+        console_qrcode: bool = True, 
+    ):
+        self.init(
+            app_id_or_refresh_token, 
+            console_qrcode=console_qrcode, 
+            instance=self, 
+        )
+
+    @overload
+    @classmethod
+    def init(
+        cls, 
+        /, 
+        app_id_or_refresh_token: int | str, 
+        console_qrcode: bool = True, 
+        instance: None | Self = None, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> Self:
+        ...
+    @overload
+    @classmethod
+    def init(
+        cls, 
+        /, 
+        app_id_or_refresh_token: int | str, 
+        console_qrcode: bool = True, 
+        instance: None | Self = None, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, Self]:
+        ...
+    @classmethod
+    def init(
+        cls, 
+        /, 
+        app_id_or_refresh_token: int | str, 
+        console_qrcode: bool = True, 
+        instance: None | Self = None, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> Self | Coroutine[Any, Any, Self]:
+        def gen_step():
+            if instance is None:
+                self = cls.__new__(cls)
+            else:
+                self = instance
+            if isinstance(app_id_or_refresh_token, str) and (
+                app_id_or_refresh_token.startswith("0") or 
+                app_id_or_refresh_token.strip(digits)
+            ):
+                resp = yield self.login_qrcode_refresh_token_open(
+                    app_id_or_refresh_token, 
+                    async_=async_, 
+                    **request_kwargs, 
+                )
+            else:
+                app_id = self.app_id = app_id_or_refresh_token
+                resp = yield self.login_with_open(
+                    app_id, 
+                    console_qrcode=console_qrcode, 
+                    async_=async_, 
+                    **request_kwargs, 
+                )
+            check_response(resp)
+            data = resp["data"]
+            self.refresh_token = data["refresh_token"]
+            self.access_token = data["access_token"]
+            return self
+        return run_gen_step(gen_step, async_=async_)
+
+    @classmethod
+    def from_token(cls, /, access_token: str, refresh_token: str) -> P115OpenClient:
+        self = cls.__new__(cls)
+        self.access_token = access_token
+        self.refresh_token = refresh_token
+        return self
+
+    @property
+    def access_token(self, /) -> str:
+        return self.__dict__["access_token"]
+
+    @access_token.setter
+    def access_token(self, token, /):
+        self.headers["Authorization"] = "Bearer " + token
+        self.__dict__["access_token"] = token
+
+    @property
+    def upload_token(self, /) -> dict:
+        token = self.__dict__.get("upload_token", {})
+        if not token or token["Expiration"] < (datetime.now() - timedelta(hours=7, minutes=30)).strftime("%FT%XZ"):
+            resp = self.upload_gettoken()
+            check_response(resp)
+            token = self.__dict__["upload_token"] = resp["data"]
+        return token
+
+    @overload
+    def refresh_access_token(
+        self, 
+        /, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> str:
+        ...
+    @overload
+    def refresh_access_token(
+        self, 
+        /, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, str]:
+        ...
+    def refresh_access_token(
+        self, 
+        /, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> str | Coroutine[Any, Any, str]:
+        """更新 access_token 和 refresh_token （⚠️ 目前是 7200 秒内就要求刷新一次）
+        """
+        def gen_step():
+            resp = yield self.login_qrcode_refresh_token_open(
+                self.refresh_token, 
+                async_=async_, 
+                **request_kwargs, 
+            )
+            check_response(resp)
+            data = resp["data"]
+            self.refresh_token = data["refresh_token"]
+            access_token = self.access_token = data["access_token"]
+            return access_token
+        return run_gen_step(gen_step, async_=async_)
+
+    @overload
+    def download_url(
+        self, 
+        pickcode: str, 
+        /, 
+        strict: bool = True, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> P115URL:
+        ...
+    @overload
+    def download_url(
+        self, 
+        pickcode: str, 
+        /, 
+        strict: bool = True, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, P115URL]:
+        ...
+    def download_url(
+        self, 
+        pickcode: str, 
+        /, 
+        strict: bool = True, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> P115URL | Coroutine[Any, Any, P115URL]:
+        """获取文件的下载链接，此接口是对 `download_url_info` 的封装
+
+        .. note::
+            获取的直链中，部分查询参数的解释：
+
+            - `t`: 过期时间戳
+            - `u`: 用户 id
+            - `c`: 允许同时打开次数，如果为 0，则是无限次数
+            - `f`: 请求时要求携带请求头
+                - 如果为空，则无要求
+                - 如果为 1，则需要 User-Agent（和请求直链时的一致）
+                - 如果为 3，则需要 User-Agent（和请求直链时的一致） 和 Cookie（由请求直链时的响应所返回的 Set-Cookie 响应头）
+
+        :param pickcode: 提取码
+        :param strict: 如果为 True，当目标是目录时，会抛出 IsADirectoryError 异常
+        :param async_: 是否异步
+        :param request_kwargs: 其它请求参数
+
+        :return: 下载链接
+        """
+        resp = self.download_url_info(
+            pickcode, 
+            async_=async_, 
+            **request_kwargs, 
+        )
+        def get_url(resp: dict, /) -> P115URL:
+            resp["pickcode"] = pickcode
+            check_response(resp)
+            for fid, info in resp["data"].items():
+                url = info["url"]
+                if strict and not url:
+                    raise IsADirectoryError(
+                        errno.EISDIR, 
+                        f"{fid} is a directory, with response {resp}", 
+                    )
+                return P115URL(
+                    url["url"] if url else "", 
+                    id=int(fid), 
+                    pickcode=info["pick_code"], 
+                    name=info["file_name"], 
+                    size=int(info["file_size"]), 
+                    sha1=info["sha1"], 
+                    is_directory=not url, 
+                    headers=resp["headers"], 
+                )
+            raise FileNotFoundError(
+                errno.ENOENT, 
+                f"no such pickcode: {pickcode!r}, with response {resp}", 
+            )
+        if async_:
+            async def async_request() -> P115URL:
+                return get_url(await cast(Coroutine[Any, Any, dict], resp)) 
+            return async_request()
+        else:
+            return get_url(cast(dict, resp))
+
+    @overload
+    def download_url_info(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def download_url_info(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def download_url_info(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取文件的下载链接
+
+        POST https://proapi.115.com/open/ufile/downurl
+
+        .. hint::
+            相当于 `P115Client.download_url_app(app="chrome")`
+
+        .. note::
+            https://www.yuque.com/115yun/open/um8whr91bxb5997o
+
+        :payload:
+            - pick_code: str 💡 提取码，多个用逗号 "," 隔开
+        """
+        api = complete_proapi("/open/ufile/downurl", base_url)
+        if isinstance(payload, str):
+            payload = {"pick_code": payload}
+        request_headers = request_kwargs.get("headers")
+        headers = request_kwargs.get("headers")
+        if headers:
+            if isinstance(headers, Mapping):
+                headers = ItemsView(headers)
+            headers = request_kwargs["headers"] = {
+                "User-Agent": next((v for k, v in headers if k.lower() == "user-agent" and v), "")}
+        else:
+            headers = request_kwargs["headers"] = {"User-Agent": ""}
+        def parse(_, content: bytes, /) -> dict:
+            json = json_loads(content)
+            json["headers"] = headers
+            return json
+        request_kwargs.setdefault("parse", parse)
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_copy(
+        self, 
+        payload: int | str | Iterable[int | str] | dict, 
+        /, 
+        pid: int = 0, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_copy(
+        self, 
+        payload: int | str | Iterable[int | str] | dict, 
+        /, 
+        pid: int = 0, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_copy(
+        self, 
+        payload: int | str | Iterable[int | str] | dict, 
+        /, 
+        pid: int = 0, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """文件复制
+
+        POST https://proapi.115.com/open/ufile/copy
+
+        .. note::
+            https://www.yuque.com/115yun/open/lvas49ar94n47bbk
+
+        :payload:
+            - file_id: int | str 💡 文件或目录的 id，多个用逗号 "," 隔开
+            - pid: int | str = 0 💡 父目录 id
+            - nodupli: 0 | 1 = 0 💡 复制的文件在目标目录是否允许重复：0:可以 1:不可以
+        """
+        api = complete_proapi("/open/ufile/copy", base_url)
+        if isinstance(payload, (int, str)):
+            payload = {"file_id": payload}
+        elif isinstance(payload, dict):
+            payload = dict(payload)
+        else:
+            payload = {"file_id": ",".join(map(str, payload))}
+        if not payload.get("file_id"):
+            return {"state": False, "message": "no op"}
+        payload = cast(dict, payload)
+        payload.setdefault("pid", pid)
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_delete(
+        self, 
+        payload: int | str | dict | Iterable[int | str], 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_delete(
+        self, 
+        payload: int | str | dict | Iterable[int | str], 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_delete(
+        self, 
+        payload: int | str | dict | Iterable[int | str], 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """删除文件或目录
+
+        POST https://proapi.115.com/open/ufile/delete
+
+        .. note::
+            https://www.yuque.com/115yun/open/kt04fu8vcchd2fnb
+
+        :payload:
+            - file_ids: int | str 💡 文件或目录的 id，多个用逗号 "," 隔开
+        """
+        api = complete_proapi("/open/ufile/delete", base_url)
+        if isinstance(payload, (int, str)):
+            payload = {"file_ids": payload}
+        elif not isinstance(payload, dict):
+            payload = {"file_ids": ",".join(map(str, payload))}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_files(
+        self, 
+        payload: int | str | dict = 0, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_files(
+        self, 
+        payload: int | str | dict = 0, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_files(
+        self, 
+        payload: int | str | dict = 0, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """更新文件或目录
+
+        GET https://proapi.115.com/open/ufile/files
+
+        .. hint::
+            相当于 `P115Client.fs_files_app`
+
+        .. note::
+            https://www.yuque.com/115yun/open/kz9ft9a7s57ep868
+
+        :payload:
+            - cid: int | str = 0 💡 目录 id
+            - limit: int = 32 💡 分页大小，最大值不一定，看数据量，7,000 应该总是安全的，10,000 有可能报错，但有时也可以 20,000 而成功
+            - offset: int = 0 💡 分页开始的索引，索引从 0 开始计算
+
+            - aid: int | str = 1 💡 area_id。1:正常文件 7:回收站文件 12:瞬间文件 120:彻底删除文件、简历附件
+            - asc: 0 | 1 = <default> 💡 是否升序排列。0:降序 1:升序
+            - code: int | str = <default>
+            - count_folders: 0 | 1 = 1 💡 统计文件数和目录数
+            - cur: 0 | 1 = <default>   💡 是否只显示当前目录
+            - custom_order: 0 | 1 | 2 = <default> 💡 是否使用记忆排序。0:使用记忆排序（自定义排序失效） 1:使用自定义排序（不使用记忆排序） 2:自定义排序（非目录置顶）。如果指定了 "asc"、"fc_mix"、"o" 中其一，则此参数会被自动设置为 2
+            - date: str = <default> 💡 筛选日期
+            - fc_mix: 0 | 1 = <default> 💡 是否目录和文件混合，如果为 0 则目录在前（目录置顶）
+            - fields: str = <default>
+            - for: str = <default> 💡 文件格式，例如 "doc"
+            - format: str = "json" 💡 返回格式，默认即可
+            - hide_data: str = <default>
+            - is_q: 0 | 1 = <default>
+            - is_share: 0 | 1 = <default>
+            - min_size: int = 0 💡 最小的文件大小
+            - max_size: int = 0 💡 最大的文件大小
+            - natsort: 0 | 1 = <default> 💡 是否执行自然排序(natural sorting)
+            - nf: str = <default> 💡 不要显示文件（即仅显示目录），但如果 show_dir=0，则此参数无效
+            - o: str = <default> 💡 用某字段排序（未定义的值会被视为 "user_utime"）
+
+              - "file_name": 文件名
+              - "file_size": 文件大小
+              - "file_type": 文件种类
+              - "user_etime": 事件时间（无效，效果相当于 "user_utime"）
+              - "user_utime": 修改时间
+              - "user_ptime": 创建时间（无效，效果相当于 "user_utime"）
+              - "user_otime": 上一次打开时间（无效，效果相当于 "user_utime"）
+
+            - r_all: 0 | 1 = <default>
+            - record_open_time: 0 | 1 = 1 💡 是否要记录目录的打开时间
+            - scid: int | str = <default>
+            - show_dir: 0 | 1 = 1 💡 是否展示目录：1:展示 0:不展示
+            - snap: 0 | 1 = <default>
+            - source: str = <default>
+            - sys_dir: int | str = <default> 💡 系统通用目录
+            - star: 0 | 1 = <default> 💡 是否星标文件
+            - stdir: 0 | 1 = <default>
+            - suffix: str = <default> 💡 后缀名（优先级高于 `type`）
+            - type: int = <default> 💡 文件类型
+
+              - 0: 全部（仅当前目录）
+              - 1: 文档
+              - 2: 图片
+              - 3: 音频
+              - 4: 视频
+              - 5: 压缩包
+              - 6: 软件/应用
+              - 7: 书籍
+              - 8: 其它
+              - 9: 相当于 8
+              - 10: 相当于 8
+              - 11: 相当于 8
+              - 12: ？？？
+              - 13: ？？？
+              - 14: ？？？
+              - 15: 图片和视频，相当于 2 和 4
+              - >= 16: 相当于 8
+        """
+        api = complete_proapi("/open/ufile/files", base_url)
+        if isinstance(payload, (int, str)):
+            payload = {
+                "aid": 1, "count_folders": 1, "limit": 32, "offset": 0, 
+                "record_open_time": 1, "show_dir": 1, "cid": payload, 
+            }
+        else:
+            payload = {
+                "aid": 1, "count_folders": 1, "limit": 32, "offset": 0, 
+                "record_open_time": 1, "show_dir": 1, "cid": 0, **payload, 
+            }
+        if payload.keys() & frozenset(("asc", "fc_mix", "o")):
+            payload["custom_order"] = 2
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_info(
+        self, 
+        payload: int | str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_info(
+        self, 
+        payload: int | str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_info(
+        self, 
+        payload: int | str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取文件或目录详情
+
+        GET https://proapi.115.com/open/folder/get_info
+
+        .. hint::
+            相当于 `P115Client.fs_category_get_app`
+
+        .. note::
+            https://www.yuque.com/115yun/open/rl8zrhe2nag21dfw
+
+        :payload:
+            - file_id: int | str 💡 文件或目录的 id
+        """
+        api = complete_proapi("/open/folder/get_info", base_url)
+        if isinstance(payload, (int, str)):
+            payload = {"file_id": payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_mkdir(
+        self, 
+        payload: str | dict, 
+        /, 
+        pid: int = 0, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_mkdir(
+        self, 
+        payload: str | dict, 
+        /, 
+        pid: int = 0, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_mkdir(
+        self, 
+        payload: str | dict, 
+        /, 
+        pid: int = 0, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """新建目录
+
+        POST https://proapi.115.com/open/folder/add
+
+        .. note::
+            https://www.yuque.com/115yun/open/qur839kyx9cgxpxi
+
+        :payload:
+            - file_name: str 💡 新建目录名称，限制255个字符
+            - pid: int | str = 0 💡 新建目录所在的父目录ID (根目录的ID为0)
+        """
+        api = complete_proapi("/open/folder/add", base_url)
+        if isinstance(payload, str):
+            payload = {"pid": pid, "file_name": payload}
+        else:
+            payload = {"pid": pid, **payload}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_move(
+        self, 
+        payload: int | str | Iterable[int | str] | dict, 
+        /, 
+        pid: int = 0, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_move(
+        self, 
+        payload: int | str | Iterable[int | str] | dict, 
+        /, 
+        pid: int = 0, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_move(
+        self, 
+        payload: int | str | Iterable[int | str] | dict, 
+        /, 
+        pid: int = 0, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """文件移动
+
+        POST https://proapi.115.com/open/ufile/move
+
+        .. note::
+            https://www.yuque.com/115yun/open/vc6fhi2mrkenmav2
+
+        :payload:
+            - file_ids: int | str 💡 文件或目录的 id，多个用逗号 "," 隔开
+            - to_cid: int | str = 0 💡 父目录 id
+        """
+        api = complete_proapi("/open/ufile/move", base_url)
+        if isinstance(payload, (int, str)):
+            payload = {"file_ids": payload}
+        elif isinstance(payload, dict):
+            payload = dict(payload)
+        else:
+            payload = {"file_ids": ",".join(map(str, payload))}
+        if not payload.get("file_ids"):
+            return {"state": False, "message": "no op"}
+        payload = cast(dict, payload)
+        payload.setdefault("to_cid", pid)
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_search(
+        self, 
+        payload: str | dict = ".", 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_search(
+        self, 
+        payload: str | dict = ".", 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_search(
+        self, 
+        payload: str | dict = ".", 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """搜索文件或目录
+
+        GET https://proapi.115.com/open/ufile/search
+
+        .. hint::
+            相当于 `P115Client.fs_search_app2`
+
+        .. note::
+            https://www.yuque.com/115yun/open/ft2yelxzopusus38
+
+        :payload:
+            - aid: int | str = 1 💡 area_id。1:正常文件 7:回收站文件 12:瞬间文件 120:彻底删除文件、简历附件
+            - asc: 0 | 1 = <default> 💡 是否升序排列
+            - cid: int | str = 0 💡 目录 id。cid=-1 时，表示不返回列表任何内容
+            - count_folders: 0 | 1 = <default>
+            - date: str = <default> 💡 筛选日期
+            - fc: 0 | 1 = <default> 💡 只显示文件或目录。1:只显示目录 2:只显示文件
+            - fc_mix: 0 | 1 = <default> 💡 是否目录和文件混合，如果为 0 则目录在前（目录置顶）
+            - file_label: int | str = <default> 💡 标签 id
+            - format: str = "json" 💡 输出格式（不用管）
+            - gte_day: str 💡 搜索结果匹配的开始时间；格式：YYYY-MM-DD
+            - limit: int = 32 💡 一页大小，意思就是 page_size
+            - lte_day: str 💡 搜索结果匹配的结束时间；格式：YYYY-MM-DD
+            - o: str = <default> 💡 用某字段排序
+
+              - "file_name": 文件名
+              - "file_size": 文件大小
+              - "file_type": 文件种类
+              - "user_utime": 修改时间
+              - "user_ptime": 创建时间
+              - "user_otime": 上一次打开时间
+
+            - offset: int = 0  💡 索引偏移，索引从 0 开始计算
+            - pick_code: str = <default> 💡 是否查询提取码，如果该值为 1 则查询提取码为 `search_value` 的文件
+            - search_value: str = "." 💡 搜索文本，可以是 sha1
+            - show_dir: 0 | 1 = 1
+            - source: str = <default>
+            - star: 0 | 1 = <default>
+            - suffix: str = <default>
+            - type: int = <default> 💡 文件类型
+
+              - 0: 全部（仅当前目录）
+              - 1: 文档
+              - 2: 图片
+              - 3: 音频
+              - 4: 视频
+              - 5: 压缩包
+              - 6: 软件/应用
+              - 7: 书籍
+              - 99: 仅文件
+
+            - version: str = <default> 💡 版本号，比如 3.1
+        """
+        api = complete_proapi("/open/ufile/search", base_url)
+        if isinstance(payload, str):
+            payload = {
+                "aid": 1, "cid": 0, "format": "json", "limit": 32, "offset": 0, 
+                "show_dir": 1, "search_value": payload, 
+            }
+        else:
+            payload = {
+                "aid": 1, "cid": 0, "format": "json", "limit": 32, "offset": 0, 
+                "show_dir": 1, "search_value": ".", **payload, 
+            }
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def fs_update(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_update(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_update(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """设置文件或目录（备注、标签等）
+
+        POST https://proapi.115.com/open/ufile/update
+
+        .. hint::
+            类似于 `P115Client.fs_edit_app`
+
+        .. note::
+            https://www.yuque.com/115yun/open/gyrpw5a0zc4sengm
+
+        :payload:
+            - file_id: int | str
+            - file_name: str = <default> 💡 文件名
+            - star: 0 | 1 = <default> 💡 是否星标：0:取消星标 1:设置星标
+            - ...
+        """
+        api = complete_proapi("/open/ufile/update", base_url)
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def recyclebin_clean(
+        self, 
+        payload: int | str | Iterable[int | str] | dict = {}, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def recyclebin_clean(
+        self, 
+        payload: int | str | Iterable[int | str] | dict = {}, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def recyclebin_clean(
+        self, 
+        payload: int | str | Iterable[int | str] | dict = {}, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """回收站：删除或清空
+
+        POST https://proapi.115.com/open/rb/del
+
+        .. note:
+            https://www.yuque.com/115yun/open/gwtof85nmboulrce
+
+        :payload:
+            - tid: int | str 💡 多个用逗号 "," 隔开
+        """
+        api = complete_proapi("/open/rb/del", base_url)
+        if isinstance(payload, (int, str)):
+            payload = {"tid": payload}
+        elif not isinstance(payload, dict):
+            payload = {"tid": ",".join(map(str, payload))}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def recyclebin_list(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def recyclebin_list(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def recyclebin_list(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """回收站：列表
+
+        GET https://proapi.115.com/open/rb/list
+
+        .. note::
+            https://www.yuque.com/115yun/open/bg7l4328t98fwgex
+
+        :payload:
+            - limit: int = 32
+            - offset: int = 0
+        """ 
+        api = complete_proapi("/open/rb/list", base_url)
+        if isinstance(payload, int):
+            payload = {"limit": 32, "offset": payload}
+        else:
+            payload = {"limit": 32, **payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def recyclebin_revert(
+        self, 
+        payload: int | str | Iterable[int | str] | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def recyclebin_revert(
+        self, 
+        payload: int | str | Iterable[int | str] | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def recyclebin_revert(
+        self, 
+        payload: int | str | Iterable[int | str] | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """回收站：还原
+
+        POST https://proapi.115.com/open/rb/revert
+
+        .. note::
+            https://www.yuque.com/115yun/open/gq293z80a3kmxbaq
+
+        :payload:
+            - tid: int | str 💡 多个用逗号 "," 隔开
+        """
+        api = complete_proapi("/open/rb/revert", base_url)
+        if isinstance(payload, (int, str)):
+            payload = {"tid": payload}
+        elif not isinstance(payload, dict):
+            payload = {"tid": ",".join(map(str, payload))}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def upload_gettoken(
+        self, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def upload_gettoken(
+        self, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def upload_gettoken(
+        self, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取阿里云 OSS 的 token（上传凭证）
+
+        GET https://proapi.115.com/open/upload/get_token
+
+        .. note::
+            https://www.yuque.com/115yun/open/kzacvzl0g7aiyyn4
+        """
+        api = complete_proapi("/open/upload/get_token", base_url)
+        return self.request(url=api, async_=async_, **request_kwargs)
+
+    @overload
+    def upload_init(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def upload_init(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def upload_init(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """文件秒传
+
+        POST https://proapi.115.com/open/upload/init
+
+        .. note::
+            https://www.yuque.com/115yun/open/ul4mrauo5i2uza0q
+
+        :payload:
+            - file_name: str 💡 文件名
+            - file_size: int 💡 文件大小，单位是字节
+            - target: str 💡 上传目标，格式为 f"U_{aid}_{pid}"
+            - fileid: str 💡 文件的 sha1 值
+            - preid: str = <default> 💡 文件的前 128 KB 数据的 sha1 值
+            - pick_code: str = <default> 💡 上传任务 key
+            - topupload: int = 0 💡 上传调度文件类型调度标记
+
+                -  0: 单文件上传任务标识 1 条单独的文件上传记录
+                -  1: 文件夹任务调度的第 1 个子文件上传请求标识 1 次文件夹上传记录
+                -  2: 文件夹任务调度的其余后续子文件不作记作单独上传的上传记录 
+                - -1: 没有该参数
+
+            - sign_key: str = "" 💡 二次验证时读取文件的范围
+            - sign_val: str = "" 💡 二次验证的签名值
+        """
+        api = complete_proapi("/open/upload/init", base_url)
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def upload_resume(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def upload_resume(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def upload_resume(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取恢复断点续传所需信息
+
+        POST https://proapi.115.com/open/upload/resume
+
+        .. note::
+            https://www.yuque.com/115yun/open/tzvi9sbcg59msddz
+
+        :payload:
+            - fileid: str 💡 文件的 sha1 值
+            - file_size: int 💡 文件大小，单位是字节
+            - target: str 💡 上传目标，格式为 f"U_{aid}_{pid}"
+            - pick_code: str 💡 提取码
+        """
+        api = complete_proapi("/open/upload/resume", base_url)
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def user_info(
+        self, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def user_info(
+        self, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def user_info(
+        self, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取用户信息
+
+        GET https://proapi.115.com/open/user/info
+
+        .. note::
+            https://www.yuque.com/115yun/open/ot1litggzxa1czww
+        """
+        api = complete_proapi("/open/user/info", base_url)
+        return self.request(url=api, async_=async_, **request_kwargs)
+
+    @overload
+    def upload_file_init(
+        self, 
+        /, 
+        filename: str, 
+        filesize: int, 
+        filesha1: str, 
+        preid: str = "", 
+        read_range_bytes_or_hash: None | Callable[[str], str | Buffer] = None, 
+        pid: int = 0, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def upload_file_init(
+        self, 
+        /, 
+        filename: str, 
+        filesize: int, 
+        filesha1: str, 
+        preid: str = "", 
+        read_range_bytes_or_hash: None | Callable[[str], str | Buffer] = None, 
+        pid: int = 0, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def upload_file_init(
+        self, 
+        /, 
+        filename: str, 
+        filesize: int, 
+        filesha1: str, 
+        preid: str = "", 
+        read_range_bytes_or_hash: None | Callable[[str], str | Buffer] = None, 
+        pid: int = 0, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """秒传接口，此接口是对 `upload_init` 的封装。
+
+        .. note::
+
+            - 文件大小 和 sha1 是必需的，只有 sha1 是没用的。
+            - 如果文件大于等于 1 MB (1048576 B)，就需要 2 次检验一个范围哈希，就必须提供 `read_range_bytes_or_hash`
+
+        :param filename: 文件名
+        :param filesize: 文件大小
+        :param filesha1: 文件的 sha1
+        :param read_range_bytes_or_hash: 调用以获取二次验证的数据或计算 sha1，接受一个数据范围，格式符合 `HTTP Range Requests <https://developer.mozilla.org/en-US/docs/Web/HTTP/Range_requests>`_，返回值如果是 str，则视为计算好的 sha1，如果为 Buffer，则视为数据（之后会被计算 sha1）
+        :param pid: 上传文件到此目录的 id
+        :param async_: 是否异步
+        :param request_kwargs: 其它请求参数
+
+        :return: 接口响应
+        """
+        filesha1 = filesha1.upper()
+        target = f"U_1_{pid}"
+        def gen_step():
+            payload = {
+                "file_name": filename, 
+                "file_size": filesize, 
+                "target": target, 
+                "fileid": filesha1, 
+                "preid": preid, 
+                "topupload": 1, 
+            }
+            resp = yield self.upload_init(
+                payload, 
+                async_=async_, 
+                **request_kwargs, 
+            )
+            check_response(resp)
+            if resp["data"]["status"] == 7:
+                if read_range_bytes_or_hash is None:
+                    raise ValueError("filesize >= 1 MB, thus need pass the `read_range_bytes_or_hash` argument")
+                payload["sign_key"] = resp["data"]["sign_key"]
+                sign_check: str = resp["data"]["sign_check"]
+                data: str | Buffer
+                if async_:
+                    data = yield ensure_async(read_range_bytes_or_hash)(sign_check)
+                else:
+                    data = read_range_bytes_or_hash(sign_check)
+                if isinstance(data, str):
+                    payload["sign_val"] = data.upper()
+                else:
+                    payload["sign_val"] = sha1(data).hexdigest().upper()
+                resp = yield self.upload_init(
+                    payload, 
+                    async_=async_, # type: ignore
+                    **request_kwargs, 
+                )
+                check_response(resp)
+            resp["data"] = {**payload, **resp["data"], "sha1": filesha1, "cid": pid}
+            return resp
+        return run_gen_step(gen_step, async_=async_)
+
+    @overload
+    def upload_file(
+        self, 
+        /, 
+        file: ( str | PathLike | URL | SupportsGeturl | 
+                Buffer | SupportsRead[Buffer] | Iterable[Buffer] ), 
+        filename: None | str = None, 
+        pid: int = 0, 
+        filesize: int = -1, 
+        filesha1: str = "", 
+        partsize: int = 0, 
+        multipart_resume_data: None | MultipartResumeData = None, 
+        collect_resume_data: None | Callable[[MultipartResumeData], Any] = None, 
+        make_reporthook: None | Callable[[None | int], Callable[[int], Any] | Generator[int, Any, Any]] = None, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def upload_file(
+        self, 
+        /, 
+        file: ( str | PathLike | URL | SupportsGeturl | 
+                Buffer | SupportsRead[Buffer] | Iterable[Buffer] | AsyncIterable[Buffer] ), 
+        filename: None | str = None, 
+        pid: int = 0, 
+        filesize: int = -1, 
+        filesha1: str = "", 
+        partsize: int = 0, 
+        multipart_resume_data: None | MultipartResumeData = None, 
+        collect_resume_data: None | Callable[[MultipartResumeData], Any] = None, 
+        make_reporthook: None | Callable[[None | int], Callable[[int], Any] | Generator[int, Any, Any] | AsyncGenerator[int, Any]] = None, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def upload_file(
+        self, 
+        /, 
+        file: ( str | PathLike | URL | SupportsGeturl | 
+                Buffer | SupportsRead[Buffer] | Iterable[Buffer] | AsyncIterable[Buffer] ), 
+        filename: None | str = None, 
+        pid: int = 0, 
+        filesize: int = -1, 
+        filesha1: str = "", 
+        partsize: int = 0, 
+        multipart_resume_data: None | MultipartResumeData = None, 
+        collect_resume_data: None | Callable[[MultipartResumeData], Any] = None, 
+        make_reporthook: None | Callable[[None | int], Callable[[int], Any] | Generator[int, Any, Any] | AsyncGenerator[int, Any]] = None, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """文件上传，这是高层封装，推荐使用
+
+        :param file: 待上传的文件
+
+            - 如果为 `collections.abc.Buffer`，则作为二进制数据上传
+            - 如果为 `filewrap.SupportsRead` (`pip install python-filewrap`)，则作为文件上传
+            - 如果为 `str` 或 `os.PathLike`，则视为路径，打开后作为文件上传
+            - 如果为 `yarl.URL` 或 `http_request.SupportsGeturl` (`pip install python-http_request`)，则视为超链接，打开后作为文件上传
+            - 如果为 `collections.abc.Iterable[collections.abc.Buffer]` 或 `collections.abc.AsyncIterable[collections.abc.Buffer]`，则迭代以获取二进制数据，逐步上传
+
+        :param filename: 文件名，如果为 None，则会自动确定
+        :param pid: 上传文件到此目录的 id
+        :param filesize: 文件大小，如果为 -1，则会自动确定
+        :param filesha1: 文件的 sha1，如果未提供，则会自动确定
+        :param partsize: 分块上传的分块大小，如果 <= 0，则不进行分块上传
+        :param multipart_resume_data: 如果不为 None，则断点续传，并且恢复相关参数
+        :param collect_resume_data: 如果不为 None，则调用以输出分块上传的恢复数据（用于下次继续执行）
+        :param make_reporthook: 调用以推送上传进度
+
+            .. note::
+                - 如果为 None，则不推送进度
+                - 否则，必须是 Callable。可接受 int 或 None 作为总文件大小，如果为 None 或者不传，则不确定文件大小。返回值作为实际的更新器，暂名为 `update`，假设一次的更新值为 `step`
+
+                    - 如果返回值为 Callable，则更新时调用 `update(step)`
+                    - 如果返回值为 Generator，则更新时调用 `update.send(step)`
+                    - 如果返回值为 AsyncGenerator，则更新时调用 `await update.asend(step)`
+
+                1. 你可以直接用第三方的进度条
+
+                    .. code:: python
+
+                        from tqdm import tqdm
+
+                        make_report = lambda total=None: tqdm(total=total).update
+
+                2. 或者你也可以自己写一个进度条
+
+                    .. code:: python
+
+                        from collections import deque
+                        from time import perf_counter
+
+                        def make_report(total: None | int = None):
+                            dq: deque[tuple[int, float]] = deque(maxlen=64)
+                            push = dq.append
+                            read_num = 0
+                            push((read_num, perf_counter()))
+                            while True:
+                                read_num += yield
+                                cur_t = perf_counter()
+                                speed = (read_num - dq[0][0]) / 1024 / 1024 / (cur_t - dq[0][1])
+                                if total:
+                                    percentage = read_num / total * 100
+                                    print(f"\\r\\x1b[K{read_num} / {total} | {speed:.2f} MB/s | {percentage:.2f} %", end="", flush=True)
+                                else:
+                                    print(f"\\r\\x1b[K{read_num} | {speed:.2f} MB/s", end="", flush=True)
+                                push((read_num, cur_t))
+
+        :param async_: 是否异步
+        :param request_kwargs: 其它请求参数
+
+        :return: 接口响应
+        """
+        def gen_step():
+            nonlocal file, filename, filesize, filesha1
+            def do_upload(file):
+                return self.upload_file(
+                    file=file, 
+                    filename=filename, 
+                    pid=pid, 
+                    filesize=filesize, 
+                    filesha1=filesha1, 
+                    partsize=partsize, 
+                    collect_resume_data=collect_resume_data, 
+                    make_reporthook=make_reporthook, # type: ignore
+                    async_=async_, # type: ignore
+                    **request_kwargs, 
+                )
+            need_calc_filesha1 = not filesha1 and multipart_resume_data is None
+            read_range_bytes_or_hash: None | Callable = None
+            try:
+                file = getattr(file, "getbuffer")()
+            except (AttributeError, TypeError):
+                pass
+            if isinstance(file, Buffer):
+                filesize = buffer_length(file)
+                if need_calc_filesha1:
+                    filesha1 = sha1(file).hexdigest()
+                if multipart_resume_data is None and filesize >= 1 << 20:
+                    view = memoryview(file)
+                    def read_range_bytes_or_hash(sign_check: str, /) -> memoryview:
+                        start, end = map(int, sign_check.split("-"))
+                        return view[start:end+1]
+            elif isinstance(file, SupportsRead):
+                seek = getattr(file, "seek", None)
+                seekable = False   
+                curpos = 0
+                if callable(seek):
+                    if async_:
+                        seek = ensure_async(seek, threaded=True)
+                    try:
+                        seekable = getattr(file, "seekable")()
+                    except (AttributeError, TypeError):
+                        try:
+                            curpos = yield seek(0, 1)
+                            seekable = True
+                        except Exception:
+                            seekable = False
+                if need_calc_filesha1:
+                    if not seekable:
+                        fsrc = file
+                        file = TemporaryFile()
+                        if async_:
+                            yield copyfileobj_async(fsrc, file)
+                        else:
+                            copyfileobj(fsrc, file)
+                        file.seek(0)
+                        return do_upload(file)
+                    try:
+                        if async_:
+                            filesize, filesha1_obj = yield file_digest_async(file, "sha1")
+                        else:
+                            filesize, filesha1_obj = file_digest(file, "sha1")
+                    finally:
+                        yield seek(curpos)
+                    filesha1 = filesha1_obj.hexdigest()
+                if filesize < 0:
+                    try:
+                        fileno = getattr(file, "fileno")()
+                        filesize = fstat(fileno).st_size - curpos
+                    except (AttributeError, TypeError, OSError):
+                        try:
+                            filesize = len(file) - curpos # type: ignore
+                        except TypeError:
+                            if seekable:
+                                try:
+                                    filesize = (yield seek(0, 2)) - curpos
+                                finally:
+                                    yield seek(curpos)
+                if multipart_resume_data is None and filesize >= 1 << 20:
+                    read: Callable[[int], Buffer] | Callable[[int], Awaitable[Buffer]]
+                    if seekable:
+                        if async_:
+                            async_read = ensure_async(file.read, threaded=True)
+                            async def read_range_bytes_or_hash(sign_check: str, /):
+                                start, end = map(int, sign_check.split("-"))
+                                await seek(curpos + start)
+                                return await async_read(end - start + 1)
+                        else:
+                            read = cast(Callable[[int], Buffer], file.read)
+                            def read_range_bytes_or_hash(sign_check: str, /):
+                                start, end = map(int, sign_check.split("-"))
+                                seek(curpos + start)
+                                return read(end - start + 1)
+            elif isinstance(file, (URL, SupportsGeturl)):
+                if isinstance(file, URL):
+                    url: str = str(file)
+                else:
+                    url = file.geturl()
+                if async_:
+                    from httpfile import AsyncHttpxFileReader
+                    async def request():
+                        file = await AsyncHttpxFileReader.new(url, headers={"User-Agent": ""})
+                        async with file:
+                            return await do_upload(file)
+                    return request
+                else:
+                    with HTTPFileReader(url, headers={"User-Agent": ""}) as file:
+                        return do_upload(file)
+            elif isinstance(file, (str, PathLike)):
+                path = fsdecode(file)
+                if not filename:
+                    filename = ospath.basename(path)
+                if async_:
+                    async def request():
+                        from aiofile import async_open
+                        async with async_open(path, "rb") as file:
+                            setattr(file, "fileno", file.file.fileno)
+                            setattr(file, "seekable", lambda: True)
+                            return await do_upload(file)
+                    return request
+                else:
+                    return do_upload(open(path, "rb"))
+            else:
+                if need_calc_filesha1:
+                    if async_:
+                        file = bytes_iter_to_async_reader(file) # type: ignore
+                    else:
+                        file = bytes_iter_to_reader(file) # type: ignore
+                    return do_upload(file)
+            if multipart_resume_data is not None:
+                bucket = multipart_resume_data["bucket"]
+                object = multipart_resume_data["object"]
+                url    = cast(str, multipart_resume_data.get("url", ""))
+                if not url:
+                    url = self.upload_endpoint_url(bucket, object)
+                token = multipart_resume_data.get("token")
+                if not token:
+                    token = self.upload_token
+                return oss_multipart_upload(
+                    self.request, 
+                    file, # type: ignore
+                    url=url, 
+                    bucket=bucket, 
+                    object=object, 
+                    token=token, 
+                    callback=multipart_resume_data["callback"], 
+                    upload_id=multipart_resume_data["upload_id"], 
+                    partsize=multipart_resume_data["partsize"], 
+                    filesize=multipart_resume_data.get("filesize", filesize), 
+                    collect_resume_data=collect_resume_data, 
+                    make_reporthook=make_reporthook, # type: ignore
+                    async_=async_, # type: ignore
+                    **request_kwargs, 
+                )
+            if not filename:
+                filename = getattr(file, "name", "")
+                filename = ospath.basename(filename)
+            if filename:
+                filename = filename.translate(NAME_TANSTAB_FULLWIDH)
+            else:
+                filename = str(uuid4())
+            if filesize < 0:
+                filesize = getattr(file, "length", 0)
+            resp = yield self.upload_file_init(
+                filename=filename, 
+                filesize=filesize, 
+                filesha1=filesha1, 
+                read_range_bytes_or_hash=read_range_bytes_or_hash, 
+                pid=pid, 
+                async_=async_, # type: ignore
+                **request_kwargs, 
+            )
+            data = resp["data"]
+            match data["status"]:
+                case 2:
+                    return resp
+                case 1:
+                    bucket, object, callback = data["bucket"], data["object"], data["callback"]
+                case _:
+                    raise P115OSError(errno.EINVAL, resp)
+            url = self.upload_endpoint_url(bucket, object)
+            token = self.upload_token
+            if partsize <= 0:
+                return oss_upload(
+                    self.request, 
+                    file, # type: ignore
+                    url=url, 
+                    bucket=bucket, 
+                    object=object, 
+                    callback=callback, 
+                    token=token, 
+                    filesize=filesize, 
+                    make_reporthook=make_reporthook, # type: ignore
+                    async_=async_, # type: ignore
+                    **request_kwargs, 
+                )
+            else:
+                return oss_multipart_upload(
+                    self.request, 
+                    file, # type: ignore
+                    url=url, 
+                    bucket=bucket, 
+                    object=object, 
+                    callback=callback, 
+                    token=token, 
+                    partsize=partsize, 
+                    filesize=filesize, 
+                    collect_resume_data=collect_resume_data, 
+                    make_reporthook=make_reporthook, # type: ignore
+                    async_=async_, # type: ignore
+                    **request_kwargs, 
+                )
+        return run_gen_step(gen_step, async_=async_)
+
+    @overload
+    def vip_qr_url(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def vip_qr_url(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def vip_qr_url(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取开放平台产品列表
+
+        GET https://proapi.115.com/open/vip/qr_url
+
+        .. note::
+            https://www.yuque.com/115yun/open/yifbvxan6szytyng
+
+        :payload:
+            - open_device: int | str 💡 设备号
+            - default_product_id: int | str 💡 默认产品ID
+        """
+        api = complete_proapi("/open/vip/qr_url", base_url)
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
 # TODO: 提供一个可随时终止和暂停的上传功能，并且可以输出进度条和获取进度
-# TODO: 引入开放接口 https://www.yuque.com/115yun/open

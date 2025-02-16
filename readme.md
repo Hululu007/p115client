@@ -54,6 +54,39 @@ from pathlib import Path
 client = P115Client(Path("~/115-cookies.txt").expanduser(), check_for_relogin=True)
 ```
 
+如果你有一个申请通过的开放接口的应用，则可以创建开放接口的客户端实例
+
+你可以直接从一个 `P115Client` 实例拿到授权（自动扫码登录并授权）
+
+```python
+app_id = <开放接口应用的 AppID>
+client_open = client.login_another_open(app_id)
+```
+
+也可以用一个已经授权得到的 `refresh_token` (一次性使用)
+
+```python
+from p115client import P115OpenClient
+
+client_open = P115OpenClient(refresh_token)
+```
+
+或者手动扫码登录
+
+```python
+client_open = P115OpenClient(app_id)
+```
+
+所以综上，推荐的初始化代码为
+
+```python
+from p115client import P115Client, P115OpenClient
+from pathlib import Path
+
+client = P115Client(Path("~/115-cookies.txt").expanduser(), check_for_relogin=True)
+client_open = client.login_another_open(app_id)
+```
+
 ### 2. 接口调用
 
 所有需要直接或间接执行 HTTP 请求的接口，都有同步和异步的调用方式
