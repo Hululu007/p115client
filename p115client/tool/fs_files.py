@@ -120,6 +120,8 @@ def iter_fs_files(
     elif app in ("", "web", "desktop", "harmony"):
         request_kwargs.setdefault("base_url", get_webapi_origin)
         fs_files = partial(client.fs_files, **request_kwargs)
+    elif app == "open":
+        fs_files = partial(client.fs_files_open, **request_kwargs)
     else:
         request_kwargs.setdefault("base_url", get_proapi_origin)
         fs_files = partial(client.fs_files_app, app=app, **request_kwargs)
@@ -216,6 +218,8 @@ def iter_fs_files_threaded(
         page_size = min(page_size, 1150)
         request_kwargs.setdefault("base_url", get_webapi_origin)
         fs_files = partial(client.fs_files, **request_kwargs)
+    elif app == "open":
+        fs_files = partial(client.fs_files_open, **request_kwargs)
     else:
         request_kwargs.setdefault("base_url", get_proapi_origin)
         fs_files = partial(client.fs_files_app, app=app, **request_kwargs)
@@ -331,6 +335,8 @@ async def iter_fs_files_asynchronized(
         page_size = min(page_size, 1150)
         request_kwargs.setdefault("base_url", get_webapi_origin)
         fs_files = partial(client.fs_files, **request_kwargs)
+    elif app == "open":
+        fs_files = partial(client.fs_files_open, **request_kwargs)
     else:
         request_kwargs.setdefault("base_url", get_proapi_origin)
         fs_files = partial(client.fs_files_app, app=app, **request_kwargs)

@@ -63,6 +63,13 @@ app_id = <开放接口应用的 AppID>
 client_open = client.login_another_open(app_id)
 ```
 
+你也可以直接在 `P115Client` 实例上使用开放接口，此时会使用 `P115OpenClient` 的对应方法，但名字多一个 "_open" 后缀
+
+```python
+# 此时 client.fs_files_open 相当于 client_open.fs_files
+client.login_another_open(app_id, replace=True)
+```
+
 也可以用一个已经授权得到的 `refresh_token` (一次性使用)
 
 ```python
