@@ -362,7 +362,7 @@ def export_dir(
 
     :return: 返回任务 id，可用 `P115Client.fs_export_dir_status` 查询进度
     """
-    if isinstance(client, str):
+    if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     def gen_step():
         nonlocal export_file_ids, target_pid
@@ -463,7 +463,7 @@ def export_dir_result(
                 "pick_code": str  # 导出文件的提取码
             }
     """
-    if isinstance(client, str):
+    if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     if check_interval < 0:
         check_interval = 0
@@ -493,7 +493,7 @@ def export_dir_result(
 def export_dir_parse_iter(
     client: str | P115Client, 
     export_file_ids: int | str | Iterable[int | str] = 0, 
-    export_id: int = 0, 
+    export_id: int | str = 0, 
     target_pid: int | str = 0, 
     layer_limit: int = 0, 
     parse_iter: None | Callable[[IO[bytes]], Iterator] = None, 
@@ -511,7 +511,7 @@ def export_dir_parse_iter(
 def export_dir_parse_iter(
     client: str | P115Client, 
     export_file_ids: int | str | Iterable[int | str] = 0, 
-    export_id: int = 0, 
+    export_id: int | str = 0, 
     target_pid: int | str = 0, 
     layer_limit: int = 0, 
     parse_iter: None | Callable[[IO[bytes]], AsyncIterator] = None, 
@@ -528,7 +528,7 @@ def export_dir_parse_iter(
 def export_dir_parse_iter(
     client: str | P115Client, 
     export_file_ids: int | str | Iterable[int | str] = 0, 
-    export_id: int = 0, 
+    export_id: int | str = 0, 
     target_pid: int | str = 0, 
     layer_limit: int = 0, 
     parse_iter: None | Callable[[IO[bytes]], Iterator] | Callable[[IO[bytes]], AsyncIterator] = None, 
@@ -545,11 +545,11 @@ def export_dir_parse_iter(
 
     :param client: 115 客户端或 cookies
     :param export_file_ids: 待导出的目录 id 或 路径（如果有多个，需传入可迭代对象）
-    :param export_id: 优先级高于 `export_file_ids`，之前提交的 `export_dir` 任务的 id
+    :param export_id: 优先级高于 `export_file_ids`，之前提交的 `export_dir` 任务的 id，如果是 str，则视为导出的目录树文件的提取码（因此无需导出）
     :param target_pid: 导出到的目标目录 id 或 路径
     :param layer_limit: 层级深度，小于等于 0 时不限
     :param parse_iter: 解析打开的二进制文件，返回可迭代对象
-    :param delete: 最终删除目录树文件
+    :param delete: 最终删除目录树文件（如果 export_id 为 str（即提取码），则这个值不生效，必不删除）
     :param timeout: 导出任务的超时秒数，如果为 None 或 小于等于 0，则相当于 float("inf")，即永不超时
     :param check_interval: 导出任务的状态，两次轮询之间的等待秒数，如果 <= 0，则不等待
     :param show_clock: 是否在等待导出目录树时，显示时钟。如果为 True，则显示默认的时钟，如果为 Callable，则作为自定义时钟进行调用（无参数）
@@ -559,7 +559,7 @@ def export_dir_parse_iter(
 
     :return: 解析导出文件的迭代器
     """
-    if isinstance(client, str):
+    if not isinstance(client, P115Client):
         client = P115Client(client, check_for_relogin=True)
     if parse_iter is None:
         if async_:
@@ -577,37 +577,42 @@ def export_dir_parse_iter(
                 async_=async_, 
                 **request_kwargs, 
             )
-        if not show_clock:
-            result: dict = yield export_dir_result(
-                client, 
-                export_id, 
-                timeout=timeout, 
-                check_interval=check_interval, 
-                async_=async_, 
-                **request_kwargs, 
-            )
-        else:
-            result = yield context(
-                lambda *a: export_dir_result(
+        if isinstance(export_id, int):
+            if not show_clock:
+                result: dict = yield export_dir_result(
                     client, 
                     export_id, 
                     timeout=timeout, 
                     check_interval=check_interval, 
                     async_=async_, 
                     **request_kwargs, 
-                ), 
-                backgroud_loop(
-                    None if show_clock is True else show_clock, 
-                    interval=clock_interval, 
+                )
+            else:
+                result = yield context(
+                    lambda *a: export_dir_result(
+                        client, 
+                        export_id, 
+                        timeout=timeout, 
+                        check_interval=check_interval, 
+                        async_=async_, 
+                        **request_kwargs, 
+                    ), 
+                    backgroud_loop(
+                        None if show_clock is True else show_clock, 
+                        interval=clock_interval, 
+                        async_=async_, # type: ignore
+                    ), 
                     async_=async_, # type: ignore
-                ), 
-                async_=async_, # type: ignore
-            )
+                )
+            pickcode = result["pick_code"]
+        else:
+            pickcode = export_id
+            delete = False
         try:
             try:
                 url: str = yield partial(
                     client.download_url, 
-                    result["pick_code"], 
+                    pickcode, 
                     use_web_api=True, 
                     async_=async_, 
                     **request_kwargs, 
@@ -615,7 +620,7 @@ def export_dir_parse_iter(
             except OSError:
                 url = yield partial(
                     client.download_url, 
-                    result["pick_code"], 
+                    pickcode, 
                     async_=async_, 
                     **request_kwargs, 
                 )
