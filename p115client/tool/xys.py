@@ -22,7 +22,7 @@ def wish_make(
 
     :return: 许愿 id
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client)
     return check_response(client.act_xys_wish(
         {"rewardSpace": size, "content": content}
@@ -44,7 +44,7 @@ def wish_answer(
 
     :return: 助愿 id
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client)
     if not isinstance(file_ids, (int, str)):
         file_ids = ",".join(map(str, file_ids))
@@ -68,7 +68,7 @@ def wish_list(
 
     :return: 许愿列表
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client)
     payload: dict = {"type": type, "limit": 1000, "page": 1}
     ls = adds = check_response(client.act_xys_my_desire(payload))["data"]["list"]
@@ -90,7 +90,7 @@ def wish_aid_list(
 
     :return: 助愿列表
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client)
     payload: dict = {"id": wish_id, "limit": 1000, "page": 1}
     ls = adds = check_response(client.act_xys_desire_aid_list(payload))["data"]["list"]
@@ -116,7 +116,7 @@ def wish_adopt(
 
     :return: 返回信息
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client)
     return check_response(client.act_xys_adopt({"did": wish_id, "aid": aid_id, "to_cid": to_cid}))
 

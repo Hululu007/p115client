@@ -362,7 +362,7 @@ def export_dir(
 
     :return: 返回任务 id，可用 `P115Client.fs_export_dir_status` 查询进度
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     def gen_step():
         nonlocal export_file_ids, target_pid
@@ -463,7 +463,7 @@ def export_dir_result(
                 "pick_code": str  # 导出文件的提取码
             }
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if check_interval < 0:
         check_interval = 0
@@ -559,7 +559,7 @@ def export_dir_parse_iter(
 
     :return: 解析导出文件的迭代器
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if parse_iter is None:
         if async_:
@@ -628,9 +628,12 @@ def export_dir_parse_iter(
                 yield YieldFrom(parse_iter(file_wrapper), identity=True) # type: ignore
             finally:
                 if async_:
-                    yield getattr(file, "aclose")
-                else:
-                    file.close()
+                    if callable(aclose := getattr(file, "aclose", None)):
+                        yield aclose
+                    elif callable(close := getattr(file, "close", None)):
+                        yield ensure_async(close, threaded=True)
+                elif callable(close := getattr(file, "close", None)):
+                    close()
         finally:
             if delete:
                 yield client.fs_delete(

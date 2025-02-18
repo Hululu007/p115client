@@ -14,13 +14,10 @@ pip install -U p115dav
 
 ```console
 $ p115dav -h
-usage: p115dav [-h] [-cp COOKIES_PATH] [-o STRM_ORIGIN] [-t TTL]
-               [-p1 PREDICATE]
-               [-t1 {ignore,ignore-file,expr,lambda,stmt,module,file,re}]
-               [-p2 STRM_PREDICATE]
-               [-t2 {filter,filter-file,expr,lambda,stmt,module,file,re}]
-               [-fs] [-H HOST] [-P PORT] [-cl] [-cu] [-d] [-ass] [-ow]
-               [-uc UVICORN_RUN_CONFIG_PATH] [-wc WSGIDAV_CONFIG_PATH]
+usage: p115dav [-h] [-cp COOKIES_PATH] [-a APP_ID] [-o STRM_ORIGIN] [-t TTL] [-p1 PREDICATE]
+               [-t1 {ignore,ignore-file,expr,lambda,stmt,module,file,re}] [-p2 STRM_PREDICATE]
+               [-t2 {filter,filter-file,expr,lambda,stmt,module,file,re}] [-fs] [-H HOST] [-P PORT] [-cl]
+               [-cu] [-d] [-ass] [-ow] [-uc UVICORN_RUN_CONFIG_PATH] [-wc WSGIDAV_CONFIG_PATH]
                [-wu [WSGIDAV_USERNAME_PASSWORD ...]] [-l] [-v]
                [dbfile]
 
@@ -40,6 +37,8 @@ options:
                             COOKIES='UID=...; CID=..., SEID=...'
                             p115dav --cookies-path <(echo "$COOKIES")
                         
+  -a APP_ID, --app-id APP_ID
+                        开放平台应用的 AppID
   -o STRM_ORIGIN, --strm-origin STRM_ORIGIN
                         [WEBDAV] origin 或者说 base_url，用来拼接路径，获取完整链接，默认行为是自行确定
   -t TTL, --ttl TTL     缓存存活时间

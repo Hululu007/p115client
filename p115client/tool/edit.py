@@ -70,7 +70,7 @@ def update_abstract(
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if max_workers is None or max_workers <= 0:
         max_workers = 20 if async_ else None
@@ -559,7 +559,7 @@ def batch_unstar(
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     def get_id(info: dict, /) -> int:
         for k in ("file_id", "category_id", "fid", "cid"):

@@ -114,14 +114,11 @@ def iter_fs_files(
         "limit": first_page_size, "show_dir": 1, **payload, 
     }
     cid = int(payload["cid"])
-    if isinstance(client, P115OpenClient):
-        request_kwargs.setdefault("base_url", get_proapi_origin)
-        fs_files = partial(client.fs_files, **request_kwargs)
+    if not isinstance(client, P115Client) or app == "open":
+        fs_files = partial(client.fs_files_open, **request_kwargs)
     elif app in ("", "web", "desktop", "harmony"):
         request_kwargs.setdefault("base_url", get_webapi_origin)
         fs_files = partial(client.fs_files, **request_kwargs)
-    elif app == "open":
-        fs_files = partial(client.fs_files_open, **request_kwargs)
     else:
         request_kwargs.setdefault("base_url", get_proapi_origin)
         fs_files = partial(client.fs_files_app, app=app, **request_kwargs)
@@ -211,15 +208,12 @@ def iter_fs_files_threaded(
         "limit": page_size, "show_dir": 1, **payload, 
     }
     cid = int(payload["cid"])
-    if isinstance(client, P115OpenClient):
-        request_kwargs.setdefault("base_url", get_proapi_origin)
-        fs_files = partial(client.fs_files, **request_kwargs)
+    if not isinstance(client, P115Client) or app == "open":
+        fs_files = partial(client.fs_files_open, **request_kwargs)
     elif app in ("", "web", "desktop", "harmony"):
         page_size = min(page_size, 1150)
         request_kwargs.setdefault("base_url", get_webapi_origin)
         fs_files = partial(client.fs_files, **request_kwargs)
-    elif app == "open":
-        fs_files = partial(client.fs_files_open, **request_kwargs)
     else:
         request_kwargs.setdefault("base_url", get_proapi_origin)
         fs_files = partial(client.fs_files_app, app=app, **request_kwargs)
@@ -328,15 +322,12 @@ async def iter_fs_files_asynchronized(
         "limit": page_size, "show_dir": 1, **payload, 
     }
     cid = int(payload["cid"])
-    if isinstance(client, P115OpenClient):
-        request_kwargs.setdefault("base_url", get_proapi_origin)
-        fs_files = partial(client.fs_files, **request_kwargs)
+    if not isinstance(client, P115Client) or app == "open":
+        fs_files = partial(client.fs_files_open, **request_kwargs)
     elif app in ("", "web", "desktop", "harmony"):
         page_size = min(page_size, 1150)
         request_kwargs.setdefault("base_url", get_webapi_origin)
         fs_files = partial(client.fs_files, **request_kwargs)
-    elif app == "open":
-        fs_files = partial(client.fs_files_open, **request_kwargs)
     else:
         request_kwargs.setdefault("base_url", get_proapi_origin)
         fs_files = partial(client.fs_files_app, app=app, **request_kwargs)
@@ -377,7 +368,7 @@ async def iter_fs_files_asynchronized(
             if args is None:
                 args = copy(payload)
             ts = time()
-            return create_task(get_files(args)) # type: ignore
+            return create_task(get_files(args))
         task = make_task()
         offset = payload["offset"]
         while True:

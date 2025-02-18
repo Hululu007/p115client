@@ -182,6 +182,8 @@ def complete_proapi(
 ) -> str:
     if path and not path.startswith("/"):
         path = "/" + path
+    if app == "open":
+        app = "android"
     if app and not app.startswith("/"):
         app = "/" + app
     if callable(base_url):
@@ -192,6 +194,8 @@ def complete_proapi(
         base_url = "https://proapi.115.com"
     elif not base_url:
         base_url = "http://proapi.115.com"
+    if not app and path.startswith("/open/") and base_url == "http://proapi.115.com":
+        base_url = "https://proapi.115.com"
     return f"{base_url}{app}{path}"
 
 
@@ -1276,7 +1280,7 @@ class ClientRequestMixin:
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
-        """获取 access_token
+        """绑定扫码并获取开放平台应用的 access_token 和 refresh_token
 
         POST https://qrcodeapi.115.com/open/deviceCodeToToken
 
@@ -1327,7 +1331,7 @@ class ClientRequestMixin:
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
-        """获取 access_token
+        """用一个 refresh_token 去获取新的 access_token 和 refresh_token，然后原来的 refresh_token 作废
 
         POST https://qrcodeapi.115.com/open/refreshToken
 
@@ -1565,7 +1569,7 @@ class ClientRequestMixin:
         async_: Literal[False, True] = False, 
         **request_kwargs, 
     ) -> dict | Coroutine[Any, Any, dict]:
-        """获取登录二维码，扫码可用
+        """获取开放平台的登录二维码，扫码可用
 
         POST https://qrcodeapi.115.com/open/authDeviceCode
 
@@ -2490,7 +2494,7 @@ class P115OpenClient(ClientRequestMixin):
     def upload_token(self, /) -> dict:
         token = self.__dict__.get("upload_token", {})
         if not token or token["Expiration"] < (datetime.now() - timedelta(hours=7, minutes=30)).strftime("%FT%XZ"):
-            resp = self.upload_gettoken()
+            resp = self.upload_gettoken_open()
             check_response(resp)
             token = self.__dict__["upload_token"] = resp["data"]
         return token
@@ -2583,7 +2587,7 @@ class P115OpenClient(ClientRequestMixin):
 
         :return: 下载链接
         """
-        resp = self.download_url_info(
+        resp = self.download_url_info_open(
             pickcode, 
             async_=async_, 
             **request_kwargs, 
@@ -2672,9 +2676,9 @@ class P115OpenClient(ClientRequestMixin):
             if isinstance(headers, Mapping):
                 headers = ItemsView(headers)
             headers = request_kwargs["headers"] = {
-                "User-Agent": next((v for k, v in headers if k.lower() == "user-agent" and v), "")}
+                "user-agent": next((v for k, v in headers if k.lower() == "user-agent" and v), "")}
         else:
-            headers = request_kwargs["headers"] = {"User-Agent": ""}
+            headers = request_kwargs["headers"] = {"user-agent": ""}
         def parse(_, content: bytes, /) -> dict:
             json = json_loads(content)
             json["headers"] = headers
@@ -3593,6 +3597,7 @@ class P115OpenClient(ClientRequestMixin):
         :param filename: 文件名
         :param filesize: 文件大小
         :param filesha1: 文件的 sha1
+        :param preid: 文件的前 128 KB 数据的 sha1 值（目前这个参数没啥用，不要传）
         :param read_range_bytes_or_hash: 调用以获取二次验证的数据或计算 sha1，接受一个数据范围，格式符合 `HTTP Range Requests <https://developer.mozilla.org/en-US/docs/Web/HTTP/Range_requests>`_，返回值如果是 str，则视为计算好的 sha1，如果为 Buffer，则视为数据（之后会被计算 sha1）
         :param pid: 上传文件到此目录的 id
         :param async_: 是否异步
@@ -3611,7 +3616,7 @@ class P115OpenClient(ClientRequestMixin):
                 "preid": preid, 
                 "topupload": 1, 
             }
-            resp = yield self.upload_init(
+            resp = yield self.upload_init_open(
                 payload, 
                 async_=async_, 
                 **request_kwargs, 
@@ -3631,7 +3636,7 @@ class P115OpenClient(ClientRequestMixin):
                     payload["sign_val"] = data.upper()
                 else:
                     payload["sign_val"] = sha1(data).hexdigest().upper()
-                resp = yield self.upload_init(
+                resp = yield self.upload_init_open(
                     payload, 
                     async_=async_, # type: ignore
                     **request_kwargs, 
@@ -3762,7 +3767,7 @@ class P115OpenClient(ClientRequestMixin):
         def gen_step():
             nonlocal file, filename, filesize, filesha1
             def do_upload(file):
-                return self.upload_file(
+                return self.upload_file_open(
                     file=file, 
                     filename=filename, 
                     pid=pid, 
@@ -3858,12 +3863,12 @@ class P115OpenClient(ClientRequestMixin):
                 if async_:
                     from httpfile import AsyncHttpxFileReader
                     async def request():
-                        file = await AsyncHttpxFileReader.new(url, headers={"User-Agent": ""})
+                        file = await AsyncHttpxFileReader.new(url, headers={"user-agent": ""})
                         async with file:
                             return await do_upload(file)
                     return request
                 else:
-                    with HTTPFileReader(url, headers={"User-Agent": ""}) as file:
+                    with HTTPFileReader(url, headers={"user-agent": ""}) as file:
                         return do_upload(file)
             elif isinstance(file, (str, PathLike)):
                 path = fsdecode(file)
@@ -3920,7 +3925,7 @@ class P115OpenClient(ClientRequestMixin):
                 filename = str(uuid4())
             if filesize < 0:
                 filesize = getattr(file, "length", 0)
-            resp = yield self.upload_file_init(
+            resp = yield self.upload_file_init_open(
                 filename=filename, 
                 filesize=filesize, 
                 filesha1=filesha1, 
@@ -4016,8 +4021,29 @@ class P115OpenClient(ClientRequestMixin):
         api = complete_proapi("/open/vip/qr_url", base_url)
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
+    download_url_open = download_url
+    download_url_info_open = download_url_info
+    fs_copy_open = fs_copy
+    fs_delete_open = fs_delete
+    fs_files_open = fs_files
+    fs_info_open = fs_info
+    fs_mkdir_open = fs_mkdir
+    fs_move_open = fs_move
+    fs_search_open = fs_search
+    fs_update_open = fs_update
+    recyclebin_clean_open = recyclebin_clean
+    recyclebin_list_open = recyclebin_list
+    recyclebin_revert_open = recyclebin_revert
+    upload_gettoken_open = upload_gettoken
+    upload_init_open = upload_init
+    upload_resume_open = upload_resume
+    user_info_open = user_info
+    upload_file_init_open = upload_file_init
+    upload_file_open = upload_file
+    vip_qr_url_open = vip_qr_url
 
-class P115Client(ClientRequestMixin):
+
+class P115Client(P115OpenClient):
     """115 的客户端对象
 
     :param cookies: 115 的 cookies，要包含 `UID`、`CID`、`KID` 和 `SEID` 等
@@ -4240,7 +4266,7 @@ class P115Client(ClientRequestMixin):
         except OSError:
             self.cookies_mtime = 0
 
-    @overload
+    @overload # type: ignore
     @classmethod
     def init(
         cls, 
@@ -5230,6 +5256,9 @@ class P115Client(ClientRequestMixin):
         elif data is not None:
             request_kwargs["data"] = data
         request_kwargs.setdefault("parse", default_parse)
+        if url.startswith("https://proapi.115.com/open/"):
+            headers["cookie"] = ""
+            return request(url=url, method=method, **request_kwargs)
         def gen_step():
             check_for_relogin = self.check_for_relogin
             cant_relogin = not callable(check_for_relogin)
@@ -6412,9 +6441,9 @@ class P115Client(ClientRequestMixin):
             if isinstance(headers, Mapping):
                 headers = ItemsView(headers)
             headers = request_kwargs["headers"] = {
-                "User-Agent": next((v for k, v in headers if k.lower() == "user-agent" and v), "")}
+                "user-agent": next((v for k, v in headers if k.lower() == "user-agent" and v), "")}
         else:
-            headers = request_kwargs["headers"] = {"User-Agent": ""}
+            headers = request_kwargs["headers"] = {"user-agent": ""}
         def parse(_, content: bytes, /) -> dict:
             json = json_loads(content)
             if json["state"]:
@@ -6477,9 +6506,9 @@ class P115Client(ClientRequestMixin):
             if isinstance(headers, Mapping):
                 headers = ItemsView(headers)
             headers = request_kwargs["headers"] = {
-                "User-Agent": next((v for k, v in headers if k.lower() == "user-agent" and v), "")}
+                "user-agent": next((v for k, v in headers if k.lower() == "user-agent" and v), "")}
         else:
-            headers = request_kwargs["headers"] = {"User-Agent": ""}
+            headers = request_kwargs["headers"] = {"user-agent": ""}
         def parse(resp, content: bytes, /) -> dict:
             json = json_loads(content)
             if "Set-Cookie" in resp.headers:
@@ -6673,9 +6702,9 @@ class P115Client(ClientRequestMixin):
             if isinstance(headers, Mapping):
                 headers = ItemsView(headers)
             headers = request_kwargs["headers"] = {
-                "User-Agent": next((v for k, v in headers if k.lower() == "user-agent" and v), "")}
+                "user-agent": next((v for k, v in headers if k.lower() == "user-agent" and v), "")}
         else:
-            headers = request_kwargs["headers"] = {"User-Agent": ""}
+            headers = request_kwargs["headers"] = {"user-agent": ""}
         def parse(_, content: bytes, /) -> dict:
             json = json_loads(content)
             json["headers"] = headers
@@ -6729,9 +6758,9 @@ class P115Client(ClientRequestMixin):
             if isinstance(headers, Mapping):
                 headers = ItemsView(headers)
             headers = request_kwargs["headers"] = {
-                "User-Agent": next((v for k, v in headers if k.lower() == "user-agent" and v), "")}
+                "user-agent": next((v for k, v in headers if k.lower() == "user-agent" and v), "")}
         else:
-            headers = request_kwargs["headers"] = {"User-Agent": ""}
+            headers = request_kwargs["headers"] = {"user-agent": ""}
         def parse(resp, content: bytes, /) -> dict:
             json = json_loads(content)
             if "Set-Cookie" in resp.headers:
@@ -13849,7 +13878,7 @@ class P115Client(ClientRequestMixin):
         GET http://115.com/api/video/m3u8/{pickcode}.m3u8?definition={definition}
 
         .. attention::
-            这个接口只支持 web 的 cookies，其它设备会返回空数据，而且获取得到的 m3u8 里的链接，也是 m3u8，会绑定前一次请求时的 User-Agent
+            这个接口只支持 web 的 cookies，其它设备会返回空数据，而且获取得到的 m3u8 里的链接，也是 m3u8，会绑定前一次请求时的 user-agent
 
         :param pickcode: 视频文件的 pickcode
         :params definition: 画质，默认列出所有画质。但可进行筛选，常用的为：
@@ -15994,7 +16023,7 @@ class P115Client(ClientRequestMixin):
         payload["app_ver"] = "99.99.99.99"
         request_kwargs["headers"] = {
             **(request_kwargs.get("headers") or {}), 
-            "User-Agent": "Mozilla/5.0 115disk/99.99.99.99 115Browser/99.99.99.99 115wangpan_android/99.99.99.99", 
+            "user-agent": "Mozilla/5.0 115disk/99.99.99.99 115Browser/99.99.99.99 115wangpan_android/99.99.99.99", 
         }
         request_kwargs["ecdh_encrypt"] = False
         def parse(_, content: bytes, /) -> dict:
@@ -16639,7 +16668,7 @@ class P115Client(ClientRequestMixin):
 
     ########## Recyclebin API ##########
 
-    @overload
+    @overload # type: ignore
     def recyclebin_clean(
         self, 
         payload: int | str | Iterable[int | str] | dict = {}, 
@@ -18436,7 +18465,7 @@ class P115Client(ClientRequestMixin):
         api = complete_proapi("/app/uploadinfo", base_url)
         return self.request(url=api, async_=async_, **request_kwargs)
 
-    @overload
+    @overload # type: ignore
     def upload_init(
         self, 
         /, 
@@ -18602,7 +18631,7 @@ class P115Client(ClientRequestMixin):
         payload = {"filename": filename, "target": f"U_1_{pid}"}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
-    @overload
+    @overload # type: ignore
     @staticmethod
     def upload_gettoken(
         request: None | Callable = None, 
@@ -18770,12 +18799,12 @@ class P115Client(ClientRequestMixin):
         request_kwargs["headers"] = {
             **(request_kwargs.get("headers") or {}), 
             "Content-Type": "application/x-www-form-urlencoded", 
-            "User-Agent": "Mozilla/5.0 115disk/99.99.99.99 115Browser/99.99.99.99 115wangpan_android/99.99.99.99", 
+            "user-agent": "Mozilla/5.0 115disk/99.99.99.99 115Browser/99.99.99.99 115wangpan_android/99.99.99.99", 
         }
         request_kwargs.setdefault("parse", parse_upload_init_response)
         return self.upload_init(async_=async_, **request_kwargs)
 
-    @overload
+    @overload # type: ignore
     def upload_file_init(
         self, 
         /, 
@@ -19021,7 +19050,7 @@ class P115Client(ClientRequestMixin):
 
     # TODO: 当文件 < 1 MB 时，文件不急着打开，需要时再打开
     # TODO: 对于上传空文件，有特别的速度（sha1写死）
-    @overload
+    @overload # type: ignore
     def upload_file(
         self, 
         /, 
@@ -19247,12 +19276,12 @@ class P115Client(ClientRequestMixin):
                 if async_:
                     from httpfile import AsyncHttpxFileReader
                     async def request():
-                        file = await AsyncHttpxFileReader.new(url, headers={"User-Agent": ""})
+                        file = await AsyncHttpxFileReader.new(url, headers={"user-agent": ""})
                         async with file:
                             return await do_upload(file)
                     return request
                 else:
-                    with HTTPFileReader(url, headers={"User-Agent": ""}) as file:
+                    with HTTPFileReader(url, headers={"user-agent": ""}) as file:
                         return do_upload(file)
             elif isinstance(file, (str, PathLike)):
                 path = fsdecode(file)
@@ -19484,7 +19513,7 @@ class P115Client(ClientRequestMixin):
         api = complete_webapi("/user/fingerprint", base_url=base_url)
         return self.request(url=api, async_=async_, **request_kwargs)
 
-    @overload
+    @overload # type: ignore
     @staticmethod
     def user_info(
         payload: int | str | dict, 
@@ -20350,29 +20379,6 @@ class P115Client(ClientRequestMixin):
         else:
             payload = {"ignore_warn": 0, "share_opt": 1, "safe_pwd": "", **payload}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
-
-    access_token = P115OpenClient.access_token
-    refresh_access_token = P115OpenClient.refresh_access_token
-    download_url_open = P115OpenClient.download_url
-    download_url_info_open = P115OpenClient.download_url_info
-    fs_copy_open = P115OpenClient.fs_copy
-    fs_delete_open = P115OpenClient.fs_delete
-    fs_files_open = P115OpenClient.fs_files
-    fs_info_open = P115OpenClient.fs_info
-    fs_mkdir_open = P115OpenClient.fs_mkdir
-    fs_move_open = P115OpenClient.fs_move
-    fs_search_open = P115OpenClient.fs_search
-    fs_update_open = P115OpenClient.fs_update
-    recyclebin_clean_open = P115OpenClient.recyclebin_clean
-    recyclebin_list_open = P115OpenClient.recyclebin_list
-    recyclebin_revert_open = P115OpenClient.recyclebin_revert
-    upload_gettoken_open = P115OpenClient.upload_gettoken
-    upload_init_open = P115OpenClient.upload_init
-    upload_resume_open = P115OpenClient.upload_resume
-    user_info_open = P115OpenClient.user_info
-    upload_file_init_open = P115OpenClient.upload_file_init
-    upload_file_open = P115OpenClient.upload_file
-    vip_qr_url_open = P115OpenClient.vip_qr_url
 
 
 for name, method in P115Client.__dict__.items():

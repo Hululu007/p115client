@@ -97,7 +97,7 @@ def batch_get_url(
 
     :return: 字典，key 是文件 id，value 是下载链接，自动忽略所有无效项目
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if headers := request_kwargs.get("headers"):
         request_kwargs["headers"] = dict(headers, **{"User-Agent": user_agent})
@@ -207,7 +207,7 @@ def iter_url_batches(
 
     :return: 字典，key 是文件 id，value 是下载链接，自动忽略所有无效项目
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if headers := request_kwargs.get("headers"):
         request_kwargs["headers"] = dict(headers, **{"User-Agent": user_agent})
@@ -342,7 +342,7 @@ def iter_files_with_url(
 
     :return: 迭代器，产生文件信息，并增加一个 "url" 作为下载链接
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     params = dict(
         cur=cur, 
@@ -494,7 +494,7 @@ def iter_images_with_url(
 
     :return: 迭代器，产生文件信息，并增加一个 "url" 作为下载链接
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     params = dict(
         cur=cur, 
@@ -654,7 +654,7 @@ def iter_subtitles_with_url(
 
     :return: 迭代器，产生文件信息，并增加一个 "url" 作为下载链接
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     def gen_step():
         nonlocal suffixes
@@ -791,7 +791,7 @@ def iter_subtitle_batches(
 
     :return: 迭代器，产生文件信息，并增加一个 "url" 作为下载链接，文件信息中的 file_id 是复制所得的文件信息，不是原来文件的 id
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if batch_size <= 0:
         batch_size = 1_000
@@ -953,7 +953,7 @@ def make_strm(
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     user_id = client.user_id
     origin = origin.rstrip("/")
@@ -1128,7 +1128,7 @@ def iter_download_nodes(
 
     :return: 迭代器，产生文件或者目录的简略信息
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if files:
         method = client.download_files
@@ -1296,7 +1296,7 @@ def iter_download_files(
 
     :return: 迭代器，产生文件的简略信息
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]

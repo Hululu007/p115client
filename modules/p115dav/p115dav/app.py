@@ -9,7 +9,8 @@ __all__ = ["make_application"]
 import logging
 
 from asyncio import (
-    get_running_loop, run_coroutine_threadsafe, to_thread, AbstractEventLoop, Lock, 
+    create_task, get_running_loop, run_coroutine_threadsafe, sleep as async_sleep, 
+    to_thread, AbstractEventLoop, Lock, 
 )
 from collections import deque
 from collections.abc import AsyncIterator, Buffer, Iterator, Mapping, Sequence
@@ -132,6 +133,7 @@ class TooManyRequests(OSError):
 def make_application(
     dbfile: str | Path = "", 
     cookies_path: str | Path = "", 
+    app_id: int = 0, 
     ttl: int | float = 0, 
     strm_origin: str = "", 
     predicate = None, 
@@ -654,11 +656,14 @@ LIMIT 1;""", (share_code, id))
         count = 0
         async def get_data():
             nonlocal count
-            base_url = get_base_url()
-            if "proapi" in base_url:
-                resp = await client.fs_files_app(payload, base_url=base_url, async_=True)
+            if app_id:
+                resp = await client.fs_files_open(payload, async_=True)
             else:
-                resp = await client.fs_files(payload, base_url=base_url, async_=True)
+                base_url = get_base_url()
+                if "proapi" in base_url:
+                    resp = await client.fs_files_app(payload, base_url=base_url, async_=True)
+                else:
+                    resp = await client.fs_files(payload, base_url=base_url, async_=True)
             check_response(resp)
             if cid and int(resp["path"][-1]["cid"]) != cid:
                 raise FileNotFoundError(ENOENT, {"id": cid})
@@ -888,13 +893,20 @@ LIMIT 1;""", (share_code, id))
         user_agent: str = "", 
         use_web_api: bool = False, 
     ) -> P115URL:
-        return await client.download_url(
-            pickcode, 
-            headers={"User-Agent": user_agent}, 
-            use_web_api=use_web_api, 
-            app="android", 
-            async_=True, 
-        )
+        if app_id and not use_web_api:
+            return await client.download_url_open(
+                pickcode, 
+                headers={"User-Agent": user_agent}, 
+                async_=True, 
+            )
+        else:
+            return await client.download_url(
+                pickcode, 
+                headers={"User-Agent": user_agent}, 
+                use_web_api=use_web_api, 
+                app="android", 
+                async_=True, 
+            )
 
     async def get_image_url(pickcode: str, /) -> str:
         if not (url := IMAGE_URL_CACHE.get(pickcode, "")):
@@ -972,8 +984,22 @@ VALUES (:share_code, :id, :parent_id, :sha1, :name, :path, :is_dir)"""
             check_for_relogin=check_for_relogin, 
         )
         async with client.async_session:
+            if app_id:
+                await client.login_another_open(app_id, replace=True, async_=True)
             app.services.register(P115Client, instance=client)
             yield
+
+    if app_id:
+        async def refresh_access_token(app: Application):
+            async def run_periodically():
+                while True:
+                    await async_sleep(3600)
+                    await client.refresh_access_token(async_=True)
+            try:
+                task = create_task(run_periodically())
+                yield
+            finally:
+                task.cancel()
 
     @app.lifespan
     async def register_connection(app: Application):
@@ -1101,10 +1127,8 @@ END;
             return make_response_for_exception(exc, 404) # Not Found
         elif isinstance(exc, (IsADirectoryError, NotADirectoryError)):
             return make_response_for_exception(exc, 406) # Not Acceptable
-        elif isinstance(exc, TooManyRequests):
+        elif isinstance(exc, (TooManyRequests, BusyOSError)):
             return make_response_for_exception(exc, 429) # Too Many Requests
-        elif isinstance(exc, BusyOSError):
-            return make_response_for_exception(exc, 503) # Service Unavailable
         elif isinstance(exc, OSError):
             return make_response_for_exception(exc, 500) # Internal Server Error
         else:

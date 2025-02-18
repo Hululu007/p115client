@@ -119,6 +119,7 @@ cookies 文件保存路径，默认为当前工作目录下的 115-cookies.txt
     p115dav --cookies-path <(echo "$COOKIES")
 
 """)
+parser.add_argument("-a", "--app-id", default=0, type=int, help="开放平台应用的 AppID")
 parser.add_argument("-o", "--strm-origin", help="[WEBDAV] origin 或者说 base_url，用来拼接路径，获取完整链接，默认行为是自行确定")
 parser.add_argument("-t", "--ttl", default=0, type=float, help="""缓存存活时间
     - 如果等于 0（默认值），则总是更新
@@ -308,6 +309,7 @@ def main(argv: None | list[str] | Namespace = None, /):
         strm_origin=args.strm_origin, 
         predicate=predicate, 
         strm_predicate=strm_predicate, 
+        app_id=args.app_id, 
         load_libass=args.load_libass, 
         cache_url=args.cache_url, 
         debug=args.debug, 

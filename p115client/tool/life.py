@@ -73,7 +73,7 @@ def life_show(
 
     :return: 接口返回值
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     return client.life_calendar_setoption(async_=async_, **request_kwargs)
 
@@ -121,7 +121,7 @@ def iter_life_list(
 
     :return: 迭代器，产生 115 生活操作事件日志数据字典
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     life_list = partial(client.life_list, app=app, **request_kwargs)
     life_behavior_detail = partial(client.life_behavior_detail_app, **request_kwargs)
@@ -238,7 +238,7 @@ def iter_life_behavior_once(
 
     :return: 迭代器，产生 115 生活操作事件日志数据字典
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if app in ("", "web", "desktop", "harmony"):
         life_behavior_detail = partial(client.life_behavior_detail, **request_kwargs)
@@ -342,7 +342,7 @@ def iter_life_behavior(
 
     :return: 迭代器，产生 115 生活操作事件日志数据字典
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     def gen_step():
         nonlocal from_time, from_id
@@ -442,7 +442,7 @@ def iter_life_behavior_list(
 
     :return: 迭代器，产生 115 生活操作事件日志数据字典
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     def gen_step():
         nonlocal from_time, from_id

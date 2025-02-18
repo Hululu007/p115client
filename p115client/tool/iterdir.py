@@ -266,7 +266,7 @@ def get_path_to_cid(
 
     :return: 目录对应的绝对路径或相对路径
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if isinstance(escape, bool):
         if escape:
@@ -349,7 +349,7 @@ def get_file_count(
 
     :return: 目录内的文件总数（不包括目录）
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
@@ -481,7 +481,7 @@ def get_ancestors(
                 "name": str, # 名字
             }
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
@@ -626,7 +626,7 @@ def get_ancestors_to_cid(
                 "name": str, # 名字
             }
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
@@ -723,7 +723,7 @@ def get_id_to_path(
 
     :return: 文件或目录的 id
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
@@ -931,7 +931,7 @@ def get_id_to_pickcode(
 ) -> P115ID | Coroutine[Any, Any, P115ID]:
     if not 17 <= len(pickcode) <= 18 or not pickcode.isalnum():
         raise ValueError(f"bad pickcode: {pickcode!r}")
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     def gen_step():
         resp = yield client.download_url_web(pickcode, base_url=True, async_=async_, **request_kwargs)
@@ -970,7 +970,7 @@ def get_id_to_sha1(
 ) -> P115ID | Coroutine[Any, Any, P115ID]:
     if len(sha1) != 40 or sha1.strip(hexdigits):
         raise ValueError(f"bad sha1: {sha1!r}")
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     def gen_step():
         resp = yield client.fs_shasearch(sha1, base_url=True, async_=async_, **request_kwargs)
@@ -1018,7 +1018,7 @@ def iter_nodes_skim(
 
     :return: 迭代器，获取节点的简略信息
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     def gen_step():
         file_skim = client.fs_file_skim
@@ -1119,7 +1119,7 @@ def _iter_fs_files(
         payload["nf"] = 1
     if payload.get("type") == 99:
         payload.pop("type", None)
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
@@ -1457,7 +1457,7 @@ def ensure_attr_path[D: dict](
             return iter(attrs)
     if make_up_missing and not isinstance(attrs, Collection):
         attrs = tuple(attrs)
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if page_size <= 0:
         page_size = 10_000
@@ -1638,7 +1638,7 @@ def ensure_attr_path_by_category_get[D: dict](
         if async_:
             return ensure_aiter(attrs)
         return attrs # type: ignore
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
@@ -1982,7 +1982,7 @@ def iterdir(
 
     :return: 迭代器，返回此目录内的文件信息（文件和目录）
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if isinstance(escape, bool):
         if escape:
@@ -2091,7 +2091,7 @@ def iterdir_limited(
 
     :return: 迭代器，返回此目录内的文件信息（文件和目录）
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if isinstance(escape, bool):
         if escape:
@@ -2466,7 +2466,7 @@ def iter_files(
 
     :return: 迭代器，返回此目录内的（仅文件）文件信息
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if isinstance(escape, bool):
         if escape:
@@ -2697,7 +2697,7 @@ def traverse_files(
         raise ValueError("please set the non-zero value of suffix or type")
     if suffix:
         suffix = "." + suffix.lower()
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
@@ -3007,7 +3007,7 @@ def iter_image_files(
         attr["id"] = attr["file_id"]
         attr["name"] = attr["file_name"]
         return attr
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if page_size <= 0:
         page_size = 8192
@@ -3124,7 +3124,7 @@ def share_iterdir(
 
     :return: 迭代器，被打上星标的目录信息
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if page_size < 0:
         page_size = 10_000
@@ -3221,7 +3221,7 @@ def share_iter_files(
             }
 
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     def gen_step():
         payload: dict = cast(dict, share_extract_payload(share_link))
@@ -3310,7 +3310,7 @@ def iter_selected_nodes(
 
     :return: 迭代器，产生详细的信息
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
@@ -3333,11 +3333,25 @@ def iter_selected_nodes(
         return normalize_attr(info)
     if async_:
         request_kwargs["async_"] = True
-        return async_filter(None, async_map(project, taskgroup_map( # type: ignore
-            client.fs_file, ids, max_workers=max_workers, kwargs=request_kwargs)))
+        return async_filter(None, async_map(
+            project, # type: ignore
+            taskgroup_map(
+                client.fs_file, # type: ignore
+                ids, 
+                max_workers=max_workers, 
+                kwargs=request_kwargs, 
+            ), 
+        ))
     else:
-        return filter(None, map(project, threadpool_map(
-            client.fs_file, ids, max_workers=max_workers, kwargs=request_kwargs)))
+        return filter(None, map(
+            project, 
+            threadpool_map(
+                client.fs_file, 
+                ids, 
+                max_workers=max_workers, 
+                kwargs=request_kwargs, 
+            ), 
+        ))
 
 
 @overload
@@ -3393,7 +3407,7 @@ def iter_selected_nodes_by_pickcode(
 
     :return: 迭代器，产生详细的信息
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
@@ -3500,7 +3514,7 @@ def iter_selected_nodes_using_edit(
 
     :return: 迭代器，产生详细的信息
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
@@ -3521,11 +3535,25 @@ def iter_selected_nodes_using_edit(
     args_it = ({"file_id": fid, "show_play_long": 1} for fid in ids)
     if async_:
         request_kwargs["async_"] = True
-        return async_filter(None, async_map(project, taskgroup_map( # type: ignore
-            client.fs_edit_app, args_it, max_workers=max_workers, kwargs=request_kwargs)))
+        return async_filter(None, async_map(
+            project, # type: ignore
+            taskgroup_map(
+                client.fs_edit_app, # type: ignore
+                args_it, 
+                max_workers=max_workers, 
+                kwargs=request_kwargs, 
+            ), 
+        ))
     else:
-        return filter(None, map(project, threadpool_map(
-            client.fs_edit_app, args_it, max_workers=max_workers, kwargs=request_kwargs)))
+        return filter(None, map(
+            project, 
+            threadpool_map(
+                client.fs_edit_app, 
+                args_it, 
+                max_workers=max_workers, 
+                kwargs=request_kwargs, 
+            ), 
+        ))
 
 
 @overload
@@ -3573,7 +3601,7 @@ def iter_selected_nodes_using_category_get(
 
     :return: 迭代器，产生详细的信息
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
@@ -3687,7 +3715,7 @@ def iter_selected_nodes_using_star_event(
                 "type": int, 
             }
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
@@ -3828,7 +3856,7 @@ def iter_selected_dirs_using_star(
 
     :return: 迭代器，产生详细的信息
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     def gen_step():
         nonlocal ids
@@ -3978,7 +4006,7 @@ def iter_files_with_dirname(
         payload["suffix"] = suffix
     elif type != 99:
         payload["type"] = type
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     request_kwargs.update(
         page_size=page_size, 
@@ -4181,7 +4209,7 @@ def iter_files_with_path(
     suffix = suffix.strip(".")
     if not (type or suffix):
         raise ValueError("please set the non-zero value of suffix or type")
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if isinstance(escape, bool):
         if escape:
@@ -4380,7 +4408,7 @@ def iter_files_with_path_by_export_dir(
     :return: 迭代器，返回此目录内的（仅文件）文件信息
     """
     from .export_dir import export_dir, export_dir_parse_iter, parse_export_dir_as_patht_iter
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if isinstance(escape, bool):
         if escape:
@@ -4619,7 +4647,7 @@ def iter_parents_3_level(
 
     :return: 迭代器，产生 id 和 最近 3 级目录名的元组的 2 元组
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     def fix_overflow(t: tuple[str, ...], /) -> tuple[str, ...]:
         try:
@@ -4719,7 +4747,7 @@ def iter_dir_nodes(
 
     :return: 迭代器，返回此目录内的（仅目录）文件信息
     """
-    if not isinstance(client, P115Client):
+    if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if id_to_dirnode is None:
         id_to_dirnode = ID_TO_DIRNODE_CACHE[client.user_id]
