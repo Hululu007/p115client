@@ -3976,51 +3976,6 @@ class P115OpenClient(ClientRequestMixin):
                 )
         return run_gen_step(gen_step, async_=async_)
 
-    @overload
-    def vip_qr_url(
-        self, 
-        payload: dict, 
-        /, 
-        base_url: bool | str | Callable[[], str] = False, 
-        *, 
-        async_: Literal[False] = False, 
-        **request_kwargs, 
-    ) -> dict:
-        ...
-    @overload
-    def vip_qr_url(
-        self, 
-        payload: dict, 
-        /, 
-        base_url: bool | str | Callable[[], str] = False, 
-        *, 
-        async_: Literal[True], 
-        **request_kwargs, 
-    ) -> Coroutine[Any, Any, dict]:
-        ...
-    def vip_qr_url(
-        self, 
-        payload: dict, 
-        /, 
-        base_url: bool | str | Callable[[], str] = False, 
-        *, 
-        async_: Literal[False, True] = False, 
-        **request_kwargs, 
-    ) -> dict | Coroutine[Any, Any, dict]:
-        """获取开放平台产品列表
-
-        GET https://proapi.115.com/open/vip/qr_url
-
-        .. note::
-            https://www.yuque.com/115yun/open/yifbvxan6szytyng
-
-        :payload:
-            - open_device: int | str 💡 设备号
-            - default_product_id: int | str 💡 默认产品ID
-        """
-        api = complete_proapi("/open/vip/qr_url", base_url)
-        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
-
     download_url_open = download_url
     download_url_info_open = download_url_info
     fs_copy_open = fs_copy
@@ -4040,7 +3995,6 @@ class P115OpenClient(ClientRequestMixin):
     user_info_open = user_info
     upload_file_init_open = upload_file_init
     upload_file_open = upload_file
-    vip_qr_url_open = vip_qr_url
 
 
 class P115Client(P115OpenClient):
@@ -17251,9 +17205,9 @@ class P115Client(P115OpenClient):
             return P115URL(
                 url["url"] if url else "", 
                 id=int(info["fid"]), 
-                sha1=info.get("sha1", ""), 
                 name=info["fn"], 
                 size=int(info["fs"]), 
+                sha1=info.get("sha1", ""), 
                 is_directory=not url, 
             )
         if async_:
@@ -17585,11 +17539,11 @@ class P115Client(P115OpenClient):
         :payload:
             - share_code: str
             - receive_code: str
-            - file_id: int | str             💡 有多个时，用逗号 "," 分隔
-            - cid: int | str = <default>     💡 这是你网盘的目录 cid
+            - file_id: int | str         💡 有多个时，用逗号 "," 分隔
+            - cid: int | str = <default> 💡 这是你网盘的目录 cid
+            - is_check: 0 | 1 = <default>
         """
         api = complete_webapi("/share/receive", base_url=base_url)
-        payload = {"cid": 0, **payload}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -17633,11 +17587,11 @@ class P115Client(P115OpenClient):
         :payload:
             - share_code: str
             - receive_code: str
-            - file_id: int | str             💡 有多个时，用逗号 "," 分隔
-            - cid: int | str = <default>     💡 这是你网盘的目录 cid
+            - file_id: int | str         💡 有多个时，用逗号 "," 分隔
+            - cid: int | str = <default> 💡 这是你网盘的目录 cid
+            - is_check: 0 | 1 = <default>
         """
         api = complete_proapi("/2.0/share/receive", base_url, app)
-        payload = {"cid": 0, **payload}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
@@ -17793,7 +17747,7 @@ class P115Client(P115OpenClient):
         .. attention::
             最多只能取回前 10,000 条数据，也就是 limit + offset <= 10_000
 
-        :param payload:
+        :payload:
             - share_code: str    💡 分享码
             - receive_code: str  💡 接收码（即密码）
             - cid: int | str = 0 💡 目录 id
@@ -17816,6 +17770,50 @@ class P115Client(P115OpenClient):
         api = complete_webapi("/share/search", base_url=base_url)
         payload = {"cid": 0, "limit": 32, "offset": 0, "search_value": ".", **payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def share_skip_login_check(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def share_skip_login_check(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def share_skip_login_check(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """检查是否可免登录下载
+
+        POST https://webapi.115.com/share/is_skip_login
+
+        :payload:
+            - share_code: str        💡 分享码
+            - receive_code: str      💡 接收码（访问密码）
+            - file_id: int | str = 1 💡 文件 id（可以随便填一个非 0 的值）
+        """
+        api = complete_webapi("/share/is_skip_login", base_url=base_url)
+        payload.setdefault("file_id", 1)
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
     def share_skip_login_down(
@@ -17852,7 +17850,7 @@ class P115Client(P115OpenClient):
 
         POST https://webapi.115.com/share/skip_login_down
 
-        :param payload:
+        :payload:
             - share_code: str       💡 分享码
             - skip_login: 0 | 1 = 1 💡 是否开启
         """
@@ -17862,6 +17860,248 @@ class P115Client(P115OpenClient):
         else:
             payload = {"skip_login": 1, **payload}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def share_skip_login_download_url(
+        self, 
+        payload: int | str | dict, 
+        /, 
+        url: str = "", 
+        strict: bool = True, 
+        use_web_api: bool = False, 
+        app: str = "", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> P115URL:
+        ...
+    @overload
+    def share_skip_login_download_url(
+        self, 
+        payload: int | str | dict, 
+        /, 
+        url: str = "", 
+        strict: bool = True, 
+        use_web_api: bool = False, 
+        app: str = "", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, P115URL]:
+        ...
+    def share_skip_login_download_url(
+        self, 
+        payload: int | str | dict, 
+        /, 
+        url: str = "", 
+        strict: bool = True, 
+        use_web_api: bool = False, 
+        app: str = "", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> P115URL | Coroutine[Any, Any, P115URL]:
+        """获取分享链接中某个文件的下载链接
+
+        :param payload: 请求参数，如果为 int 或 str，则视为 `file_id`
+
+            - file_id: int | str 💡 文件 id
+            - receive_code: str  💡 接收码（访问密码）
+            - share_code: str    💡 分享码
+
+        :param url: 分享链接，如果提供的话，会被拆解并合并到 `payload` 中，优先级较高
+        :param strict: 如果为 True，当目标是目录时，会抛出 IsADirectoryError 异常
+        :param use_web_api: 是否使用网页版接口执行请求（优先级高于 `app`）
+        :param app: 使用此设备的接口
+        :param async_: 是否异步
+        :param request_kwargs: 其它请求参数
+
+        :return: 下载链接
+        """
+        if isinstance(payload, (int, str)):
+            payload = {"file_id": payload}
+        else:
+            payload = dict(payload)
+        if url:
+            from .tool import share_extract_payload
+            share_payload = share_extract_payload(url)
+            payload["share_code"] = share_payload["share_code"]
+            payload["receive_code"] = share_payload["receive_code"] or ""
+        if use_web_api:
+            resp = self.share_skip_login_download_url_web(payload, async_=async_, **request_kwargs)
+        else:
+            resp = self.share_skip_login_download_url_app(payload, app=app, async_=async_, **request_kwargs)
+        def get_url(resp: dict, /) -> P115URL:
+            info = check_response(resp)["data"]
+            file_id = payload["file_id"]
+            if not info:
+                raise FileNotFoundError(
+                    errno.ENOENT, 
+                    f"no such id: {file_id!r}, with response {resp}", 
+                )
+            url = info["url"]
+            if strict and not url:
+                raise IsADirectoryError(
+                    errno.EISDIR, 
+                    f"{file_id} is a directory, with response {resp}", 
+                )
+            return P115URL(
+                url["url"] if url else "", 
+                id=int(info["fid"]), 
+                name=info["fn"], 
+                size=int(info["fs"]), 
+                sha1=info.get("sha1", ""), 
+                is_directory=not url, 
+            )
+        if async_:
+            async def async_request() -> P115URL:
+                return get_url(await cast(Coroutine[Any, Any, dict], resp)) 
+            return async_request()
+        else:
+            return get_url(cast(dict, resp))
+
+    @overload
+    def share_skip_login_download_url_app(
+        self, 
+        payload: dict, 
+        /, 
+        app: str = "", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def share_skip_login_download_url_app(
+        self, 
+        payload: dict, 
+        /, 
+        app: str = "", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def share_skip_login_download_url_app(
+        self, 
+        payload: dict, 
+        /, 
+        app: str = "", 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取免登录下载链接
+
+        POST https://proapi.115.com/app/share/skip_login_downurl
+
+        :payload:
+            - file_id: int | str
+            - receive_code: str
+            - share_code: str
+        """
+        if app:
+            api = complete_proapi("/2.0/share/skip_login_downurl", base_url, app)
+            return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+        else:
+            api = complete_proapi("/app/share/skip_login_downurl", base_url)
+            def parse(resp, content: bytes, /) -> dict:
+                resp = json_loads(content)
+                if resp["state"]:
+                    resp["data"] = json_loads(rsa_decode(resp["data"]))
+                return resp
+            request_kwargs.setdefault("parse", parse)
+            payload = {"data": rsa_encode(dumps(payload)).decode()}
+            return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def share_skip_login_download_url_web(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def share_skip_login_download_url_web(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def share_skip_login_download_url_web(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取免登录下载链接
+
+        POST https://webapi.115.com/share/skip_login_downurl
+
+        :payload:
+            - share_code: str    💡 分享码
+            - receive_code: str  💡 接收码（访问密码）
+            - file_id: int | str 💡 文件 id
+        """
+        api = complete_webapi("/share/skip_login_downurl", base_url=base_url)
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def share_skip_login_down_first(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def share_skip_login_down_first(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def share_skip_login_down_first(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """免登录下载信息
+
+        GET https://webapi.115.com/share/skip_login_down_first
+
+        :payload:
+            - share_code: str 💡 分享码
+        """
+        api = complete_webapi("/share/skip_login_down_first", base_url=base_url)
+        if isinstance(payload, str):
+            payload = {"share_code": payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
     def share_skip_login_down_details(
@@ -17898,7 +18138,7 @@ class P115Client(P115OpenClient):
 
         GET https://webapi.115.com/share/skip_login_down_details
 
-        :param payload:
+        :payload:
             - start_time: str = <default> 💡 开始时间，格式为 "YYYY-MM-DD hh:mm:ss"，默认为今天零点
             - end_time: str = <default>   💡 结束时间（含），默认为明天零点
             - share_code: str = ""        💡 分享码，如果为空则统计所有分享
@@ -17916,11 +18156,10 @@ class P115Client(P115OpenClient):
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
-    @staticmethod
     def share_snap(
-        payload: dict, 
+        self: dict | P115Client, 
+        payload: None | dict = None, 
         /, 
-        request: None | Callable = None, 
         base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
@@ -17928,22 +18167,20 @@ class P115Client(P115OpenClient):
     ) -> dict:
         ...
     @overload
-    @staticmethod
     def share_snap(
-        payload: dict, 
+        self: dict | P115Client, 
+        payload: None | dict = None, 
         /, 
-        request: None | Callable = None, 
         base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
         ...
-    @staticmethod
     def share_snap(
-        payload: dict, 
+        self: dict | P115Client, 
+        payload: None | dict = None, 
         /, 
-        request: None | Callable = None, 
         base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
@@ -17952,6 +18189,11 @@ class P115Client(P115OpenClient):
         """获取分享链接的某个目录中的文件和子目录的列表（包含详细信息）
 
         GET https://webapi.115.com/share/snap
+
+        .. important::
+            这个函数可以作为 staticmethod 使用，只要 `self` 为 dict 类型，此时不需要登录
+
+            否则，就是登录状态，但如果这个分享是你自己的，则可以不提供 receive_code，而且即使还在审核中，也能获取文件列表
 
         :payload:
             - share_code: str
@@ -17967,17 +18209,25 @@ class P115Client(P115OpenClient):
               - "user_ptime": 创建时间/修改时间
         """
         api = complete_webapi("/share/snap", base_url=base_url)
-        payload = {"cid": 0, "limit": 32, "offset": 0, **payload}
-        request_kwargs.setdefault("parse", default_parse)
-        if request is None:
-            return get_default_request()(url=api, params=payload, async_=async_, **request_kwargs)
+        if isinstance(self, dict):
+            payload = self
         else:
-            return request(url=api, params=payload, **request_kwargs)
+            assert payload is not None
+        payload = {"cid": 0, "limit": 32, "offset": 0, **payload}
+        if isinstance(self, P115Client):
+            return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+        else:
+            request_kwargs.setdefault("parse", default_parse)
+            request = request_kwargs.pop("request", None)
+            if request is None:
+                return get_default_request()(url=api, params=payload, async_=async_, **request_kwargs)
+            else:
+                return request(url=api, params=payload, **request_kwargs)
 
     @overload
-    @staticmethod
     def share_snap_app(
-        payload: dict, 
+        self: dict | P115Client, 
+        payload: None | dict = None, 
         /, 
         request: None | Callable = None, 
         app: str = "android", 
@@ -17988,9 +18238,9 @@ class P115Client(P115OpenClient):
     ) -> dict:
         ...
     @overload
-    @staticmethod
     def share_snap_app(
-        payload: dict, 
+        self: dict | P115Client, 
+        payload: None | dict = None, 
         /, 
         request: None | Callable = None, 
         app: str = "android", 
@@ -18000,9 +18250,9 @@ class P115Client(P115OpenClient):
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
         ...
-    @staticmethod
     def share_snap_app(
-        payload: dict, 
+        self: dict | P115Client, 
+        payload: None | dict = None, 
         /, 
         request: None | Callable = None, 
         app: str = "android", 
@@ -18014,6 +18264,11 @@ class P115Client(P115OpenClient):
         """获取分享链接的某个目录中的文件和子目录的列表（包含详细信息）
 
         GET https://proapi.115.com/android/2.0/share/snap
+
+        .. important::
+            这个函数可以作为 staticmethod 使用，只要 `self` 为 dict 类型，此时不需要登录
+
+            否则，就是登录状态，但如果这个分享是你自己的，则可以不提供 receive_code，而且即使还在审核中，也能获取文件列表
 
         :payload:
             - share_code: str
@@ -18029,12 +18284,20 @@ class P115Client(P115OpenClient):
               - "user_ptime": 创建时间/修改时间
         """
         api = complete_proapi("/2.0/share/snap", base_url, app)
-        payload = {"cid": 0, "limit": 32, "offset": 0, **payload}
-        request_kwargs.setdefault("parse", default_parse)
-        if request is None:
-            return get_default_request()(url=api, params=payload, async_=async_, **request_kwargs)
+        if isinstance(self, dict):
+            payload = self
         else:
-            return request(url=api, params=payload, **request_kwargs)
+            assert payload is not None
+        payload = {"cid": 0, "limit": 32, "offset": 0, **payload}
+        if isinstance(self, P115Client):
+            return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+        else:
+            request_kwargs.setdefault("parse", default_parse)
+            request = request_kwargs.pop("request", None)
+            if request is None:
+                return get_default_request()(url=api, params=payload, async_=async_, **request_kwargs)
+            else:
+                return request(url=api, params=payload, **request_kwargs)
 
     @overload
     def share_update(
@@ -18073,14 +18336,16 @@ class P115Client(P115OpenClient):
 
         :payload:
             - share_code: str
-            - receive_code: str = <default>         💡 访问密码（口令）
-            - share_duration: int = <default>       💡 分享天数: 1(1天), 7(7天), -1(长期)
+            - receive_code: str = <default>         💡 接收码（访问密码）
+            - share_duration: int = <default>       💡 分享天数: n（填入指定天数），-1(长期)
             - is_custom_code: 0 | 1 = <default>     💡 用户自定义口令（不用管）
             - auto_fill_recvcode: 0 | 1 = <default> 💡 分享链接自动填充口令（不用管）
             - share_channel: int = <default>        💡 分享渠道代码（不用管）
             - action: str = <default>               💡 操作: 取消分享 "cancel"
             - skip_login_down_flow_limit: "" | int  = <default> 💡 设置免登录下载限制流量，如果为 "" 则不限，单位: 字节
             - access_user_ids = int | str = <default> 💡 设置访问账号，多个用逗号 "," 隔开
+            - receive_user_limit: int = <default> 💡 接收次数
+            - reset_receive_user: 0 | 1 = <default> 💡 重置接收次数
         """
         api = complete_webapi("/share/updateshare", base_url=base_url)
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
@@ -18125,14 +18390,16 @@ class P115Client(P115OpenClient):
 
         :payload:
             - share_code: str
-            - receive_code: str = <default>         💡 访问密码（口令）
-            - share_duration: int = <default>       💡 分享天数: 1(1天), 7(7天), -1(长期)
+            - receive_code: str = <default>         💡 接收码（访问密码）
+            - share_duration: int = <default>       💡 分享天数: n（填入指定天数），-1(长期)
             - is_custom_code: 0 | 1 = <default>     💡 用户自定义口令（不用管）
             - auto_fill_recvcode: 0 | 1 = <default> 💡 分享链接自动填充口令（不用管）
             - share_channel: int = <default>        💡 分享渠道代码（不用管）
             - action: str = <default>               💡 操作: 取消分享 "cancel"
             - skip_login_down_flow_limit: "" | int  = <default> 💡 设置免登录下载限制流量，如果为 "" 则不限，单位: 字节
             - access_user_ids = int | str = <default> 💡 设置访问账号，多个用逗号 "," 隔开
+            - receive_user_limit: int = <default> 💡 接收次数
+            - reset_receive_user: 0 | 1 = <default> 💡 重置接收次数
         """
         api = complete_proapi("/2.0/share/updateshare", base_url, app)
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
@@ -20389,3 +20656,5 @@ for name, method in P115Client.__dict__.items():
         CLIENT_API_MAP[match[1]] = "P115Client." + name
 
 # TODO: 提供一个可随时终止和暂停的上传功能，并且可以输出进度条和获取进度
+# TODO: 更新一下，p115client._upload，做更多的封装，至少让断点续传更易于使用
+
