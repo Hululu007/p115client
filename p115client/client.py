@@ -9,15 +9,14 @@ __all__ = [
     "normalize_attr_app", "normalize_attr_app2", "P115OpenClient", "P115Client", 
 ]
 
-import errno
-
-from asyncio import create_task, get_running_loop, run_coroutine_threadsafe, to_thread, Lock as AsyncLock
+from asyncio import Lock as AsyncLock
 from base64 import b64encode
 from collections.abc import (
     AsyncGenerator, AsyncIterable, Awaitable, Buffer, Callable, Coroutine, Generator, 
     ItemsView, Iterable, Iterator, Mapping, MutableMapping, Sequence, 
 )
 from datetime import date, datetime, timedelta
+from errno import EBUSY, EEXIST, EFBIG, EINVAL, EIO, EISDIR, ENODATA, ENOENT, ENOSPC, ENOSYS, ENOTSUP
 from functools import partial
 from hashlib import md5, sha1
 from http.cookiejar import Cookie, CookieJar
@@ -230,7 +229,7 @@ def json_loads(content: Buffer, /):
     except Exception as e:
         if isinstance(content, memoryview):
             content = content.tobytes()
-        raise DataError(errno.ENODATA, content) from e
+        raise DataError(ENODATA, content) from e
 
 
 def default_parse(resp, content: Buffer, /):
@@ -281,35 +280,6 @@ def items(m: Mapping, /) -> ItemsView:
     except (AttributeError, TypeError):
         pass
     return ItemsView(m)
-
-
-def file_close(file, /, async_: bool = False):
-    cls = type(file)
-    if async_:
-        aclose = getattr(file, "aclose", None)
-        if callable(aclose):
-            return aclose()
-        aeixt = getattr(cls, "__aexit__", None)
-        if callable(aeixt):
-            return aeixt(file, *exc_info())
-    close = getattr(file, "close", None)
-    if callable(close):
-        if async_:
-            return ensure_async(close, threaded=True)()
-        else:
-            return close()
-    exit = getattr(cls, "__exit__", None)
-    if callable(exit):
-        if async_:
-            return ensure_async(exit, threaded=True)(file, *exc_info())
-        else:
-            return exit(file, *exc_info())
-    deleter = getattr(cls, "__del__", None)
-    if callable(deleter):
-        if async_:
-            return ensure_async(deleter, threaded=True)(file)
-        else:
-            return deleter(file)
 
 
 def cookies_equal(cookies1: None | str, cookies2: None | str, /) -> bool:
@@ -380,7 +350,7 @@ def check_response(resp: dict | Awaitable[dict], /) -> dict | Coroutine[Any, Any
     """
     def check(resp, /) -> dict:
         if not isinstance(resp, dict):
-            raise P115OSError(errno.EIO, resp)
+            raise P115OSError(EIO, resp)
         if resp.get("state", True):
             return resp
         if code := get_first(resp, "errno", "errNo", "errcode", "errCode", "code"):
@@ -390,108 +360,109 @@ def check_response(resp: dict | Awaitable[dict], /) -> dict | Coroutine[Any, Any
             match code:
                 # {"state": false, "errno": 99, "error": "请重新登录"}
                 case 99:
-                    raise LoginError(errno.EIO, resp)
+                    raise LoginError(EIO, resp)
                 # {"state": false, "errno": 911, "error": "请验证账号"}
                 case 911:
-                    raise AuthenticationError(errno.EIO, resp)
+                    raise AuthenticationError(EIO, resp)
                 # {"state": false, "errno": 20001, "error": "目录名称不能为空"}
                 case 20001:
-                    raise OperationalError(errno.EINVAL, resp)
+                    raise OperationalError(EINVAL, resp)
                 # {"state": false, "errno": 20004, "error": "该目录名称已存在。"}
                 case 20004:
-                    raise FileExistsError(errno.EEXIST, resp)
+                    raise FileExistsError(EEXIST, resp)
                 # {"state": false, "errno": 20009, "error": "父目录不存在。"}
                 case 20009:
-                    raise FileNotFoundError(errno.ENOENT, resp)
+                    raise FileNotFoundError(ENOENT, resp)
                 # {"state": false, "errno": 20018, "error": "文件不存在或已删除。"}
                 # {"state": false, "errno": 50015, "error": "文件不存在或已删除。"}
-                case 20018 | 50015:
-                    raise FileNotFoundError(errno.ENOENT, resp)
+                # {"state": false, "errno": 430004, "error": "文件（夹）不存在或已删除。"}
+                case 20018 | 50015 | 430004:
+                    raise FileNotFoundError(ENOENT, resp)
                 # {"state": false, "errno": 20020, "error": "后缀名不正确，请重新输入"}
                 case 20020:
-                    raise OperationalError(errno.ENOTSUP, resp)
+                    raise OperationalError(ENOTSUP, resp)
                 # {"state": false, "errno": 20021, "error": "后缀名不正确，请重新输入"}
                 case 20021:
-                    raise OperationalError(errno.ENOTSUP, resp)
+                    raise OperationalError(ENOTSUP, resp)
                 # {"state": false, "errno": 31001, "error": "所预览的文件不存在。"}
                 case 31001:
-                    raise FileNotFoundError(errno.ENOENT, resp)
+                    raise FileNotFoundError(ENOENT, resp)
                 # {"state": false, "errno": 31004, "error": "文档未上传完整，请上传完成后再进行查看。"}
                 case 31004:
-                    raise FileNotFoundError(errno.ENOENT, resp)
+                    raise FileNotFoundError(ENOENT, resp)
                 # {"state": false, "errno": 50003, "error": "很抱歉，该文件提取码不存在。"}
                 case 50003:
-                    raise FileNotFoundError(errno.ENOENT, resp)
+                    raise FileNotFoundError(ENOENT, resp)
                 # {"state": false, "errno": 90008, "error": "文件（夹）不存在或已经删除。"}
                 case 90008:
-                    raise FileNotFoundError(errno.ENOENT, resp)
+                    raise FileNotFoundError(ENOENT, resp)
                 # {"state": false, "errno": 91002, "error": "不能将文件复制到自身或其子目录下。"}
                 case 91002:
-                    raise NotSupportedError(errno.ENOTSUP, resp)
+                    raise NotSupportedError(ENOTSUP, resp)
                 # {"state": false, "errno": 91004, "error": "操作的文件(夹)数量超过5万个"}
                 case 91004:
-                    raise NotSupportedError(errno.ENOTSUP, resp)
+                    raise NotSupportedError(ENOTSUP, resp)
                 # {"state": false, "errno": 91005, "error": "空间不足，复制失败。"}
                 case 91005:
-                    raise OperationalError(errno.ENOSPC, resp)
+                    raise OperationalError(ENOSPC, resp)
                 # {"state": false, "errno": 231011, "error": "文件已删除，请勿重复操作"}
                 case 231011:
-                    raise FileNotFoundError(errno.ENOENT, resp)
+                    raise FileNotFoundError(ENOENT, resp)
                 # {"state": false, "errno": 300104, "error": "文件超过200MB，暂不支持播放"}
                 case 300104:
-                    raise P115OSError(errno.EFBIG, resp)
+                    raise P115OSError(EFBIG, resp)
                 # {"state": false, "errno": 590075, "error": "操作太频繁，请稍候再试"}
                 case 590075:
-                    raise BusyOSError(errno.EBUSY, resp)
+                    raise BusyOSError(EBUSY, resp)
                 # {"state": false, "errno": 800001, "error": "目录不存在。"}
                 case 800001:
-                    raise FileNotFoundError(errno.ENOENT, resp)
+                    raise FileNotFoundError(ENOENT, resp)
                 # {"state": false, "errno": 980006, "error": "404 Not Found"}
                 case 980006:
-                    raise NotSupportedError(errno.ENOSYS, resp)
+                    raise NotSupportedError(ENOSYS, resp)
                 # {"state": false, "errno": 990001, "error": "登陆超时，请重新登陆。"}
                 case 990001:
                     # NOTE: 可能就是被下线了
-                    raise AuthenticationError(errno.EIO, resp)
+                    raise AuthenticationError(EIO, resp)
                 # {"state": false, "errno": 990002, "error": "参数错误。"}
                 case 990002:
-                    raise P115OSError(errno.EINVAL, resp)
+                    raise P115OSError(EINVAL, resp)
                 # {"state": false, "errno": 990003, "error": "操作失败。"}
                 case 990003:
-                    raise OperationalError(errno.EIO, resp)
+                    raise OperationalError(EIO, resp)
                 # {"state": false, "errno": 990005, "error": "你的账号有类似任务正在处理，请稍后再试！"}
                 case 990005:
-                    raise BusyOSError(errno.EBUSY, resp)
+                    raise BusyOSError(EBUSY, resp)
                 # {"state": false, "errno": 990009, "error": "删除[...]操作尚未执行完成，请稍后再试！"}
                 # {"state": false, "errno": 990009, "error": "还原[...]操作尚未执行完成，请稍后再试！"}
                 # {"state": false, "errno": 990009, "error": "复制[...]操作尚未执行完成，请稍后再试！"}
                 # {"state": false, "errno": 990009, "error": "移动[...]操作尚未执行完成，请稍后再试！"}
                 case 990009:
-                    raise BusyOSError(errno.EBUSY, resp)
+                    raise BusyOSError(EBUSY, resp)
                 # {"state": false, "errno": 990023, "error": "操作的文件(夹)数量超过5万个"}
                 case 990023:
-                    raise OperationalError(errno.ENOTSUP, resp)
+                    raise OperationalError(ENOTSUP, resp)
                 # {"state": 0, "errno": 40100000, "error": "参数错误！"}
                 case 40100000:
-                    raise OperationalError(errno.EINVAL, resp)
+                    raise OperationalError(EINVAL, resp)
                 # {"state": 0, "errno": 40101004, "error": "IP登录异常,请稍候再登录！"}
                 case 40101004:
-                    raise LoginError(errno.EIO, resp)
+                    raise LoginError(EIO, resp)
                 # {"state": 0, "errno": 40101017, "error": "用户验证失败！"}
                 case 40101017:
-                    raise AuthenticationError(errno.EIO, resp)
+                    raise AuthenticationError(EIO, resp)
                 # {"state": 0, "errno": 40101032, "error": "请重新登录"}
                 case 40101032:
-                    raise LoginError(errno.EIO, resp)
+                    raise LoginError(EIO, resp)
         elif "msg_code" in resp:
             match resp["msg_code"]:
                 case 50028:
-                    raise P115OSError(errno.EFBIG, resp)
+                    raise P115OSError(EFBIG, resp)
                 case 70004:
-                    raise IsADirectoryError(errno.EISDIR, resp)
+                    raise IsADirectoryError(EISDIR, resp)
                 case 70005 | 70008:
-                    raise FileNotFoundError(errno.ENOENT, resp)
-        raise P115OSError(errno.EIO, resp)
+                    raise FileNotFoundError(ENOENT, resp)
+        raise P115OSError(EIO, resp)
     if isinstance(resp, dict):
         return check(resp)
     elif isawaitable(resp):
@@ -499,7 +470,7 @@ def check_response(resp: dict | Awaitable[dict], /) -> dict | Coroutine[Any, Any
             return check(await resp)
         return check_await()
     else:
-        raise P115OSError(errno.EIO, resp)
+        raise P115OSError(EIO, resp)
 
 
 def normalize_attr_web(
@@ -1773,11 +1744,11 @@ class ClientRequestMixin:
                         print("[status=2] qrcode: signed in")
                         break
                     case -1:
-                        raise LoginError(errno.EIO, "[status=-1] qrcode: expired")
+                        raise LoginError(EIO, "[status=-1] qrcode: expired")
                     case -2:
-                        raise LoginError(errno.EIO, "[status=-2] qrcode: canceled")
+                        raise LoginError(EIO, "[status=-2] qrcode: canceled")
                     case _:
-                        raise LoginError(errno.EIO, f"qrcode: aborted with {resp!r}")
+                        raise LoginError(EIO, f"qrcode: aborted with {resp!r}")
             if app:
                 return cls.login_qrcode_scan_result(
                     login_uid, 
@@ -1871,11 +1842,11 @@ class ClientRequestMixin:
                         print("[status=2] qrcode: signed in")
                         break
                     case -1:
-                        raise LoginError(errno.EIO, "[status=-1] qrcode: expired")
+                        raise LoginError(EIO, "[status=-1] qrcode: expired")
                     case -2:
-                        raise LoginError(errno.EIO, "[status=-2] qrcode: canceled")
+                        raise LoginError(EIO, "[status=-2] qrcode: canceled")
                     case _:
-                        raise LoginError(errno.EIO, f"qrcode: aborted with {resp!r}")
+                        raise LoginError(EIO, f"qrcode: aborted with {resp!r}")
             return cls.login_qrcode_access_token_open(
                 login_uid, 
                 async_=async_, 
@@ -2599,7 +2570,7 @@ class P115OpenClient(ClientRequestMixin):
                 url = info["url"]
                 if strict and not url:
                     raise IsADirectoryError(
-                        errno.EISDIR, 
+                        EISDIR, 
                         f"{fid} is a directory, with response {resp}", 
                     )
                 return P115URL(
@@ -2613,7 +2584,7 @@ class P115OpenClient(ClientRequestMixin):
                     headers=resp["headers"], 
                 )
             raise FileNotFoundError(
-                errno.ENOENT, 
+                ENOENT, 
                 f"no such pickcode: {pickcode!r}, with response {resp}", 
             )
         if async_:
@@ -3507,44 +3478,6 @@ class P115OpenClient(ClientRequestMixin):
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload
-    def user_info(
-        self, 
-        /, 
-        base_url: bool | str | Callable[[], str] = False, 
-        *, 
-        async_: Literal[False] = False, 
-        **request_kwargs, 
-    ) -> dict:
-        ...
-    @overload
-    def user_info(
-        self, 
-        /, 
-        base_url: bool | str | Callable[[], str] = False, 
-        *, 
-        async_: Literal[True], 
-        **request_kwargs, 
-    ) -> Coroutine[Any, Any, dict]:
-        ...
-    def user_info(
-        self, 
-        /, 
-        base_url: bool | str | Callable[[], str] = False, 
-        *, 
-        async_: Literal[False, True] = False, 
-        **request_kwargs, 
-    ) -> dict | Coroutine[Any, Any, dict]:
-        """获取用户信息
-
-        GET https://proapi.115.com/open/user/info
-
-        .. note::
-            https://www.yuque.com/115yun/open/ot1litggzxa1czww
-        """
-        api = complete_proapi("/open/user/info", base_url)
-        return self.request(url=api, async_=async_, **request_kwargs)
-
-    @overload
     def upload_file_init(
         self, 
         /, 
@@ -3779,6 +3712,8 @@ class P115OpenClient(ClientRequestMixin):
                     async_=async_, # type: ignore
                     **request_kwargs, 
                 )
+            if filesize == 0:
+                filesha1 = "DA39A3EE5E6B4B0D3255BFEF95601890AFD80709"
             need_calc_filesha1 = not filesha1 and multipart_resume_data is None
             read_range_bytes_or_hash: None | Callable = None
             try:
@@ -3787,7 +3722,9 @@ class P115OpenClient(ClientRequestMixin):
                 pass
             if isinstance(file, Buffer):
                 filesize = buffer_length(file)
-                if need_calc_filesha1:
+                if filesize == 0:
+                    filesha1 = "DA39A3EE5E6B4B0D3255BFEF95601890AFD80709"
+                elif need_calc_filesha1:
                     filesha1 = sha1(file).hexdigest()
                 if multipart_resume_data is None and filesize >= 1 << 20:
                     view = memoryview(file)
@@ -3840,7 +3777,9 @@ class P115OpenClient(ClientRequestMixin):
                                     filesize = (yield seek(0, 2)) - curpos
                                 finally:
                                     yield seek(curpos)
-                if multipart_resume_data is None and filesize >= 1 << 20:
+                if filesize == 0:
+                    filesha1 = "DA39A3EE5E6B4B0D3255BFEF95601890AFD80709"
+                elif multipart_resume_data is None and filesize >= 1 << 20:
                     read: Callable[[int], Buffer] | Callable[[int], Awaitable[Buffer]]
                     if seekable:
                         if async_:
@@ -3897,16 +3836,24 @@ class P115OpenClient(ClientRequestMixin):
                 url    = cast(str, multipart_resume_data.get("url", ""))
                 if not url:
                     url = self.upload_endpoint_url(bucket, object)
-                token = multipart_resume_data.get("token")
-                if not token:
-                    token = self.upload_token
+                callback_var = loads(multipart_resume_data["callback"]["callback_var"])
+                yield self.upload_resume_open(
+                    {
+                        "fileid": object, 
+                        "file_size": multipart_resume_data["filesize"], 
+                        "target": callback_var["x:target"], 
+                        "pick_code": callback_var["x:pick_code"], 
+                    }, 
+                    async_=async_, 
+                    **request_kwargs, 
+                )
                 return oss_multipart_upload(
                     self.request, 
                     file, # type: ignore
                     url=url, 
                     bucket=bucket, 
                     object=object, 
-                    token=token, 
+                    token=self.upload_token, 
                     callback=multipart_resume_data["callback"], 
                     upload_id=multipart_resume_data["upload_id"], 
                     partsize=multipart_resume_data["partsize"], 
@@ -3941,7 +3888,7 @@ class P115OpenClient(ClientRequestMixin):
                 case 1:
                     bucket, object, callback = data["bucket"], data["object"], data["callback"]
                 case _:
-                    raise P115OSError(errno.EINVAL, resp)
+                    raise P115OSError(EINVAL, resp)
             url = self.upload_endpoint_url(bucket, object)
             token = self.upload_token
             if partsize <= 0:
@@ -3976,6 +3923,44 @@ class P115OpenClient(ClientRequestMixin):
                 )
         return run_gen_step(gen_step, async_=async_)
 
+    @overload
+    def user_info(
+        self, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def user_info(
+        self, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def user_info(
+        self, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取用户信息
+
+        GET https://proapi.115.com/open/user/info
+
+        .. note::
+            https://www.yuque.com/115yun/open/ot1litggzxa1czww
+        """
+        api = complete_proapi("/open/user/info", base_url)
+        return self.request(url=api, async_=async_, **request_kwargs)
+
     download_url_open = download_url
     download_url_info_open = download_url_info
     fs_copy_open = fs_copy
@@ -3999,6 +3984,13 @@ class P115OpenClient(ClientRequestMixin):
 
 class P115Client(P115OpenClient):
     """115 的客户端对象
+
+    .. note::
+        目前允许 1 个用户同时登录多个开放平台应用（用 AppID 区别），但如果多次登录同 1 个应用，则只有最近登录的有效
+
+        目前不允许短时间内再次用 `refresh_token` 刷新 `access_token`，但你可以用登录的方式再次授权登录以获取 `access_token`，即可不受频率限制
+
+        1 个 `refresh_token` 只能使用 1 次，可获取新的 `refresh_token` 和 `access_token`，如果请求刷新时，发送成功但读取失败，可能导致 `refresh_token` 报废，这时需要重新授权登录
 
     :param cookies: 115 的 cookies，要包含 `UID`、`CID`、`KID` 和 `SEID` 等
 
@@ -4925,14 +4917,14 @@ class P115Client(P115OpenClient):
             data = resp["data"]
             if replace is False:
                 inst: P115OpenClient | Self = P115OpenClient.from_token(data["access_token"], data["refresh_token"])
-                inst.app_id = app_id
             else:
                 if replace is True:
                     inst = self
                 else:
                     inst = replace
                 inst.refresh_token = data["refresh_token"]
-                setattr(inst, "access_token", data["access_token"])
+                inst.access_token = data["access_token"]
+            inst.app_id = app_id
             return inst
         return run_gen_step(gen_step, async_=async_)
 
@@ -5210,10 +5202,14 @@ class P115Client(P115OpenClient):
         elif data is not None:
             request_kwargs["data"] = data
         request_kwargs.setdefault("parse", default_parse)
-        if url.startswith("https://proapi.115.com/open/"):
+        use_cookies = not url.startswith("https://proapi.115.com/open/")
+        if not use_cookies:
             headers["cookie"] = ""
-            return request(url=url, method=method, **request_kwargs)
         def gen_step():
+            if async_:
+                lock: Lock | AsyncLock = self.request_alock
+            else:
+                lock = self.request_lock
             check_for_relogin = self.check_for_relogin
             cant_relogin = not callable(check_for_relogin)
             if get_cookies is not None:
@@ -5223,59 +5219,86 @@ class P115Client(P115OpenClient):
             for i in count(0):
                 exc = None
                 try:
-                    if get_cookies is None:
-                        if need_set_cookies:
-                            cookies_old = headers["cookie"] = self.cookies_str
-                    else:
-                        if get_cookies_need_arg:
-                            cookies_ = yield get_cookies(async_)
+                    if use_cookies:
+                        if get_cookies is None:
+                            if need_set_cookies:
+                                cookies_old = headers["cookie"] = self.cookies_str
                         else:
-                            cookies_ = yield get_cookies()
-                        if not cookies_:
-                            raise ValueError("can't get new cookies")
-                        headers["cookie"] = cookies_
-                    return partial(request, url=url, method=method, **request_kwargs)
+                            if get_cookies_need_arg:
+                                cookies_ = yield get_cookies(async_)
+                            else:
+                                cookies_ = yield get_cookies()
+                            if not cookies_:
+                                raise ValueError("can't get new cookies")
+                            headers["cookie"] = cookies_
+                    resp = yield partial(request, url=url, method=method, **request_kwargs)
+                    return resp
                 except BaseException as e:
                     exc = e
-                    if cant_relogin or not need_set_cookies:
+                    if cant_relogin or use_cookies and not need_set_cookies:
                         raise
                     if isinstance(e, (AuthenticationError, LoginError)):
-                        if get_cookies is not None or cookies_old != self.cookies_str or cookies_old != self._read_cookies():
+                        if use_cookies and (
+                            get_cookies is not None or 
+                            cookies_old != self.cookies_str or 
+                            cookies_old != self._read_cookies()
+                        ):
                             continue
                         raise
                     res = yield partial(cast(Callable, check_for_relogin), e)
                     if not res if isinstance(res, bool) else res != 405:
                         raise
-                    if get_cookies is not None:
-                        continue
-                    cookies = self.cookies_str
-                    if not cookies_equal(cookies, cookies_old):
-                        continue
-                    cookies_mtime = getattr(self, "cookies_mtime", 0)
-                    if async_:
-                        lock: Lock | AsyncLock = self.request_alock
-                        yield lock.acquire()
+                    if use_cookies:
+                        if get_cookies is not None:
+                            continue
+                        cookies = self.cookies_str
+                        if not cookies_equal(cookies, cookies_old):
+                            continue
+                        cookies_mtime = getattr(self, "cookies_mtime", 0)
+                        yield lock.acquire
+                        try:
+                            cookies_new = self.cookies_str
+                            cookies_mtime_new = getattr(self, "cookies_mtime", 0)
+                            if cookies_equal(cookies, cookies_new):
+                                m = CRE_COOKIES_UID_search(cookies)
+                                uid = "" if m is None else m[0]
+                                need_read_cookies = cookies_mtime_new > cookies_mtime
+                                if need_read_cookies:
+                                    cookies_new = self._read_cookies()
+                                if i and cookies_equal(cookies_old, cookies_new):
+                                    raise
+                                if not (need_read_cookies and cookies_new):
+                                    warn(f"relogin to refresh cookies: UID={uid!r} app={self.login_app()!r}", category=P115Warning)
+                                    yield self.login_another_app(
+                                        replace=True, 
+                                        async_=async_, # type: ignore
+                                    )
+                        finally:
+                            lock.release()
                     else:
-                        lock = self.request_lock
-                        lock.acquire()
-                    try:
-                        cookies_new = self.cookies_str
-                        cookies_mtime_new = getattr(self, "cookies_mtime", 0)
-                        if cookies_equal(cookies, cookies_new):
-                            m = CRE_COOKIES_UID_search(cookies)
-                            uid = "" if m is None else m[0]
-                            need_read_cookies = cookies_mtime_new > cookies_mtime
-                            if need_read_cookies:
-                                cookies_new = self._read_cookies()
-                            if i and cookies_equal(cookies_old, cookies_new):
-                                raise
-                            if not (need_read_cookies and cookies_new):
-                                warn(f"relogin to refresh cookies: UID={uid!r} app={self.login_app()!r}", category=P115Warning)
-                                yield self.login_another_app(replace=True, async_=async_) # type: ignore
-                    finally:
-                        lock.release()
+                        access_token = self.access_token
+                        yield lock.acquire
+                        try:
+                            if access_token != self.access_token:
+                                continue
+                            if hasattr(self, "app_id"):
+                                app_id = self.app_id
+                                yield self.login_another_open(
+                                    app_id, 
+                                    replace=True, 
+                                    async_=async_, # type: ignore
+                                )
+                                warn(f"relogin to refresh token: {app_id=}", category=P115Warning)
+                            else:
+                                resp = yield self.refresh_access_token(
+                                    async_=async_, # type: ignore
+                                )
+                                check_response(resp)
+                                warn("relogin to refresh token (using refresh_token)", category=P115Warning)
+                        finally:
+                            lock.release()
                 finally:
-                    if (cookies_ and 
+                    if (use_cookies and cookies_ and 
                         get_cookies is not None and 
                         revert_cookies is not None and (
                             not exc or not (
@@ -6314,7 +6337,7 @@ class P115Client(P115OpenClient):
                     url = info["url"]
                     if strict and not url:
                         raise IsADirectoryError(
-                            errno.EISDIR, 
+                            EISDIR, 
                             f"{fid} is a directory, with response {resp}", 
                         )
                     return P115URL(
@@ -6328,7 +6351,7 @@ class P115Client(P115OpenClient):
                         headers=resp["headers"], 
                     )
                 raise FileNotFoundError(
-                    errno.ENOENT, 
+                    ENOENT, 
                     f"no such pickcode: {pickcode!r}, with response {resp}", 
                 )
         if async_:
@@ -9246,6 +9269,53 @@ class P115Client(P115OpenClient):
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     @overload
+    def fs_files_blank_document(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def fs_files_blank_document(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def fs_files_blank_document(
+        self, 
+        payload: str | dict, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """新建空白 office 文件
+
+        POST https://webapi.115.com/files/blank_document
+
+        :payload:
+            - file_name: str      💡 文件名，不含后缀
+            - pid: int | str = 0  💡 目录 id
+            - type: 1 | 2 | 3 = 1 💡 1:Word文档(.docx) 2:Excel表格(.xlsx) 3:PPT文稿(.pptx)
+        """
+        api = complete_webapi("/files/blank_document", base_url=base_url)
+        if isinstance(payload, str):
+            payload = {"pid": 0, "type": 1, "file_name": payload}
+        else:
+            payload = {"pid": 0, "type": 1, **payload}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
     def fs_files_history(
         self, 
         payload: str | dict, 
@@ -9329,7 +9399,7 @@ class P115Client(P115OpenClient):
         POST https://webapi.115.com/files/history
 
         :payload:
-            - pick_code: str 💡 视频的提取码
+            - pick_code: str     💡 文件的提取码
             - op: str = "update" 💡 操作类型，具体有哪些还需要再研究
             - category: int = <default>
             - definition: int = <default> 💡 视频清晰度
@@ -17193,13 +17263,13 @@ class P115Client(P115OpenClient):
             file_id = payload["file_id"]
             if not info:
                 raise FileNotFoundError(
-                    errno.ENOENT, 
+                    ENOENT, 
                     f"no such id: {file_id!r}, with response {resp}", 
                 )
             url = info["url"]
             if strict and not url:
                 raise IsADirectoryError(
-                    errno.EISDIR, 
+                    EISDIR, 
                     f"{file_id} is a directory, with response {resp}", 
                 )
             return P115URL(
@@ -17863,8 +17933,8 @@ class P115Client(P115OpenClient):
 
     @overload
     def share_skip_login_download_url(
-        self, 
-        payload: int | str | dict, 
+        self: int | str | dict | P115Client, 
+        payload: None | int | str | dict = None, 
         /, 
         url: str = "", 
         strict: bool = True, 
@@ -17877,8 +17947,8 @@ class P115Client(P115OpenClient):
         ...
     @overload
     def share_skip_login_download_url(
-        self, 
-        payload: int | str | dict, 
+        self: int | str | dict | P115Client, 
+        payload: None | int | str | dict = None, 
         /, 
         url: str = "", 
         strict: bool = True, 
@@ -17890,8 +17960,8 @@ class P115Client(P115OpenClient):
     ) -> Coroutine[Any, Any, P115URL]:
         ...
     def share_skip_login_download_url(
-        self, 
-        payload: int | str | dict, 
+        self: int | str | dict | P115Client, 
+        payload: None | int | str | dict = None, 
         /, 
         url: str = "", 
         strict: bool = True, 
@@ -17902,6 +17972,9 @@ class P115Client(P115OpenClient):
         **request_kwargs, 
     ) -> P115URL | Coroutine[Any, Any, P115URL]:
         """获取分享链接中某个文件的下载链接
+
+        .. important::
+            这个函数可以作为 staticmethod 使用，只要 `self` 不是 P115Client 类型，此时不需要登录
 
         :param payload: 请求参数，如果为 int 或 str，则视为 `file_id`
 
@@ -17918,6 +17991,12 @@ class P115Client(P115OpenClient):
 
         :return: 下载链接
         """
+        if isinstance(self, P115Client):
+            assert payload is not None
+            inst: P115Client | type[P115Client] = self
+        else:
+            payload = self
+            inst = __class__ # type: ignore
         if isinstance(payload, (int, str)):
             payload = {"file_id": payload}
         else:
@@ -17928,21 +18007,21 @@ class P115Client(P115OpenClient):
             payload["share_code"] = share_payload["share_code"]
             payload["receive_code"] = share_payload["receive_code"] or ""
         if use_web_api:
-            resp = self.share_skip_login_download_url_web(payload, async_=async_, **request_kwargs)
+            resp = inst.share_skip_login_download_url_web(payload, async_=async_, **request_kwargs)
         else:
-            resp = self.share_skip_login_download_url_app(payload, app=app, async_=async_, **request_kwargs)
+            resp = inst.share_skip_login_download_url_app(payload, app=app, async_=async_, **request_kwargs)
         def get_url(resp: dict, /) -> P115URL:
             info = check_response(resp)["data"]
             file_id = payload["file_id"]
             if not info:
                 raise FileNotFoundError(
-                    errno.ENOENT, 
+                    ENOENT, 
                     f"no such id: {file_id!r}, with response {resp}", 
                 )
             url = info["url"]
             if strict and not url:
                 raise IsADirectoryError(
-                    errno.EISDIR, 
+                    EISDIR, 
                     f"{file_id} is a directory, with response {resp}", 
                 )
             return P115URL(
@@ -17962,8 +18041,8 @@ class P115Client(P115OpenClient):
 
     @overload
     def share_skip_login_download_url_app(
-        self, 
-        payload: dict, 
+        self: dict | P115Client, 
+        payload: None | dict = None, 
         /, 
         app: str = "", 
         base_url: bool | str | Callable[[], str] = False, 
@@ -17974,8 +18053,8 @@ class P115Client(P115OpenClient):
         ...
     @overload
     def share_skip_login_download_url_app(
-        self, 
-        payload: dict, 
+        self: dict | P115Client, 
+        payload: None | dict = None, 
         /, 
         app: str = "", 
         base_url: bool | str | Callable[[], str] = False, 
@@ -17985,8 +18064,8 @@ class P115Client(P115OpenClient):
     ) -> Coroutine[Any, Any, dict]:
         ...
     def share_skip_login_download_url_app(
-        self, 
-        payload: dict, 
+        self: dict | P115Client, 
+        payload: None | dict = None, 
         /, 
         app: str = "", 
         base_url: bool | str | Callable[[], str] = False, 
@@ -17998,14 +18077,20 @@ class P115Client(P115OpenClient):
 
         POST https://proapi.115.com/app/share/skip_login_downurl
 
+        .. important::
+            这个函数可以作为 staticmethod 使用，只要 `self` 不是 P115Client 类型，此时不需要登录
+
         :payload:
             - file_id: int | str
             - receive_code: str
             - share_code: str
         """
+        if isinstance(self, dict):
+            payload = self
+        else:
+            assert payload is not None
         if app:
             api = complete_proapi("/2.0/share/skip_login_downurl", base_url, app)
-            return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
         else:
             api = complete_proapi("/app/share/skip_login_downurl", base_url)
             def parse(resp, content: bytes, /) -> dict:
@@ -18015,12 +18100,20 @@ class P115Client(P115OpenClient):
                 return resp
             request_kwargs.setdefault("parse", parse)
             payload = {"data": rsa_encode(dumps(payload)).decode()}
+        if isinstance(self, P115Client):
             return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+        else:
+            request_kwargs.setdefault("parse", default_parse)
+            request = request_kwargs.pop("request", None)
+            if request is None:
+                return get_default_request()(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+            else:
+                return request(url=api, method="POST", data=payload, **request_kwargs)
 
     @overload
     def share_skip_login_download_url_web(
-        self, 
-        payload: dict, 
+        self: dict | P115Client, 
+        payload: None | dict = None, 
         /, 
         base_url: bool | str | Callable[[], str] = False, 
         *, 
@@ -18030,8 +18123,8 @@ class P115Client(P115OpenClient):
         ...
     @overload
     def share_skip_login_download_url_web(
-        self, 
-        payload: dict, 
+        self: dict | P115Client, 
+        payload: None | dict = None, 
         /, 
         base_url: bool | str | Callable[[], str] = False, 
         *, 
@@ -18040,8 +18133,8 @@ class P115Client(P115OpenClient):
     ) -> Coroutine[Any, Any, dict]:
         ...
     def share_skip_login_download_url_web(
-        self, 
-        payload: dict, 
+        self: dict | P115Client, 
+        payload: None | dict = None, 
         /, 
         base_url: bool | str | Callable[[], str] = False, 
         *, 
@@ -18052,13 +18145,28 @@ class P115Client(P115OpenClient):
 
         POST https://webapi.115.com/share/skip_login_downurl
 
+        .. important::
+            这个函数可以作为 staticmethod 使用，只要 `self` 不是 P115Client 类型，此时不需要登录
+
         :payload:
             - share_code: str    💡 分享码
             - receive_code: str  💡 接收码（访问密码）
             - file_id: int | str 💡 文件 id
         """
         api = complete_webapi("/share/skip_login_downurl", base_url=base_url)
-        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+        if isinstance(self, dict):
+            payload = self
+        else:
+            assert payload is not None
+        if isinstance(self, P115Client):
+            return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+        else:
+            request_kwargs.setdefault("parse", default_parse)
+            request = request_kwargs.pop("request", None)
+            if request is None:
+                return get_default_request()(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+            else:
+                return request(url=api, method="POST", data=payload, **request_kwargs)
 
     @overload
     def share_skip_login_down_first(
@@ -18191,7 +18299,7 @@ class P115Client(P115OpenClient):
         GET https://webapi.115.com/share/snap
 
         .. important::
-            这个函数可以作为 staticmethod 使用，只要 `self` 为 dict 类型，此时不需要登录
+            这个函数可以作为 staticmethod 使用，只要 `self` 不是 P115Client 类型，此时不需要登录
 
             否则，就是登录状态，但如果这个分享是你自己的，则可以不提供 receive_code，而且即使还在审核中，也能获取文件列表
 
@@ -18266,7 +18374,7 @@ class P115Client(P115OpenClient):
         GET https://proapi.115.com/android/2.0/share/snap
 
         .. important::
-            这个函数可以作为 staticmethod 使用，只要 `self` 为 dict 类型，此时不需要登录
+            这个函数可以作为 staticmethod 使用，只要 `self` 不是 P115Client 类型，此时不需要登录
 
             否则，就是登录状态，但如果这个分享是你自己的，则可以不提供 receive_code，而且即使还在审核中，也能获取文件列表
 
@@ -19128,8 +19236,6 @@ class P115Client(P115OpenClient):
 
         :return: 接口响应
         """
-        if filesize >= 1 << 20 and read_range_bytes_or_hash is None:
-            raise ValueError("filesize >= 1 MB, thus need pass the `read_range_bytes_or_hash` argument")
         filesha1 = filesha1.upper()
         target = f"U_1_{pid}"
         def gen_step():
@@ -19315,8 +19421,6 @@ class P115Client(P115OpenClient):
             )
         return run_gen_step(gen_step, async_=async_)
 
-    # TODO: 当文件 < 1 MB 时，文件不急着打开，需要时再打开
-    # TODO: 对于上传空文件，有特别的速度（sha1写死）
     @overload # type: ignore
     def upload_file(
         self, 
@@ -19455,11 +19559,9 @@ class P115Client(P115OpenClient):
                     async_=async_, # type: ignore
                     **request_kwargs, 
                 )
-            need_calc_filesha1 = (
-                not filesha1 and
-                not upload_directly and
-                multipart_resume_data is None
-            )
+            if filesize == 0:
+                filesha1 = "DA39A3EE5E6B4B0D3255BFEF95601890AFD80709"
+            need_calc_filesha1 = not filesha1 and not upload_directly and multipart_resume_data is None
             read_range_bytes_or_hash: None | Callable = None
             try:
                 file = getattr(file, "getbuffer")()
@@ -19467,7 +19569,9 @@ class P115Client(P115OpenClient):
                 pass
             if isinstance(file, Buffer):
                 filesize = buffer_length(file)
-                if need_calc_filesha1:
+                if filesize == 0:
+                    filesha1 = "DA39A3EE5E6B4B0D3255BFEF95601890AFD80709"
+                elif need_calc_filesha1:
                     filesha1 = sha1(file).hexdigest()
                 if not upload_directly and multipart_resume_data is None and filesize >= 1 << 20:
                     view = memoryview(file)
@@ -19520,7 +19624,9 @@ class P115Client(P115OpenClient):
                                     filesize = (yield seek(0, 2)) - curpos
                                 finally:
                                     yield seek(curpos)
-                if not upload_directly and multipart_resume_data is None and filesize >= 1 << 20:
+                if filesize == 0:
+                    filesha1 = "DA39A3EE5E6B4B0D3255BFEF95601890AFD80709"
+                elif not upload_directly and multipart_resume_data is None and filesize >= 1 << 20:
                     read: Callable[[int], Buffer] | Callable[[int], Awaitable[Buffer]]
                     if seekable:
                         if async_:
@@ -19577,16 +19683,24 @@ class P115Client(P115OpenClient):
                 url    = cast(str, multipart_resume_data.get("url", ""))
                 if not url:
                     url = self.upload_endpoint_url(bucket, object)
-                token = multipart_resume_data.get("token")
-                if not token:
-                    token = self.upload_token
+                callback_var = loads(multipart_resume_data["callback"]["callback_var"])
+                yield self.upload_resume(
+                    {
+                        "fileid": object, 
+                        "filesize": multipart_resume_data["filesize"], 
+                        "target": callback_var["x:target"], 
+                        "pickcode": callback_var["x:pick_code"], 
+                    }, 
+                    async_=async_, 
+                    **request_kwargs, 
+                )
                 return oss_multipart_upload(
                     self.request, 
                     file, # type: ignore
                     url=url, 
                     bucket=bucket, 
                     object=object, 
-                    token=token, 
+                    token=self.upload_token, 
                     callback=multipart_resume_data["callback"], 
                     upload_id=multipart_resume_data["upload_id"], 
                     partsize=multipart_resume_data["partsize"], 
@@ -19631,7 +19745,7 @@ class P115Client(P115OpenClient):
             elif status == 1 and statuscode == 0:
                 bucket, object, callback = resp["bucket"], resp["object"], resp["callback"]
             else:
-                raise P115OSError(errno.EINVAL, resp)
+                raise P115OSError(EINVAL, resp)
             url = self.upload_endpoint_url(bucket, object)
             token = self.upload_token
             if partsize <= 0:
@@ -19781,11 +19895,10 @@ class P115Client(P115OpenClient):
         return self.request(url=api, async_=async_, **request_kwargs)
 
     @overload # type: ignore
-    @staticmethod
     def user_info(
-        payload: int | str | dict, 
+        self: int | str | dict | P115Client, 
+        payload: None | int | str | dict = None, 
         /, 
-        request: None | Callable = None, 
         base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False] = False, 
@@ -19793,22 +19906,20 @@ class P115Client(P115OpenClient):
     ) -> dict:
         ...
     @overload
-    @staticmethod
     def user_info(
-        payload: int | str | dict, 
+        self: int | str | dict | P115Client, 
+        payload: None | int | str | dict = None, 
         /, 
-        request: None | Callable = None, 
         base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
     ) -> Coroutine[Any, Any, dict]:
         ...
-    @staticmethod
     def user_info(
-        payload: int | str | dict, 
+        self: int | str | dict | P115Client, 
+        payload: None | int | str | dict = None, 
         /, 
-        request: None | Callable = None, 
         base_url: bool | str | Callable[[], str] = False, 
         *, 
         async_: Literal[False, True] = False, 
@@ -19818,19 +19929,31 @@ class P115Client(P115OpenClient):
 
         GET https://my.115.com/proapi/3.0/index.php?method=user_info
 
+        .. important::
+            这个函数可以作为 staticmethod 使用，只要 `self` 不是 P115Client 类型，此时不需要登录
+
         :payload:
             - uid: int | str
         """
         api = complete_api("/proapi/3.0/index.php", "my", base_url=base_url)
+        if isinstance(self, P115Client):
+            if payload is None:
+                payload = self.user_id
+        else:
+            payload = self
         if isinstance(payload, (int, str)):
             payload = {"uid": payload, "method": "user_info"}
         else:
             payload = {"method": "user_info", **payload}
-        request_kwargs.setdefault("parse", default_parse)
-        if request is None:
-            return get_default_request()(url=api, params=payload, async_=async_, **request_kwargs)
+        if isinstance(self, P115Client):
+            return self.request(url=api, params=payload, async_=async_, **request_kwargs)
         else:
-            return request(url=api, params=payload, **request_kwargs)
+            request_kwargs.setdefault("parse", default_parse)
+            request = request_kwargs.pop("request", None)
+            if request is None:
+                return get_default_request()(url=api, params=payload, async_=async_, **request_kwargs)
+            else:
+                return request(url=api, params=payload, **request_kwargs)
 
     @overload
     def user_my(
@@ -20362,6 +20485,49 @@ class P115Client(P115OpenClient):
         """
         api = complete_proapi("/vip/check_spw", base_url, app)
         return self.request(url=api, async_=async_, **request_kwargs)
+
+    @overload
+    def user_vip_limit(
+        self, 
+        payload: int | dict = 2, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def user_vip_limit(
+        self, 
+        payload: int | dict = 2, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def user_vip_limit(
+        self, 
+        payload: int | dict = 2, 
+        /, 
+        base_url: bool | str | Callable[[], str] = False, 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取 vip 的某些限制
+
+        GET https://webapi.115.com/user/vip_limit
+
+        :payload:
+            - feature: int = 2
+        """
+        api = complete_webapi("/user/vip_limit", base_url=base_url)
+        if isinstance(payload, int):
+            payload = {"feature": payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
     ########## User Share API ##########
 

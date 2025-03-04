@@ -5,7 +5,7 @@ __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __all__ = [
     "reduce_image_url_layers", "batch_get_url", "iter_url_batches", "iter_files_with_url", 
     "iter_images_with_url", "iter_subtitles_with_url", "iter_subtitle_batches", "make_strm", 
-    "iter_download_nodes", "iter_download_files", 
+    "iter_download_nodes", "iter_download_files", "get_remaining_open_count", 
 ]
 __doc__ = "这个模块提供了一些和下载有关的函数"
 
@@ -21,10 +21,12 @@ from mimetypes import guess_type
 from os import fsdecode, makedirs, remove, PathLike
 from os.path import abspath, dirname, join as joinpath, normpath, splitext
 from queue import SimpleQueue
+from shutil import rmtree
 from threading import Lock
 from time import time
 from typing import cast, overload, Any, Final, Literal, TypedDict
 from urllib.parse import quote, urlsplit
+from urllib.request import urlopen, Request
 from uuid import uuid4
 from warnings import warn
 
@@ -91,7 +93,7 @@ def batch_get_url(
 
     :param client: 115 客户端或 cookies
     :param id_or_pickcode: 如果是 int，视为 id，如果是 str，视为 pickcode
-    :param user_agent: "User-Agent" 请求头的值
+    :param user_agent: "user-agent" 请求头的值
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -100,9 +102,9 @@ def batch_get_url(
     if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if headers := request_kwargs.get("headers"):
-        request_kwargs["headers"] = dict(headers, **{"User-Agent": user_agent})
+        request_kwargs["headers"] = dict(headers, **{"user-agent": user_agent})
     else:
-        request_kwargs["headers"] = {"User-Agent": user_agent}
+        request_kwargs["headers"] = {"user-agent": user_agent}
     def gen_step():
         if isinstance(id_or_pickcode, int):
             resp = yield client.fs_file_skim(
@@ -200,7 +202,7 @@ def iter_url_batches(
 
     :param client: 115 客户端或 cookies
     :param pickcodes: 一个迭代器，产生提取码 pickcode
-    :param user_agent: "User-Agent" 请求头的值
+    :param user_agent: "user-agent" 请求头的值
     :param batch_size: 每一个批次处理的个量
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
@@ -210,9 +212,9 @@ def iter_url_batches(
     if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
     if headers := request_kwargs.get("headers"):
-        request_kwargs["headers"] = dict(headers, **{"User-Agent": user_agent})
+        request_kwargs["headers"] = dict(headers, **{"user-agent": user_agent})
     else:
-        request_kwargs["headers"] = {"User-Agent": user_agent}
+        request_kwargs["headers"] = {"user-agent": user_agent}
     if batch_size <= 0:
         batch_size = 1
     def gen_step():
@@ -243,7 +245,6 @@ def iter_url_batches(
     return run_gen_step_iter(gen_step, async_=async_)
 
 
-# TODO: 支持按批获取 url，以减少总的耗时
 @overload
 def iter_files_with_url(
     client: str | P115Client, 
@@ -336,7 +337,7 @@ def iter_files_with_url(
     :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
     :param app: 使用某个 app （设备）的接口
     :param raise_for_changed_count: 分批拉取时，发现总数发生变化后，是否报错
-    :param user_agent: "User-Agent" 请求头的值
+    :param user_agent: "user-agent" 请求头的值
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -846,8 +847,9 @@ def make_strm(
     origin: str = "http://localhost:8000", 
     update: bool = False, 
     discard: bool = True, 
-    use_abspath: None | bool = True, 
+    use_abspath: bool = True, 
     with_root: bool = False, 
+    with_tree: bool = True, 
     without_suffix: bool = True, 
     complete_url: bool = True, 
     suffix: str = "", 
@@ -871,8 +873,9 @@ def make_strm(
     origin: str = "http://localhost:8000", 
     update: bool = False, 
     discard: bool = True, 
-    use_abspath: None | bool = True, 
+    use_abspath: bool = True, 
     with_root: bool = False, 
+    with_tree: bool = True, 
     without_suffix: bool = True, 
     complete_url: bool = True, 
     suffix: str = "", 
@@ -895,8 +898,9 @@ def make_strm(
     origin: str = "http://localhost:8000", 
     update: bool = False, 
     discard: bool = True, 
-    use_abspath: None | bool = True, 
+    use_abspath: bool = True, 
     with_root: bool = False, 
+    with_tree: bool = True, 
     without_suffix: bool = True, 
     complete_url: bool = True, 
     suffix: str = "", 
@@ -923,9 +927,9 @@ def make_strm(
 
         - 如果为 True，则使用 115 的完整路径
         - 如果为 False，则使用从 `cid` 的目录开始的相对路径
-        - 如果为 None，则所有文件保存在到同一个目录内
 
-    :param with_root: 如果为 True，则当 use_abspath 为 False 或 None 时，在 `save_dir` 下创建一个和 `cid` 目录名字相同的目录，作为实际的 `save_dir`
+    :param with_root: 仅在 use_abspath 为 False 时生效。如果为 True，则在 `save_dir` 下创建一个和 `cid` 目录名字相同的目录，作为实际的 `save_dir`
+    :param with_tree: 如果为 False，则所有文件直接保存到 `save_dir` 下，不构建多级的目录结构
     :param without_suffix: 是否去除原来的扩展名。如果为 False，则直接用 ".strm" 拼接到原来的路径后面；如果为 True，则去掉原来的扩展名后再拼接
     :param complete_url: 是否需要完整的 url
 
@@ -965,20 +969,42 @@ def make_strm(
     ignored: list[str] = []
     removed: list[str] = []
     append = list.append
+    add    = set.add
     if discard:
         seen: set[str] = set()
         seen_add = seen.add
         existing: set[str] = set()
         def do_discard():
+            if not seen:
+                rmtree(savedir)
+                makedirs(savedir, exist_ok=True)
+                return
+            dirs: set[str] = {""}
+            for path in seen:
+                while path := dirname(path):
+                    add(dirs, path)
+            removed_dirs: set[str] = set()
             for path in existing - seen:
-                path = joinpath(savedir, path)
-                remove(path)
+                d = dirname(path)
+                if d in dirs:
+                    path = joinpath(savedir, path)
+                    remove(path)
+                elif d not in removed_dirs:
+                    while True:
+                        add(removed_dirs, d)
+                        pdir = dirname(d)
+                        if not pdir or pdir in dirs:
+                            rmtree(joinpath(savedir, d))
+                            break
+                        elif pdir in removed_dirs:
+                            break
+                        d = pdir
                 append(removed, path)
     def normalize_path(attr: dict, /) -> str:
-        if use_abspath is None:
-            path = attr["name"]
-        else:
+        if with_tree:
             path = attr["path"][abspath_prefix_length:]
+        else:
+            path = attr["name"]
         if without_suffix:
             path = splitext(path)[0]
         relpath = normpath(path) + ".strm"
@@ -1016,14 +1042,8 @@ def make_strm(
     def gen_step():
         nonlocal abspath_prefix_length, savedir
         start_t = time()
-        if discard:
-            strm_files = iglob("**/*.strm", root_dir=savedir, recursive=True)
-            if async_:
-                task: Any = create_task(to_thread(existing.update, strm_files))
-            else:
-                task = run_as_thread(existing.update, strm_files)
         if cid:
-            if use_abspath is False:
+            if use_abspath or with_tree:
                 root = yield get_path_to_cid(
                     client, 
                     cid, 
@@ -1033,7 +1053,12 @@ def make_strm(
                     **request_kwargs, 
                 )
                 abspath_prefix_length = len(root) + 1
-            if with_root and not use_abspath:
+                if use_abspath:
+                    savedir += normpath(root)
+                elif with_root:
+                    name = root.rpartition("/")[-1]
+                    savedir = joinpath(savedir, name)
+            elif with_root:
                 resp = yield client.fs_file_skim(
                     cid, 
                     async_=async_, # type: ignore
@@ -1042,6 +1067,12 @@ def make_strm(
                 check_response(resp)
                 name = posix_escape_name(unescape_115_charref(resp["data"][0]["file_name"]))
                 savedir = joinpath(savedir, name)
+        if discard:
+            strm_files = iglob("**/*.strm", root_dir=savedir, recursive=True)
+            if async_:
+                task: Any = create_task(to_thread(existing.update, strm_files))
+            else:
+                task = run_as_thread(existing.update, strm_files)
         params: dict[str, Any] = {}
         if use_abspath is not None:
             params["path_already"] = path_already
@@ -1089,9 +1120,10 @@ def make_strm(
 @overload
 def iter_download_nodes(
     client: str | P115Client, 
-    pickcode: int | str, 
+    pickcode: int | str = "", 
     files: bool = True, 
     max_workers: None | int = 1, 
+    app: str = "android", 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -1100,9 +1132,10 @@ def iter_download_nodes(
 @overload
 def iter_download_nodes(
     client: str | P115Client, 
-    pickcode: int | str, 
+    pickcode: int | str = "", 
     files: bool = True, 
     max_workers: None | int = 1, 
+    app: str = "android", 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -1110,9 +1143,10 @@ def iter_download_nodes(
     ...
 def iter_download_nodes(
     client: str | P115Client, 
-    pickcode: int | str, 
+    pickcode: int | str = "", 
     files: bool = True, 
     max_workers: None | int = 1, 
+    app: str = "android", 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -1123,6 +1157,7 @@ def iter_download_nodes(
     :param pickcode: 目录的 提取码 或者 id
     :param files: 如果为 True，则只获取文件，否则只获取目录
     :param max_workers: 最大并发数，如果为 None 或 <= 0，则默认为 20
+    :param app: 使用某个 app （设备）的接口
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -1130,18 +1165,18 @@ def iter_download_nodes(
     """
     if isinstance(client, str):
         client = P115Client(client, check_for_relogin=True)
+    get_base_url = cycle(("http://proapi.115.com", "https://proapi.115.com")).__next__
     if files:
         method = client.download_files
     else:
         method = client.download_folders
     if max_workers == 1:
-        def gen_step():
-            nonlocal pickcode
+        def gen_step(pickcode):
             if isinstance(pickcode, int):
                 resp = yield client.fs_file_skim(pickcode, async_=async_, **request_kwargs)
                 check_response(resp)
                 pickcode = resp["data"][0]["pick_code"]
-            request_kwargs.setdefault("base_url", cycle(("http://proapi.115.com", "https://proapi.115.com")).__next__)
+            request_kwargs.setdefault("base_url", get_base_url)
             for i in count(1):
                 payload = {"pickcode": pickcode, "page": i}
                 resp = yield method(payload, async_=async_, **request_kwargs)
@@ -1158,7 +1193,7 @@ def iter_download_nodes(
             q = SimpleQueue()
         get, put = q.get, q.put_nowait
         max_page = 0
-        def request():
+        def request(pickcode):
             nonlocal max_page
             while True:
                 page = get_next_page()
@@ -1178,8 +1213,8 @@ def iter_download_nodes(
                 put(data["list"])
                 if not data["has_next_page"]:
                     max_page = page
-        def gen_step():
-            nonlocal max_workers, pickcode
+        def gen_step(pickcode):
+            nonlocal max_workers
             if async_:
                 if max_workers is None or max_workers <= 0:
                     max_workers = 20
@@ -1222,7 +1257,7 @@ def iter_download_nodes(
                             if not n:
                                 put(sentinel)
                 for i in range(n):
-                    submit(run_gen_step, request, async_=async_).add_done_callback(countdown)
+                    submit(run_gen_step, request(pickcode), async_=async_).add_done_callback(countdown)
                 while True:
                     ls = yield get
                     if ls is sentinel:
@@ -1232,7 +1267,26 @@ def iter_download_nodes(
                     yield YieldFrom(ls, identity=True)
             finally:
                 yield shutdown
-    return run_gen_step_iter(gen_step, async_=async_)
+    if pickcode:
+        return run_gen_step_iter(gen_step(pickcode), async_=async_)
+    else:
+        def chain():
+            with with_iter_next(iterdir(
+                client, 
+                ensure_file=False, 
+                app=app, 
+                normalize_attr=normalize_attr_simple, 
+                raise_for_changed_count=True, 
+                async_=async_, 
+                **request_kwargs, 
+            )) as get_next:
+                while True:
+                    attr = yield get_next
+                    yield YieldFrom(
+                        run_gen_step_iter(gen_step(attr["pickcode"]), async_=async_), 
+                        identity=True, 
+                    )
+        return run_gen_step_iter(chain, async_=async_)
 
 
 @overload
@@ -1243,6 +1297,7 @@ def iter_download_files(
     escape: None | bool | Callable[[str], str] = True, 
     with_ancestors: bool = True, 
     max_workers: None | int = None, 
+    app: str = "android", 
     *, 
     async_: Literal[False] = False, 
     **request_kwargs, 
@@ -1256,6 +1311,7 @@ def iter_download_files(
     escape: None | bool | Callable[[str], str] = True, 
     with_ancestors: bool = True, 
     max_workers: None | int = None, 
+    app: str = "android", 
     *, 
     async_: Literal[True], 
     **request_kwargs, 
@@ -1268,6 +1324,7 @@ def iter_download_files(
     escape: None | bool | Callable[[str], str] = True, 
     with_ancestors: bool = True, 
     max_workers: None | int = None, 
+    app: str = "android", 
     *, 
     async_: Literal[False, True] = False, 
     **request_kwargs, 
@@ -1291,6 +1348,7 @@ def iter_download_files(
     :param with_ancestors: 文件信息中是否要包含 "ancestors"
     :param id_to_dirnode: 字典，保存 id 到对应文件的 `DirNode(name, parent_id)` 命名元组的字典
     :param max_workers: 最大并发数，如果为 None 或 <= 0，则默认为 20
+    :param app: 使用某个 app （设备）的接口
     :param async_: 是否异步
     :param request_kwargs: 其它请求参数
 
@@ -1358,9 +1416,9 @@ def iter_download_files(
             with with_iter_next(iterdir(
                 client, 
                 id_to_dirnode=id_to_dirnode, 
-                app="android", 
+                app=app, 
                 raise_for_changed_count=True, 
-                async_=async_, # type: ignore
+                async_=async_, 
                 **request_kwargs, 
             )) as get_next:
                 while True:
@@ -1375,7 +1433,10 @@ def iter_download_files(
                             **defaults, 
                         }, identity=True)
             for pickcode in pickcodes:
-                yield YieldFrom(run_gen_step_iter(gen_step(pickcode), async_=async_), identity=True)
+                yield YieldFrom(
+                    run_gen_step_iter(gen_step(pickcode), async_=async_), 
+                    identity=True, 
+                )
             return
         if not pickcode:
             resp = yield client.fs_file_skim(cid, async_=async_, **request_kwargs)
@@ -1402,6 +1463,7 @@ def iter_download_files(
                     pickcode, 
                     files=False, 
                     max_workers=max_workers, 
+                    app=app, 
                     async_=async_, 
                     **request_kwargs, 
                 )) as get_next:
@@ -1421,6 +1483,7 @@ def iter_download_files(
             pickcode, 
             files=True, 
             max_workers=max_workers, 
+            app=app, 
             async_=async_, # type: ignore
             **request_kwargs, 
         )) as get_next:
@@ -1445,4 +1508,80 @@ def iter_download_files(
                 task.result()
             yield YieldFrom(map(norm_attr, cache), identity=True)
     return run_gen_step_iter(gen_step, async_=async_)
+
+
+@overload
+def get_remaining_open_count(
+    client: str | P115Client, 
+    app: str = "android", 
+    *, 
+    async_: Literal[False] = False, 
+    **request_kwargs, 
+) -> int:
+    ...
+@overload
+def get_remaining_open_count(
+    client: str | P115Client, 
+    app: str = "android", 
+    *, 
+    async_: Literal[True], 
+    **request_kwargs, 
+) -> Coroutine[Any, Any, int]:
+    ...
+def get_remaining_open_count(
+    client: str | P115Client, 
+    app: str = "android", 
+    *, 
+    async_: Literal[False, True] = False, 
+    **request_kwargs, 
+) -> int | Coroutine[Any, Any, int]:
+    """获取剩余的可打开下载链接数
+
+    .. note::
+        假设总数是 n，通常总数是 10，偶尔会调整，如果已经有 m 个被打开的链接，则返回的数字是 n-m
+
+    :param client: 115 客户端或 cookies
+    :param app: 使用某个 app （设备）的接口
+    :param async_: 是否异步
+    :param request_kwargs: 其它请求参数
+
+    :return: 个数
+    """
+    if isinstance(client, str):
+        client = P115Client(client, check_for_relogin=True)
+    if not isinstance(client, P115Client) or app == "open":
+        get_url: Callable[..., P115URL] = client.download_url_open
+    elif app in ("", "web", "desktop", "harmony"):
+        get_url = client.download_url
+    else:
+        get_url = partial(client.download_url, app=app)
+    def gen_step():
+        cache: list = []
+        add_to_cache = cache.append
+        try:
+            with with_iter_next(iter_download_nodes(
+                client, 
+                app=app, 
+                async_=async_, 
+                **request_kwargs, 
+            )) as get_next:
+                while True:
+                    info = yield get_next
+                    if int(info["fs"]) <= 1024 * 1024 * 200:
+                        continue
+                    try:
+                        url = yield get_url(info["pc"], async_=async_)
+                    except FileNotFoundError:
+                        continue
+                    request = Request(url, headers={"user-agent": ""})
+                    if async_:
+                        file = yield to_thread(urlopen, request)
+                    else:
+                        file = urlopen(request)
+                    add_to_cache(file)
+        finally:
+            for f in cache:
+                f.close()
+            return len(cache)
+    return run_gen_step(gen_step, async_=async_)
 

@@ -10,8 +10,8 @@ __all__ = [
 
 from base64 import b64encode
 from collections.abc import (
-    AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Callable, Coroutine, Generator, 
-    ItemsView, Iterable, Iterator, Mapping, Sequence, Sized, 
+    AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Buffer, Callable, 
+    Coroutine, Generator, ItemsView, Iterable, Iterator, Mapping, Sequence, Sized, 
 )
 from datetime import datetime
 from email.utils import formatdate
@@ -25,7 +25,7 @@ from xml.etree.ElementTree import fromstring
 
 from asynctools import ensure_aiter, ensure_async
 from filewrap import (
-    Buffer, SupportsRead, 
+    SupportsRead, buffer_length, 
     bio_chunk_iter, bio_chunk_async_iter, 
     bio_skip_iter, bio_skip_async_iter, 
     bytes_iter_to_async_reader, bytes_iter_to_reader, 
@@ -41,20 +41,13 @@ from .exception import MultipartUploadAbort
 from .type import MultipartResumeData
 
 
-def buffer_length(b: Buffer, /) -> int:
-    if isinstance(b, Sized):
-        return len(b)
-    else:
-        return len(memoryview(b))
-
-
-def to_base64(s: bytes | str, /) -> str:
+def to_base64(s: Buffer | str, /) -> str:
     if isinstance(s, str):
         s = bytes(s, "utf-8")
     return str(b64encode(s), "ascii")
 
 
-def to_integer(n, /):
+def maybe_integer(n: int | str, /) -> int | str:
     if isinstance(n, str) and n.isdecimal():
         n = int(n)
     return n
@@ -155,19 +148,19 @@ def oss_upload_sign(
     #     "replicationProgress", "requestPayment", "requesterQosInfo", "resourceGroup", "resourcePool", 
     #     "resourcePoolBuckets", "resourcePoolInfo", "response-cache-control", "response-content-disposition", 
     #     "response-content-encoding", "response-content-language", "response-content-type", "response-expires", 
-    #     "restore", "security-token", "sequential", "startTime", "stat", "status", "style", "styleName", "symlink", 
-    #     "tagging", "transferAcceleration", "uploadId", "uploads", "versionId", "versioning", "versions", "vod", 
-    #     "website", "worm", "wormExtend", "wormId", "x-oss-ac-forward-allow", "x-oss-ac-source-ip", 
-    #     "x-oss-ac-subnet-mask", "x-oss-ac-vpc-id", "x-oss-access-point-name", "x-oss-async-process", "x-oss-process", 
-    #     "x-oss-redundancy-transition-taskid", "x-oss-request-payer", "x-oss-target-redundancy-type", 
-    #     "x-oss-traffic-limit", "x-oss-write-get-object-response", 
+    #     "restore", "security-token", "sequential", "startTime", "stat", "status", "style", "styleName", 
+    #     "symlink", "tagging", "transferAcceleration", "uploadId", "uploads", "versionId", "versioning", 
+    #     "versions", "vod", "website", "worm", "wormExtend", "wormId", "x-oss-ac-forward-allow", 
+    #     "x-oss-ac-source-ip", "x-oss-ac-subnet-mask", "x-oss-ac-vpc-id", "x-oss-access-point-name", 
+    #     "x-oss-async-process", "x-oss-process", "x-oss-redundancy-transition-taskid", "x-oss-request-payer", 
+    #     "x-oss-target-redundancy-type", "x-oss-traffic-limit", "x-oss-write-get-object-response", 
     # )
     date = formatdate(usegmt=True)
     if params is None:
         params = ""
     elif not isinstance(params, str):
         params = urlencode(params)
-    if params:
+    if params and not params.startswith("?"):
         params = "?" + params
     if headers:
         if isinstance(headers, Mapping):
@@ -183,7 +176,7 @@ def oss_upload_sign(
         headers_str = ""
     content_md5 = headers.setdefault("content-md5", "")
     content_type = headers.setdefault("content-type", "")
-    date = headers.get("x-oss-date") or headers.get("date", "")
+    date = headers.get("x-oss-date") or headers.get("date") or ""
     if not date:
         date = headers["date"] = formatdate(usegmt=True)
     signature_data = f"""\
@@ -269,13 +262,16 @@ def oss_multipart_part_iter(
 ) -> Iterator[dict] | AsyncIterator[dict]:
     """罗列某个分块上传任务，已经上传的分块
     """
+    request_kwargs.update(
+        method="GET", 
+        params={"uploadId": upload_id}, 
+        headers={"x-oss-security-token": token["SecurityToken"]}, 
+    )
+    request_kwargs.setdefault("parse", lambda _, content: fromstring(content))
     def gen_step():
-        request_kwargs["method"] = "GET"
-        request_kwargs["headers"] = {"x-oss-security-token": token["SecurityToken"]}
-        request_kwargs["params"] = params = {"uploadId": upload_id}
-        request_kwargs.setdefault("parse", False)
+        params = request_kwargs["params"]
         while True:
-            content = yield oss_upload_request(
+            etree = yield oss_upload_request(
                 request, 
                 url=url, 
                 bucket=bucket, 
@@ -284,12 +280,11 @@ def oss_multipart_part_iter(
                 async_=async_, 
                 **request_kwargs, 
             )
-            etree = fromstring(content)
             for el in etree.iterfind("Part"):
-                yield Yield({sel.tag: to_integer(sel.text) for sel in el}, identity=True)
-            if etree.find("IsTruncated").text == "false": # type: ignore
+                yield Yield({sel.tag: maybe_integer(sel.text) for sel in el}, identity=True)
+            if getattr(etree.find("IsTruncated"), "text") == "false":
                 break
-            params["part-number-marker"] = etree.find("NextPartNumberMarker").text # type: ignore
+            params["part-number-marker"] = getattr(etree.find("NextPartNumberMarker"), "text")
     return run_gen_step_iter(gen_step, async_=async_)
 
 
@@ -327,12 +322,14 @@ def oss_multipart_upload_init(
     async_: Literal[False, True] = False, 
     **request_kwargs, 
 ) -> str | Coroutine[Any, Any, str]:
-    """分片上传的初始化，获取 upload_id
+    """分块上传的初始化，获取 upload_id
     """
+    request_kwargs.update(
+        method="POST", 
+        params={"sequential": "1", "uploads": "1"}, 
+        headers={"x-oss-security-token": token["SecurityToken"]}, 
+    )
     request_kwargs.setdefault("parse", parse_upload_id)
-    request_kwargs["method"] = "POST"
-    request_kwargs["params"] = {"sequential": "1", "uploads": "1"}
-    request_kwargs["headers"] = {"x-oss-security-token": token["SecurityToken"]}
     return oss_upload_request(
         request, 
         url=url, 
@@ -387,20 +384,26 @@ def oss_multipart_upload_complete(
     async_: Literal[False, True] = False, 
     **request_kwargs, 
 ) -> dict | Coroutine[Any, Any, dict]:
-    """完成分片上传任务，会执行回调然后 115 上就能看到文件
+    """完成分块上传任务，会在请求头中包含回调数据，请求体中包含分块信息
     """
-    request_kwargs["method"] = "POST"
-    request_kwargs["params"] = {"uploadId": upload_id}
-    request_kwargs["headers"] = {
-        "x-oss-security-token": token["SecurityToken"], 
-        "x-oss-callback": to_base64(callback["callback"]), 
-        "x-oss-callback-var": to_base64(callback["callback_var"]), 
-        "content-type": "text/xml"
-    }
-    request_kwargs["data"] = ("<CompleteMultipartUpload>%s</CompleteMultipartUpload>" % "".join(map(
-        "<Part><PartNumber>{PartNumber}</PartNumber><ETag>{ETag}</ETag></Part>".format_map, 
-        parts, 
-    ))).encode()
+    request_kwargs.update(
+        method="POST", 
+        params={"uploadId": upload_id}, 
+        data=b"".join((
+            b"<CompleteMultipartUpload>", 
+            *map(
+                b"<Part><PartNumber>%d</PartNumber><ETag>%s</ETag></Part>".__mod__, 
+                ((part["PartNumber"], bytes(part["ETag"], "ascii")) for part in parts), 
+            ), 
+            b"</CompleteMultipartUpload>", 
+        )), 
+        headers={
+            "x-oss-security-token": token["SecurityToken"], 
+            "x-oss-callback": to_base64(callback["callback"]), 
+            "x-oss-callback-var": to_base64(callback["callback_var"]), 
+            "content-type": "text/xml", 
+        }, 
+    )
     return oss_upload_request(
         request, 
         url=url, 
@@ -449,12 +452,14 @@ def oss_multipart_upload_cancel(
     async_: Literal[False, True] = False, 
     **request_kwargs, 
 ) -> bool | Coroutine[Any, Any, bool]:
-    """取消分片上传任务，返回成功与否
+    """取消分块上传任务，返回成功与否
     """
+    request_kwargs.update(
+        method="DELETE", 
+        params={"uploadId": upload_id}, 
+        headers={"x-oss-security-token": token["SecurityToken"]}, 
+    )
     request_kwargs.setdefault("parse", lambda resp: 200 <= resp.status_code < 300 or resp.status_code == 404)
-    request_kwargs["method"] = "DELETE"
-    request_kwargs["params"] = {"uploadId": upload_id}
-    request_kwargs["headers"] = {"x-oss-security-token": token["SecurityToken"]}
     return oss_upload_request(
         request, 
         url=url, 
@@ -520,7 +525,7 @@ def oss_multipart_upload_part(
 ) -> dict | Coroutine[Any, Any, dict]:
     """上传一个分片，返回一个字典，包含如下字段：
 
-    .. python:
+    .. code:: python
 
         {
             "PartNumber": int,    # 分块序号，从 1 开始计数
@@ -923,4 +928,23 @@ def oss_multipart_upload(
             if close_reporthook is not None:
                 yield close_reporthook
     return run_gen_step(gen_step, async_=async_)
+
+
+# class MultipartUploader:
+#     def __init__
+#     def __del__
+#     async def __aiter__
+#     def __iter__
+#     async def __aenter__
+#     async def __aexit__
+#     def __enter__
+#     def __exit__
+#     # 0. 应该设计 1 个类，支持同步和异步，实例化不会进行初始化（为了对异步进行适配）
+#     # 1. 可以作为上下文管理器或者迭代器使用
+#     # 2. 上下文管理器也返回迭代器（迭代器迭代时，如果未打开文件或者没有上传信息，则会初始化以获取）
+#     # 3. 中途可以暂停或取消
+#     # 4. seekable: path, url (支持 range request), file reader (seekable)
+#     # 5. 支持进度条
+#     # 6. 设计一个工具函数，放到 p115client.tool.upload 模块中
+#     ...
 
